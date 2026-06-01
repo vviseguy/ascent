@@ -1,0 +1,52 @@
+name: CI
+
+# Quality gate: typecheck + unit tests + every determinism PROOF + build, on every
+# push and PR. Kept SEPARATE from deploy.yml so a flaky check never blocks shipping,
+# and so the proofs (the heart of this project's correctness story) run in CI too.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The standalone determinism proofs run dependency-free via Node's type
+      # stripping (no build needed). These are the load-bearing correctness checks:
+      # fixed-point exactness, floor solvability, and rollback equivalence across the
+      # whole integrated sim.
+      - name: Proofs — fixed-point bedrock
+        run: node --experimental-strip-types src/sim/fixed/prove.ts
+      - name: Proofs — floor gen + verifier
+        run: node --experimental-strip-types src/floor/prove.ts
+      - name: Proofs — world core (rollback)
+        run: node --experimental-strip-types src/sim/world/prove.ts
+      - name: Proofs — spatial index
+        run: node --experimental-strip-types src/sim/spatial/prove.ts
+      - name: Proofs — collision
+        run: node --experimental-strip-types src/sim/collide/prove.ts
+      - name: Proofs — verbs (grab/throw/rush/struggle)
+        run: node --experimental-strip-types src/sim/verbs/prove.ts
+      - name: Proofs — scripted hazards
+        run: node --experimental-strip-types src/sim/hazards/prove.ts
+      - name: Proofs — integrated sim (all layers, rollback)
+        run: node --experimental-strip-types src/sim/prove.ts
+
+      - name: Production build
+        run: npm run build

@@ -1,0 +1,35 @@
+{
+  "name": "ascent",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "description": "ASCENT — a realtime multiplayer vertical escort brawl-race (rollback netcode, custom deterministic fixed-point physics).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --noEmit",
+    "prove:fixed": "node --experimental-strip-types src/sim/fixed/prove.ts",
+    "prove:floor": "node --experimental-strip-types src/floor/prove.ts",
+    "prove:world": "node --experimental-strip-types src/sim/world/prove.ts",
+    "prove:spatial": "node --experimental-strip-types src/sim/spatial/prove.ts",
+    "prove:collide": "node --experimental-strip-types src/sim/collide/prove.ts",
+    "prove:verbs": "node --experimental-strip-types src/sim/verbs/prove.ts",
+    "prove:hazards": "node --experimental-strip-types src/sim/hazards/prove.ts",
+    "prove:sim": "node --experimental-strip-types src/sim/prove.ts",
+    "prove": "npm run prove:fixed && npm run prove:floor && npm run prove:world && npm run prove:spatial && npm run prove:collide && npm run prove:verbs && npm run prove:hazards && npm run prove:sim"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/three": "^0.184.1",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "//deps-note": "three is the renderer. PeerJS (signaling) + the Rapier oracle (@dimforge/rapier3d-compat, devDep, tests-only) get added when their layers land. The sim has NO runtime physics dependency — we ship our own fixed-point engine."
+}
