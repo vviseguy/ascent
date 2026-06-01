@@ -2,71 +2,79 @@
 // src/render/loop.ts — the fixed-timestep game loop (sim 60Hz, render at vsync).
 // ============================================================================
 //
-// Decouples the deterministic 60 Hz simulation from the display refresh rate using
-// the classic accumulator pattern: wall-clock time (performance.now — allowed HERE,
-// in the IO layer, NEVER in the sim) accumulates, and we run as many whole sim ticks
-// as have "come due", then render once. This keeps the sim's tick cadence exact and
-// engine-independent regardless of monitor Hz, while the renderer interpolates.
+// Classic accumulator: wall-clock (performance.now — allowed HERE in the IO layer,
+// NEVER in the sim) accumulates and we run whole sim ticks as they come due, then
+// render once with an interpolation alpha. The sim cadence stays exact and engine-
+// independent regardless of display Hz.
 //
-// A hard cap on ticks-per-frame prevents the "spiral of death" if the tab stalls
-// (e.g. backgrounded): we drop simulated time rather than try to catch up forever.
+// Input is sampled ONCE PER RENDERED FRAME (not per tick) and the SAME PlayerInput
+// drives every tick in a multi-tick catch-up frame — so the sim's deterministic
+// edge detection (prevButtons) sees clean transitions and edge semantics never
+// couple to frame pacing (audit `multitick-frame-sample-couples-edges-to-pacing`).
+// The local input is CANONICALIZED through the wire codec before the sim sees it,
+// so the single-player path simulates exactly what a networked peer would decode
+// (audit `canonicalize-missing-in-local-path`).
+//
+// NOTE: on a stall this caps catch-up for responsiveness in SINGLE-PLAYER only.
+// A networked session must instead surrender catch-up to the rollback clock-sync
+// (never silently drop owed ticks); that path lives in the netcode loop, not here.
 // ============================================================================
 
 import { TICK_HZ } from '../sim/world/step.ts';
 import type { Sim } from '../sim/sim.ts';
 import type { Renderer } from './renderer.ts';
 import type { InputController } from './input-controller.ts';
+import { canonicalizeInput } from '../net/wire.ts';
+import { fromRaw, toFloat } from '../sim/fixed/fixed.ts';
 
 const MS_PER_TICK = 1000 / TICK_HZ;
-const MAX_TICKS_PER_FRAME = 5; // anti-spiral clamp
+const MAX_TICKS_PER_FRAME = 5;
 
-export interface LoopHandle {
-  stop(): void;
-  /** Ticks simulated so far (for HUD/debug). */
-  readonly tick: () => number;
-}
+export interface LoopHandle { stop(): void; readonly tick: () => number; }
 
-/**
- * Start the loop. `localPlayerId` is the body the local InputController drives; all
- * other player bodies receive neutral input (until the netcode supplies remotes).
- */
 export function startLoop(
   sim: Sim,
   renderer: Renderer,
   input: InputController,
   localPlayerId: number,
+  anchorId: number,
 ): LoopHandle {
   let running = true;
   let acc = 0;
   let last = performance.now();
-  // reusable input frame array sized to capacity (indices map to body ids)
   const frame: (ReturnType<InputController['sample']> | undefined)[] = new Array(sim.world.capacity);
 
   function frameTick(now: number): void {
     if (!running) return;
-    let dt = now - last;
-    last = now;
-    if (dt > 250) dt = 250; // clamp huge gaps (tab was hidden)
+    let dt = now - last; last = now;
+    if (dt > 250) dt = 250;
     acc += dt;
+
+    // Resolve world-space aim from the cursor against the ground plane, at the local
+    // player's current world position (screen aim → world direction under the tilt).
+    const w = sim.world;
+    const lx = toFloat(fromRaw(w.px[localPlayerId]!)), lz = toFloat(fromRaw(w.pz[localPlayerId]!));
+    input.aimRaw = renderer.worldAimFrom(input.mouseX, input.mouseY, lx, lz);
+
+    // Sample ONCE per frame; canonicalize; feed the same input to every tick this frame.
+    const localInput = canonicalizeInput(input.sample());
 
     let steps = 0;
     while (acc >= MS_PER_TICK && steps < MAX_TICKS_PER_FRAME) {
-      // sample local input fresh for this tick; others neutral (undefined)
       frame.fill(undefined);
-      frame[localPlayerId] = input.sample();
+      frame[localPlayerId] = localInput;
       sim.advance(frame);
+      renderer.commitTick(w); // snapshot positions for interpolation
       acc -= MS_PER_TICK;
       steps++;
     }
-    if (steps === MAX_TICKS_PER_FRAME) acc = 0; // shed backlog, don't spiral
+    if (steps === MAX_TICKS_PER_FRAME) acc = 0; // single-player anti-spiral only
 
-    renderer.render(sim.world);
+    const alpha = Math.max(0, Math.min(1, acc / MS_PER_TICK));
+    renderer.render(w, alpha, localPlayerId, anchorId);
     requestAnimationFrame(frameTick);
   }
   requestAnimationFrame(frameTick);
 
-  return {
-    stop() { running = false; },
-    tick: () => sim.world.tick,
-  };
+  return { stop() { running = false; }, tick: () => sim.world.tick };
 }

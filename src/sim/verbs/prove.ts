@@ -107,9 +107,10 @@ function proveGrabThrow(): void {
     w.holding[grabber] === target && w.grabbedBy[target] === grabber);
   check('held target has NoGravity', hasFlag(w, target, BodyFlag.NoGravity));
 
-  // Charge a throw: hold Throw for the full charge window while still holding Grab.
+  // Charge a throw: keep HOLDING Grab for the full charge window (charge ramps off
+  // the grab-hold; releasing Grab is the throw — the real control protocol).
   for (let t = 0; t < THROW_CHARGE_TICKS; t++) {
-    grabIn[grabber] = mkInput({ buttons: Button.Grab | Button.Throw, grabTarget: target });
+    grabIn[grabber] = mkInput({ buttons: Button.Grab, grabTarget: target });
     stepWithVerbs(w, grabIn);
   }
   const preThrowPos = { x: w.px[target]!, z: w.pz[target]! };
@@ -220,13 +221,12 @@ function scriptedScenario(): { w: WorldState; inputsAt: (tick: number) => Player
   const grabLatch = GRAB_LATCH_TICKS[MassClass.Player]!;
   const inputsAt = (tick: number): PlayerInput[] => {
     const a: PlayerInput[] = [];
-    // carrier: grab victim during latch window + a hold phase, charge throw, release.
-    if (tick < grabLatch + 6) {
+    // carrier: grab victim, HOLD grab through latch + charge window, then RELEASE
+    // grab (the throw). Charge ramps off the grab-hold (real protocol).
+    if (tick < grabLatch + 6 + THROW_CHARGE_TICKS) {
       a[carrier] = mkInput({ buttons: Button.Grab, grabTarget: victim });
-    } else if (tick < grabLatch + 6 + THROW_CHARGE_TICKS) {
-      a[carrier] = mkInput({ buttons: Button.Grab | Button.Throw, grabTarget: victim });
     } else if (tick === grabLatch + 6 + THROW_CHARGE_TICKS) {
-      a[carrier] = mkInput({ buttons: 0, grabTarget: -1 }); // RELEASE (throw edge)
+      a[carrier] = mkInput({ buttons: 0, grabTarget: -1 }); // RELEASE grab = throw
     } else {
       a[carrier] = NEUTRAL_INPUT;
     }
@@ -307,12 +307,10 @@ function refScenarioInputs(tick: number): PlayerInput[] {
   const carrier = 0, victim = 1, rusher = 2;
   const grabLatch = GRAB_LATCH_TICKS[MassClass.Player]!;
   const a: PlayerInput[] = [];
-  if (tick < grabLatch + 6) {
+  if (tick < grabLatch + 6 + THROW_CHARGE_TICKS) {
     a[carrier] = mkInput({ buttons: Button.Grab, grabTarget: victim });
-  } else if (tick < grabLatch + 6 + THROW_CHARGE_TICKS) {
-    a[carrier] = mkInput({ buttons: Button.Grab | Button.Throw, grabTarget: victim });
   } else if (tick === grabLatch + 6 + THROW_CHARGE_TICKS) {
-    a[carrier] = mkInput({ buttons: 0, grabTarget: -1 });
+    a[carrier] = mkInput({ buttons: 0, grabTarget: -1 }); // RELEASE grab = throw
   } else {
     a[carrier] = NEUTRAL_INPUT;
   }

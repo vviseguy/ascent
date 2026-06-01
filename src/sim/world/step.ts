@@ -134,9 +134,13 @@ export function carryPhase(w: WorldState): void {
     const carrier = w.grabbedBy[i]!;
     if (carrier === NO_ENTITY) continue;
     if (carrier < 0 || carrier >= count || (w.flags[carrier]! & BodyFlag.Alive) === 0) {
-      // carrier vanished — drop (defensive; verb layer normally manages release)
+      // carrier vanished — drop BOTH ends of the linkage so neither side dangles
+      // (a dead carrier left "holding" a freed body corrupts verb invariants).
       w.grabbedBy[i] = NO_ENTITY;
       w.flags[i] = w.flags[i]! & ~BodyFlag.NoGravity & 0xffff;
+      if (carrier >= 0 && carrier < count && w.holding[carrier] === i) {
+        w.holding[carrier] = NO_ENTITY;
+      }
       continue;
     }
     const f = fromRaw(w.facing[carrier]!);

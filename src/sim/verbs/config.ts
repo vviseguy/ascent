@@ -32,6 +32,21 @@ export const RUSH_PUSHBACK_MAX: Fixed = fromFloatConst(3.0);
 /** Contact half-width (u) of the rush sweep (how close the line must pass). */
 export const RUSH_HIT_RADIUS: Fixed = fromFloatConst(0.9);
 
+// ---- JUMP ------------------------------------------------------------------
+/** Base jump launch speed (u/s) for a Player on the press-edge while grounded. */
+export const JUMP_SPEED: Fixed = fromFloatConst(9.0);
+/**
+ * Per-MassClass jump-speed multiplier. The Anchor jumps LOWER (its "gap-locked"
+ * defining constraint, docs/02 §2.1) so it cannot self-clear a real chasm — the
+ * crew must carry/throw it across. Index by MassClass (Light/Player/Heavy/Anchor).
+ */
+export const JUMP_MUL: readonly Fixed[] = [
+  fromFloatConst(1.0), // Light (objects don't self-jump; unused)
+  fromFloatConst(1.0), // Player
+  fromFloatConst(0.85), // Heavy
+  fromFloatConst(0.62), // Anchor — deliberately weak (gap-lock)
+];
+
 // ---- GRAB ------------------------------------------------------------------
 /** Frontal grab cone reach (u). */
 export const GRAB_REACH: Fixed = fromFloatConst(2.2);

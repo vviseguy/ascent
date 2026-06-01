@@ -2,27 +2,34 @@
 // src/render/input-controller.ts — keyboard/mouse → PlayerInput (local play).
 // ============================================================================
 //
-// Translates raw browser input into the sim's quantized, deterministic PlayerInput
-// for ONE local player. This lives in the render/IO layer, NOT the sim: it produces
-// the integer input the sim consumes. (Over the network, the netcode will sample
-// this once per tick and ship it; locally we sample it each tick.)
+// Translates raw browser input into the sim's quantized PlayerInput for ONE local
+// player. CRITICAL design rule (learned from the audit): this is a PURE LEVEL
+// REPORTER — it reports which buttons are currently DOWN this instant and never
+// computes press/release EDGES itself. All edge detection (grab-release = throw,
+// jump press-edge, etc.) happens deterministically inside the sim via `prevButtons`.
+// Computing edges here would (a) couple edge semantics to frame pacing — in a
+// multi-tick catch-up frame every tick would see identical live input and an edge
+// would land on the wrong tick — and (b) desync the moment this feeds rollback.
 //
-// Controls (Overcooked-simple, matching docs/02 §1):
-//   WASD / arrows : MOVE        Space : JUMP
-//   J / LMB       : RUSH        K / RMB(hold) : GRAB (release = THROW)
+// Controls (Overcooked-simple, docs/02 §1):
+//   WASD / arrows : MOVE              Space : JUMP
+//   J / LMB       : RUSH              K / RMB (hold) : GRAB → release = THROW
+//   F             : SHOVE (empty-hand throw tap)
 //   L             : STRUGGLE (mash)
-//   mouse move    : AIM (angle from screen center; good enough for local testing)
+//   mouse         : AIM — resolved to a WORLD ground-plane angle (see loop.ts)
 // ============================================================================
 
 import { type PlayerInput, Button, MOVE_Q } from '../sim/world/input.ts';
-import { toRaw, fromFloatConst } from '../sim/fixed/fixed.ts';
 
 export class InputController {
   private keys = new Set<string>();
   private mouseDownL = false;
   private mouseDownR = false;
-  private aimRaw = 0;
-  private prevGrabHeld = false;
+  /** Latest cursor position in screen pixels (resolved to a world aim in the loop). */
+  mouseX = 0;
+  mouseY = 0;
+  /** The world-space aim angle (raw Fixed) the loop computes each frame and stores here. */
+  aimRaw = 0;
 
   constructor(target: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -40,9 +47,8 @@ export class InputController {
     });
     target.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
-      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
-      const ang = Math.atan2(e.clientY - cy, e.clientX - cx); // screen-space aim
-      this.aimRaw = toRaw(fromFloatConst(ang));
+      this.mouseX = e.clientX;
+      this.mouseY = e.clientY;
     });
   }
 
@@ -50,7 +56,11 @@ export class InputController {
     return k.some((s) => this.keys.has(s));
   }
 
-  /** Sample the current input as a deterministic PlayerInput for this tick. */
+  /**
+   * Sample current input as a PlayerInput for this tick — a pure projection of live
+   * key/mouse state (no edge computation, no internal mutation that affects output).
+   * `aimRaw` is set by the loop from a ground-plane raycast before this is read.
+   */
   sample(): PlayerInput {
     let mx = 0, mz = 0;
     if (this.has('a', 'arrowleft')) mx -= MOVE_Q;
@@ -60,11 +70,8 @@ export class InputController {
 
     let buttons = 0;
     if (this.has('j') || this.mouseDownL) buttons |= Button.Rush;
-    const grabHeld = this.has('k') || this.mouseDownR;
-    if (grabHeld) buttons |= Button.Grab;
-    // release of grab = throw (edge: was held, now not)
-    if (this.prevGrabHeld && !grabHeld) buttons |= Button.Throw;
-    this.prevGrabHeld = grabHeld;
+    if (this.has('k') || this.mouseDownR) buttons |= Button.Grab; // hold to grab/charge; sim throws on release
+    if (this.has('f')) buttons |= Button.Throw; // empty-hand shove tap (sim edge-detects)
     if (this.has('l')) buttons |= Button.Struggle;
     if (this.has(' ')) buttons |= Button.Jump;
 

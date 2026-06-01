@@ -37,10 +37,10 @@
 // ============================================================================
 
 import type { WorldState } from './world/state.ts';
-import { BodyFlag, hasFlag } from './world/state.ts';
+import { BodyFlag, hasFlag, NO_ENTITY } from './world/state.ts';
 import type { PlayerInput } from './world/input.ts';
-import { motionPhase, carryPhase } from './world/step.ts';
-import { fromRaw, neg, gt, type Fixed } from './fixed/fixed.ts';
+import { motionPhase, carryPhase, GRAVITY, TICK_DT } from './world/step.ts';
+import { fromRaw, neg, gt, add, mul, type Fixed } from './fixed/fixed.ts';
 import { GridIndex } from './spatial/grid.ts';
 import type { SpatialIndex } from './spatial/index.ts';
 import { applyCollision } from './collide/index.ts';
@@ -69,6 +69,8 @@ export class Sim {
   private readonly index: SpatialIndex;
   /** Per-advance scratch: pre-motion downward velocity, for fall-damage detection. */
   private preVy: Int32Array;
+  /** Per-advance scratch: was each body Grounded at tick start (transition detect)? */
+  private preGrounded: Uint8Array;
 
   constructor(world: WorldState, ctx?: Partial<SimContext>) {
     this.world = world;
@@ -79,6 +81,7 @@ export class Sim {
     };
     this.index = new GridIndex();
     this.preVy = new Int32Array(world.capacity);
+    this.preGrounded = new Uint8Array(world.capacity);
   }
 
   /**
@@ -89,8 +92,12 @@ export class Sim {
     const w = this.world;
     const count = w.count;
 
-    // capture pre-motion downward speed for fall-damage (who was falling this tick)
-    for (let i = 0; i < count; i++) this.preVy[i] = w.vy[i]!;
+    // capture pre-motion downward speed + grounded state for fall-damage detection
+    // (fall damage fires only on the falling→grounded TRANSITION this tick)
+    for (let i = 0; i < count; i++) {
+      this.preVy[i] = w.vy[i]!;
+      this.preGrounded[i] = (w.flags[i]! & BodyFlag.Grounded) !== 0 ? 1 : 0;
+    }
 
     // SYSTEMS 1-4: motion (input→accel, gravity, integrate, ground+friction)
     motionPhase(w, inputs);
@@ -112,15 +119,20 @@ export class Sim {
     // (positions only moved by carry for held bodies, which verbs treat specially).
     applyVerbs(w, inputs, this.index, this.ctx.roles);
 
-    // FALL DAMAGE: a body that became Grounded this tick with a fast inbound descent
-    // takes impact damage (Anchor is fall-durable — handled inside the helper).
+    // FALL DAMAGE: a body that TRANSITIONED falling→Grounded this tick with a fast
+    // inbound descent takes impact damage (Anchor is fall-durable — handled inside).
+    // Skip bodies that became carried this tick (catching a faller converts a lethal
+    // fall into a carry, §5.4) and bodies that were already grounded at tick start.
     for (let i = 0; i < count; i++) {
       if (!hasFlag(w, i, BodyFlag.Alive)) continue;
       if (!hasFlag(w, i, BodyFlag.Grounded)) continue;
-      // downward impact speed = -(pre-motion vy) if it was descending
-      const pv = fromRaw(this.preVy[i]!);
-      const impact: Fixed = neg(pv); // positive when pv was negative (falling)
-      if (gt(impact, FALL_SAFE_SPEED)) applyFallDamage(w, i, impact);
+      if (this.preGrounded[i] === 1) continue; // not a landing transition
+      if (w.grabbedBy[i] !== NO_ENTITY) continue; // caught mid-fall — no phantom hit
+      // impact speed = -(pre-motion vy + this tick's gravity), i.e. the true speed at
+      // contact, not the start-of-tick speed (off-by-one-gravity-tick fix).
+      const pv = add(fromRaw(this.preVy[i]!), mul(GRAVITY, TICK_DT));
+      const impact: Fixed = neg(pv); // positive when descending
+      if (gt(impact, FALL_SAFE_SPEED)) applyFallDamage(w, i, impact, w.tick);
     }
 
     w.tick = (w.tick + 1) | 0;

@@ -400,27 +400,27 @@ function testFallDamage(): void {
 
   // A regular player slamming down at 16 u/s.
   const player = spawn(w, { mass: MassClass.Player, health: 100 });
-  const dmgP = applyFallDamage(w, player, fromFloatConst(16.0));
+  const dmgP = applyFallDamage(w, player, fromFloatConst(16.0), 100);
   check('fast-falling player takes damage', toRaw(dmgP) > 0 && hp(w, player) < 100);
   check('player NOT auto-Downed by fall', !hasFlag(w, player, BodyFlag.Downed));
 
   // A gentle landing under the safe threshold: no damage.
   const player2 = spawn(w, { mass: MassClass.Player, health: 100 });
-  const dmgSafe = applyFallDamage(w, player2, fromFloatConst(5.0));
+  const dmgSafe = applyFallDamage(w, player2, fromFloatConst(5.0), 100);
   check('soft landing deals no damage', toRaw(dmgSafe) === 0 && hp(w, player2) === 100);
 
   // The Anchor slamming down at the SAME speed that hurt the player.
   const anchor = spawn(w, { mass: MassClass.Anchor, flags: BodyFlag.Anchor, health: 100 });
   setFlag(w, anchor, BodyFlag.Anchor);
-  const dmgA = applyFallDamage(w, anchor, fromFloatConst(16.0));
+  const dmgA = applyFallDamage(w, anchor, fromFloatConst(16.0), 100);
   check('anchor takes LESSER damage than player (fall-durable)', toRaw(dmgA) < toRaw(dmgP));
   check('anchor not instakilled (health remains > 0)', hp(w, anchor) > 0);
   check('anchor gets Downed beat', hasFlag(w, anchor, BodyFlag.Downed));
-  check('anchor Downed timer set (ticks, hashed)', w.timer[anchor]! > 0);
+  check('anchor Downed beat set (ticks, hashed, own field)', w.downedUntil[anchor]! > 100);
 
   // Extreme speed: still no instakill for the Anchor (helper never hard-kills).
   const anchor2 = spawn(w, { mass: MassClass.Anchor, flags: BodyFlag.Anchor, health: 100 });
-  applyFallDamage(w, anchor2, fromFloatConst(40.0));
+  applyFallDamage(w, anchor2, fromFloatConst(40.0), 100);
   check('anchor survives extreme fall (no instakill in helper)', hp(w, anchor2) > 0);
 }
 

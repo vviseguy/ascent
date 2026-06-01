@@ -58,7 +58,7 @@ import type { SpatialIndex } from '../spatial/index.ts';
 import {
   RUSH_DIST, RUSH_TICKS, RUSH_CD_TICKS, RUSH_STAGGER_TICKS,
   RUSH_PUSHBACK_BASE, RUSH_PUSHBACK_MIN, RUSH_PUSHBACK_MAX, RUSH_HIT_RADIUS,
-  GRAB_REACH, GRAB_HALF_ANGLE, GRAB_LATCH_TICKS,
+  GRAB_REACH, GRAB_HALF_ANGLE, GRAB_LATCH_TICKS, CARRY_REACH,
   THROW_CHARGE_TICKS, THROW_J, THROW_ANGLE_MIN, THROW_ANGLE_MAX,
   THROW_ANGLE_DEFAULT, THROW_JITTER_RANGE,
   SHOVE_J, SHOVE_REACH, SHOVE_CD_TICKS,
@@ -66,6 +66,7 @@ import {
   STRUGGLE_DECAY, CARRIER_GRIP,
   REGRAB_IMMUNITY_TICKS, MAX_HELPLESS_TICKS,
   Role, THROW_STRENGTH, STRUGGLE_STRENGTH, CARRY_SPEED_MUL,
+  JUMP_SPEED, JUMP_MUL,
 } from './config.ts';
 import { jitterUnit, JitterChannel } from './jitter.ts';
 
@@ -115,10 +116,15 @@ export function applyVerbs(
   // ---- A. tick bookkeeping -------------------------------------------------
   for (let i = 0; i < count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
-    // expire stagger
+    // expire stagger (stagger does NOT use the Downed flag — Downed is the
+    // fall/throw-down beat with its own downedUntil countdown, expired below).
     if (w.staggerUntil[i]! >= 0 && tick >= w.staggerUntil[i]!) {
       w.staggerUntil[i] = -1;
-      clearFlag(w, i, BodyFlag.Downed); // stagger uses Downed as the visible beat
+    }
+    // expire the DOWNED beat (fall/throw-down vulnerable window) on its own timer.
+    if (w.downedUntil[i]! >= 0 && tick >= w.downedUntil[i]!) {
+      w.downedUntil[i] = -1;
+      clearFlag(w, i, BodyFlag.Downed);
     }
     // reset air-rush when grounded
     if (grounded(w, i)) w.airRushUsed[i] = 0;
@@ -138,6 +144,9 @@ export function applyVerbs(
       }
     }
   }
+
+  // ---- B0. JUMP ------------------------------------------------------------
+  jumpSystem(w, inputs, count, tick);
 
   // ---- B. RUSH -------------------------------------------------------------
   rushSystem(w, inputs, index, count, tick);
@@ -161,6 +170,33 @@ export function applyVerbs(
   }
 
   return w;
+}
+
+// ============================================================================
+// JUMP — vertical launch (docs/02 §1, §2.1, §4.1)
+// ============================================================================
+// On the Jump press-edge, while GROUNDED, NOT staggered, and HANDS-FREE
+// (Pressure A: holding anything disables JUMP), set vy to a per-mass jump speed
+// and clear Grounded. The Anchor's low JUMP_MUL is its gap-lock constraint — it
+// cannot self-clear a real chasm, forcing the crew to carry/throw it across.
+function jumpSystem(
+  w: WorldState,
+  inputs: ReadonlyArray<PlayerInput | undefined>,
+  count: number,
+  tick: number,
+): void {
+  for (let i = 0; i < count; i++) {
+    if (!hasFlag(w, i, BodyFlag.Alive)) continue;
+    if (!isPlayerLike(w, i)) continue;
+    const inp = inputOf(inputs, i);
+    if (!edge(w, inp, Button.Jump, i)) continue;
+    if (!grounded(w, i)) continue; // ground jump only (air-rush is the air option)
+    if (w.holding[i] !== NO_ENTITY) continue; // Pressure A: hands-full disables jump
+    if (isStaggered(w, i, tick)) continue; // staggered can't jump
+    const speed = mul(JUMP_SPEED, JUMP_MUL[w.massClass[i]!]!);
+    w.vy[i] = toRaw(speed);
+    clearFlag(w, i, BodyFlag.Grounded);
+  }
 }
 
 // ============================================================================
@@ -202,7 +238,12 @@ function rushSystem(
       const start = w.rushStart[i]!;
       // progress fraction through the dash, ease-out so most distance is early.
       const elapsed = tick - start; // 0..RUSH_TICKS-1 while active
-      const stepDist = rushStepDistance(elapsed);
+      let stepDist = rushStepDistance(elapsed);
+      // ENCUMBRANCE (Pressure C, §2.1): a hands-full rush is shortened by the
+      // carried tier's carry-speed multiplier — rushing while carrying the Anchor
+      // covers ~1.0u, not the full 4.0u.
+      const held = w.holding[i]!;
+      if (held !== NO_ENTITY) stepDist = mul(stepDist, CARRY_SPEED_MUL[w.massClass[held]!]!);
       if (gt(stepDist, ZERO)) {
         const f = fromRaw(w.facing[i]!);
         const dx = mul(stepDist, cos(f));
@@ -577,63 +618,61 @@ function throwSystem(
   tick: number,
   roles: RoleMap,
 ): void {
+  // The four-button control model (docs/02 §1): GRAB and THROW share the grab
+  // button by HOLD-vs-RELEASE. Holding GRAB with something in hand BUILDS charge;
+  // RELEASING GRAB throws the held body at that charge. SHOVE (empty-hand) is the
+  // separate Throw button, a tap. So:
+  //   THROW (of held) := GRAB release-edge while holding, charge from throwCharge.
+  //   SHOVE           := Throw press-edge while NOT holding.
   for (let i = 0; i < count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
     if (!isPlayerLike(w, i)) continue;
 
     const inp = inputOf(inputs, i);
-    const heldThrowNow = isDown(inp, Button.Throw);
-    const heldThrowPrev = (w.prevButtons[i]! & Button.Throw) !== 0;
-    // release edge = was down, now up.
-    const releaseEdge = heldThrowPrev && !heldThrowNow;
+    const grabNow = isDown(inp, Button.Grab);
+    const grabPrev = (w.prevButtons[i]! & Button.Grab) !== 0;
+    const grabReleaseEdge = grabPrev && !grabNow;
+    const throwNow = isDown(inp, Button.Throw);
+    const throwPrev = (w.prevButtons[i]! & Button.Throw) !== 0;
+    const throwPressEdge = throwNow && !throwPrev;
 
-    if (!releaseEdge) continue;
-
-    // IDEMPOTENCY: apply at most once per (thrower, releaseTick).
-    if (w.lastThrowTick[i]! === tick) continue;
-
+    // --- charged THROW of the held body, on GRAB release ---
     const target = w.holding[i]!;
-    if (target !== NO_ENTITY) {
-      // --- charged THROW of the held body ---
-      // charge c in [0,1] from how long Throw was held: approximate via a per-body
-      // charge timer encoded in struggleLastPress? No — charge is the thrower's own
-      // hold duration. We track it with rushStart-like reuse? To stay schema-light
-      // and deterministic we compute charge from the carrier's heldSince-independent
-      // press history: count consecutive prior-down ticks via timer slot.
+    if (grabReleaseEdge && target !== NO_ENTITY) {
+      if (w.lastThrowTick[i]! === tick) continue; // idempotency per (thrower, tick)
       const c = chargeFraction(w, i);
       applyThrow(w, i, target, c, tick, roles);
       w.lastThrowTick[i] = tick;
-      w.timer[i] = 0; // reset charge accumulator
-    } else {
-      // --- empty-hand SHOVE (tap) ---
-      if (w.lastShoveTick[i]! >= 0 && tick - w.lastShoveTick[i]! < SHOVE_CD_TICKS) {
-        w.timer[i] = 0;
-        continue;
-      }
+      w.throwCharge[i] = 0; // reset charge accumulator
+      continue;
+    }
+
+    // --- empty-hand SHOVE, on a Throw-button tap with nothing held ---
+    if (throwPressEdge && w.holding[i] === NO_ENTITY) {
+      if (w.lastShoveTick[i]! >= 0 && tick - w.lastShoveTick[i]! < SHOVE_CD_TICKS) continue;
       applyShove(w, index, i, inp, tick);
       w.lastShoveTick[i] = tick;
-      w.timer[i] = 0;
     }
   }
 
-  // Charge accumulation pass: while Throw is held AND hands full, ramp timer (ticks).
+  // Charge accumulation: while GRAB is held AND hands are full, ramp throwCharge
+  // (ticks) toward THROW_CHARGE_TICKS. Released/empty → reset to 0.
   for (let i = 0; i < count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
     if (!isPlayerLike(w, i)) continue;
     const inp = inputOf(inputs, i);
-    if (isDown(inp, Button.Throw) && w.holding[i] !== NO_ENTITY) {
-      const t = w.timer[i]! + 1;
-      w.timer[i] = t > THROW_CHARGE_TICKS ? THROW_CHARGE_TICKS : t;
-    } else if (!isDown(inp, Button.Throw)) {
-      // not charging -> keep at 0 when hands full and idle (released handled above)
-      if (w.holding[i] === NO_ENTITY) w.timer[i] = 0;
+    if (isDown(inp, Button.Grab) && w.holding[i] !== NO_ENTITY) {
+      const t = w.throwCharge[i]! + 1;
+      w.throwCharge[i] = t > THROW_CHARGE_TICKS ? THROW_CHARGE_TICKS : t;
+    } else if (w.holding[i] === NO_ENTITY) {
+      w.throwCharge[i] = 0;
     }
   }
 }
 
-/** Charge fraction c in [0,1] as Fixed from the ramp timer (timer/THROW_CHARGE_TICKS). */
+/** Charge fraction c in [0,1] as Fixed (throwCharge/THROW_CHARGE_TICKS). */
 function chargeFraction(w: WorldState, i: number): Fixed {
-  const t = w.timer[i]!;
+  const t = w.throwCharge[i]!;
   const c = div(fromInt(t), fromInt(THROW_CHARGE_TICKS));
   return clamp(c, ZERO, ONE);
 }
@@ -681,9 +720,11 @@ function applyThrow(
   w.vx[target] = toRaw(mul(horiz, cos(f)));
   w.vz[target] = toRaw(mul(horiz, sin(f)));
   w.vy[target] = toRaw(vert);
-  // nudge the thrown body just outside the carry socket so it doesn't re-collide.
-  w.px[target] = toRaw(add(fromRaw(w.px[thrower]!), mul(GRAB_REACH, cos(f))));
-  w.pz[target] = toRaw(add(fromRaw(w.pz[thrower]!), mul(GRAB_REACH, sin(f))));
+  // nudge the thrown body to just beyond the carry socket so it doesn't re-collide
+  // with the thrower (use CARRY_REACH — where it actually was — not GRAB_REACH).
+  const nudge = add(CARRY_REACH, fromRaw(w.radius[target]!));
+  w.px[target] = toRaw(add(fromRaw(w.px[thrower]!), mul(nudge, cos(f))));
+  w.pz[target] = toRaw(add(fromRaw(w.pz[thrower]!), mul(nudge, sin(f))));
 }
 
 /** Empty-hand SHOVE: micro impulse on the first body in a short frontal cone. */

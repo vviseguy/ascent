@@ -46,6 +46,7 @@ export function applyFallDamage(
   w: WorldState,
   id: number,
   impactSpeed: Fixed,
+  nowTick: number,
 ): Fixed {
   if (!hasFlag(w, id, BodyFlag.Alive)) return fromRaw(0);
   if (lte(impactSpeed, FALL_SAFE_SPEED)) return fromRaw(0);
@@ -59,8 +60,10 @@ export function applyFallDamage(
     // Fall-durable: lesser damage + a brief Downed beat instead of instakill.
     dmg = mul(dmg, ANCHOR_FALL_FACTOR);
     setFlag(w, id, BodyFlag.Downed);
-    // Reuse the per-body timer slot for the Downed countdown (ticks, hashed).
-    if (w.timer[id]! < ANCHOR_DOWNED_TICKS) w.timer[id] = ANCHOR_DOWNED_TICKS;
+    // Downed countdown in its OWN hashed field (not the shared `timer`, which the
+    // verb layer uses for other things). Extend, never shorten, an active beat.
+    const until = nowTick + ANCHOR_DOWNED_TICKS;
+    if (w.downedUntil[id]! < until) w.downedUntil[id] = until;
   }
 
   w.health[id] = toRaw(sub(fromRaw(w.health[id]!), dmg));

@@ -169,6 +169,18 @@ export interface WorldState {
   lastShoveTick: Int32Array;
   /** Tick this body was first held in the current hold (for MAX_HELPLESS cap). -1 idle. */
   heldSince: Int32Array;
+  /**
+   * Throw-charge accumulator (ticks, 0..THROW_CHARGE_TICKS) while this body holds
+   * something and the GRAB button is held. Its OWN field (not the shared `timer`) so
+   * it can't be clobbered by the downed countdown or any other timer user. Hashed.
+   */
+  throwCharge: Int32Array;
+  /**
+   * Tick until which this body is in the DOWNED beat (fall/throw-down vulnerable
+   * window). Its OWN field so it isn't aliased with `timer`/throwCharge. -1 = not
+   * downed. Cleared (and BodyFlag.Downed removed) when tick >= this. Hashed.
+   */
+  downedUntil: Int32Array;
 }
 
 /** Allocate an empty world state of the given capacity. All bodies start dead. */
@@ -208,6 +220,8 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     lastThrowTick: new Int32Array(capacity).fill(-1),
     lastShoveTick: new Int32Array(capacity).fill(-1),
     heldSince: new Int32Array(capacity).fill(-1),
+    throwCharge: new Int32Array(capacity),
+    downedUntil: new Int32Array(capacity).fill(-1),
   };
 }
 
@@ -272,6 +286,8 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.lastThrowTick[id] = -1;
   w.lastShoveTick[id] = -1;
   w.heldSince[id] = -1;
+  w.throwCharge[id] = 0;
+  w.downedUntil[id] = -1;
   return id;
 }
 
@@ -308,4 +324,5 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'grabLatchUntil', 'grabLatchBy', 'regrabUntil', 'struggleProgress',
   'struggleLastPress', 'prevButtons', 'rushUntil', 'rushStart', 'rushCdUntil',
   'airRushUsed', 'staggerUntil', 'lastThrowTick', 'lastShoveTick', 'heldSince',
+  'throwCharge', 'downedUntil',
 ];
