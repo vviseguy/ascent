@@ -635,35 +635,48 @@ export class Renderer {
    */
   private updateCoalescence(anchorY: number): void {
     if (this.bands.length === 0) return;
+    // Spacing between strata surfaces (the "one floor up" unit). Derived from the two
+    // lowest bands; falls back to 6 m (the tower's FLOOR_HEIGHT) if only one exists.
+    let spacing = 6;
+    if (this.bands.length >= 2) spacing = Math.max(1, this.bands[1]!.baseY - this.bands[0]!.baseY);
+
     for (const band of this.bands) {
-      const dist = band.baseY - anchorY; // >0 above the Anchor, <0 below
-      if (dist >= -0.5) {
-        // AT or ABOVE the crew → coalescence reveal
-        const reveal = clamp01((REVEAL_RADIUS - dist) / REVEAL_FALLOFF);
-        // wireframe fades OUT as reveal → 1; solid fades IN. The "potential" plan is
-        // kept faint (0.4 ceiling) so stacked floors above never crowd the camera.
-        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.4;
-        band.wire.visible = reveal < 0.999;
-        const lit = reveal * reveal; // ease-in the "earned warmth"
-        const col = lerpHex(COLORS.wall, COLORS.lit, lit * 0.5); // warm sodium accent on resolve
+      // Floor offset relative to the one the Anchor is standing ON. We bias by half a
+      // floor so the Anchor's CENTER (≈ surface + halfHeight) still reads its own floor
+      // as "current" (rel≈0), not as "below". rel≈0 = your floor; +1 = the next floor
+      // up; +2 and beyond = higher floors (hidden).
+      const rel = (band.baseY - anchorY + spacing * 0.45) / spacing;
+
+      if (rel < 0.5) {
+        // CURRENT floor (and anything at/below it) → fully SOLID, lit, no wireframe.
+        // Floors genuinely below desaturate gently with depth so the climb still reads.
+        band.wire.visible = false;
+        band.solid.visible = true;
+        const depth = clamp01(-rel / 4); // 0 at your floor → 1 about 4 floors down
+        const col = lerpHex(COLORS.wall, 0x0a0a14, depth * 0.85);
         for (const m of band.solidMats) {
-          m.opacity = 0.08 + 0.92 * reveal; // ghost → solid
+          m.opacity = 1;
+          m.color.setHex(col);
+          m.emissive.setHex(0x000000);
+        }
+      } else if (rel < 1.6) {
+        // The floor DIRECTLY ABOVE → a faint 2D floor-plan that resolves to a lit slab
+        // as the Anchor climbs the last stretch toward it (reveal 0→1 over rel 1.0→0.5).
+        const reveal = clamp01((1.6 - rel) / 1.1);
+        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.45;
+        band.wire.visible = reveal < 0.999;
+        const lit = reveal * reveal;
+        const col = lerpHex(COLORS.wall, COLORS.lit, lit * 0.5);
+        for (const m of band.solidMats) {
+          m.opacity = 0.04 + 0.96 * reveal; // ghost plan → solid
           m.color.setHex(col);
           m.emissive.setHex(lerpHex(0x000000, COLORS.lit, lit * 0.35));
         }
         band.solid.visible = reveal > 0.02;
       } else {
-        // BELOW the crew → persist, but desaturate + darken with depth (floored).
+        // HIGHER floors (2+ strata up) → INVISIBLE (no clutter above the next floor).
         band.wire.visible = false;
-        const depth = clamp01(-dist / BELOW_DEPTH);
-        const fade = 1 - 0.82 * depth; // value crush, floored ~0.18 (still readable)
-        const col = lerpHex(COLORS.wall, 0x0a0a14, depth);
-        band.solid.visible = true;
-        for (const m of band.solidMats) {
-          m.opacity = Math.max(0.5, fade);
-          m.color.setHex(col);
-          m.emissive.setHex(0x000000);
-        }
+        band.solid.visible = false;
       }
     }
   }
