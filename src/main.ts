@@ -15,7 +15,7 @@
 // canonicalized-input discipline is what makes that swap safe).
 // ============================================================================
 
-import { buildSandbox } from './game/scene.ts';
+import { buildTower } from './game/scene.ts';
 import { Renderer } from './render/renderer.ts';
 import { InputController } from './render/input-controller.ts';
 import { startLoop } from './render/loop.ts';
@@ -29,7 +29,7 @@ function boot(): void {
   canvas.style.display = 'block';
   app.appendChild(canvas);
 
-  const scene = buildSandbox(3);
+  const scene = buildTower({ crewSize: 3, numStrata: 5 });
   const renderer = new Renderer(canvas);
   renderer.buildTerrain(scene.sim.ctx.terrain);
   renderer.attachHud(app);

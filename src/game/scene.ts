@@ -12,11 +12,13 @@
 // ============================================================================
 
 import { createWorld, spawnBody, BodyFlag, MassClass, Role } from '../sim/world/state.ts';
-import { fromInt, fromFloatConst, toRaw } from '../sim/fixed/fixed.ts';
+import { fromInt, fromFloatConst, toRaw, fromRaw, add } from '../sim/fixed/fixed.ts';
 import { Sim, type SimContext } from '../sim/sim.ts';
 import { makeArena } from '../sim/collide/terrain.ts';
 import { HazardKind, type Hazard } from '../sim/hazards/model.ts';
 import { WinCondition, type MatchConfig } from './match.ts';
+import { generateFloor } from '../floor/generate.ts';
+import { compileTower, FLOOR_HEIGHT } from './tower.ts';
 
 export interface SceneHandle {
   sim: Sim;
@@ -111,3 +113,62 @@ export function buildSandbox(crewSizeOrOpts: number | SandboxOpts = 3): SceneHan
     localCrew: 0,
   };
 }
+
+/**
+ * Build a real TOWER scene: generate `numStrata` deterministic floors from a seed,
+ * compile them into stacked terrain, and spawn one crew at stratum 0's entry. This
+ * wires the floor generator into the playable game (the audit's `floor-module-not-
+ * wired`). Win = race to the top stratum's height.
+ */
+export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?: bigint } = {}): SceneHandle {
+  const crewSize = Math.max(1, opts.crewSize ?? 3);
+  const numStrata = Math.max(2, opts.numStrata ?? 5);
+  const seed = opts.seed ?? 0x5a17ed_1234n;
+
+  // generate + compile the tower
+  const floors = [];
+  for (let s = 0; s < numStrata; s++) {
+    floors.push(generateFloor({ gridSize: 5, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
+  }
+  const groundY = fromInt(0);
+  const killPlaneY = fromInt(-10);
+  const tower = compileTower(floors, 0, { groundY, killPlaneY });
+
+  const w = createWorld(128);
+  const playerIds: number[] = [];
+  const anchorIds: number[] = [];
+  // spawn at stratum 0's entry, slightly above the slab so they drop onto it
+  const e0 = tower.entryXZ[0]!;
+  const spawnY = fromRaw(tower.stratumBaseY[0]!);
+  for (let i = 0; i < crewSize; i++) {
+    playerIds.push(spawnBody(w, {
+      px: fromRaw(e0.x), py: add(spawnY, fromInt(1)), pz: fromRaw(e0.z),
+      radius: fromFloatConst(0.4), halfHeight: fromFloatConst(0.9),
+      massClass: MassClass.Player, flags: BodyFlag.Player,
+      crewId: 0, role: CREW_ROLES[i % CREW_ROLES.length]!,
+    }));
+  }
+  anchorIds.push(spawnBody(w, {
+    px: fromRaw(e0.x), py: add(spawnY, fromInt(1)), pz: fromRaw(e0.z),
+    radius: fromFloatConst(0.55), halfHeight: fromFloatConst(1.0),
+    massClass: MassClass.Anchor, flags: BodyFlag.Player | BodyFlag.Anchor,
+    crewId: 0, role: Role.Anchor,
+  }));
+
+  // target height = top stratum's floor (raw → meters)
+  const topBaseRaw = tower.stratumBaseY[numStrata - 1]!;
+  const match: MatchConfig = {
+    winCondition: WinCondition.RaceToHeight,
+    targetHeight: topBaseRaw,
+    matchCap: 60 * 60 * 10,
+    numCrews: 1,
+    killPlaneY: toRaw(killPlaneY),
+  };
+
+  const ctx: Partial<SimContext> = {
+    terrain: tower.terrain, hazards: [], match, anchorIds, groundY: toRaw(groundY),
+  };
+  return { sim: new Sim(w, ctx), localPlayerId: playerIds[0]!, playerIds, anchorIds, localCrew: 0 };
+}
+
+void FLOOR_HEIGHT;
