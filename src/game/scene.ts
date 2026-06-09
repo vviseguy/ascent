@@ -29,6 +29,12 @@ export interface SceneHandle {
   anchorIds: number[];
   /** The local player's crew. */
   localCrew: number;
+  /**
+   * VIEW-ONLY: world Y (raw Fixed) of each stratum's walkable surface, from the
+   * compiled tower. Surfaced for the renderer's Coalescence reveal (docs/06 §2);
+   * NOT sim state — the sandbox (flat arena) leaves it undefined.
+   */
+  stratumBaseY?: number[];
 }
 
 /** Non-anchor role rotation for crew members. */
@@ -163,12 +169,13 @@ export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?:
     matchCap: 60 * 60 * 10,
     numCrews: 1,
     killPlaneY: toRaw(killPlaneY),
+    runSeed: seed,
+    floorHeight: toRaw(FLOOR_HEIGHT),
+    draftEveryFloors: 1, // a draft per stratum climbed
   };
 
   const ctx: Partial<SimContext> = {
     terrain: tower.terrain, hazards: [], match, anchorIds, groundY: toRaw(groundY),
   };
-  return { sim: new Sim(w, ctx), localPlayerId: playerIds[0]!, playerIds, anchorIds, localCrew: 0 };
+  return { sim: new Sim(w, ctx), localPlayerId: playerIds[0]!, playerIds, anchorIds, localCrew: 0, stratumBaseY: tower.stratumBaseY };
 }
-
-void FLOOR_HEIGHT;

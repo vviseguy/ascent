@@ -74,6 +74,8 @@ export class InputController {
     if (this.has('f')) buttons |= Button.Throw; // empty-hand shove tap (sim edge-detects)
     if (this.has('l')) buttons |= Button.Struggle;
     if (this.has(' ')) buttons |= Button.Jump;
+    if (this.has('e')) buttons |= Button.Ability; // role ability (revive/unhand/bridge/…)
+    if (this.has('q')) buttons |= Button.Recall; // Anchor: plant beacon · others: recall
 
     return { moveX: mx, moveZ: mz, aim: this.aimRaw, buttons, grabTarget: -1 };
   }

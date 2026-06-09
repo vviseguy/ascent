@@ -31,6 +31,10 @@ function boot(): void {
 
   const scene = buildTower({ crewSize: 3, numStrata: 5 });
   const renderer = new Renderer(canvas);
+  // VIEW-ONLY: hand the renderer the per-stratum base-Y (from the compiled tower) so
+  // its Coalescence reveal can band the terrain wireframe→solid above the crew. Must
+  // precede buildTerrain so the terrain boxes are grouped per stratum.
+  if (scene.stratumBaseY) renderer.setStrata(scene.stratumBaseY);
   renderer.buildTerrain(scene.sim.ctx.terrain);
   renderer.attachHud(app);
   const input = new InputController(canvas);
@@ -51,7 +55,8 @@ function makeControlsLegend(): HTMLElement {
     '<b style="letter-spacing:.08em">ASCENT</b> — sandbox<br>' +
     '<span style="opacity:.85">Get the <b style="color:#ffd23f">gold Anchor</b> high — its height is your score.</span><br>' +
     '<span style="opacity:.6">WASD move · mouse aim · J rush · <b>hold K</b> to grab, ' +
-    '<b>release K</b> to throw (hold charges) · F shove · L struggle · Space jump</span>';
+    '<b>release K</b> to throw (hold charges) · F shove · L struggle · Space jump · ' +
+    'E role-ability · Q recall/plant</span>';
   return hud;
 }
 

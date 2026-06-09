@@ -28,6 +28,8 @@ import { Sim, type SimContext } from '../sim/sim.ts';
 import { makeArena, makeBox, flatGround, type Terrain } from '../sim/collide/terrain.ts';
 import { WinCondition, type MatchConfig, standingMeters } from './match.ts';
 import { clone, restoreInto } from '../sim/world/snapshot.ts';
+import { buildTower } from './scene.ts';
+import { drawOffer, boonById } from './boons.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) { ok++; console.log(`  ok   ${label}`); } else { fail++; console.log(`  FAIL ${label}`); } };
@@ -173,6 +175,40 @@ console.log('[5] DETERMINISM');
   const replay: number[] = [];
   for (let t = 40; t < 80; t++) { sim.advance(blank(sim.world.count)); replay.push(sim.hash()); }
   check('save/restore reproduces the game-layer hash sequence', refAfter.every((v, i) => v === replay[i]));
+}
+
+// PROOF 6 — boon DRAFT fires at milestone floors as a crew climbs the real tower;
+// rubber-banding draws better for a deficit; deterministic.
+console.log('[6] BOON DRAFT + RUBBER-BAND');
+{
+  // climb the REAL compiled tower (slabs exist at each stratum, so committing works);
+  // pin the anchor onto each successive stratum surface so it commits + drafts.
+  const climb = (): { boons: number[]; hash: number } => {
+    const sc = buildTower({ crewSize: 1, numStrata: 5, seed: 42n });
+    const a = sc.anchorIds[0]!;
+    const bases = sc.stratumBaseY!;
+    for (let floor = 1; floor < bases.length; floor++) {
+      const y = bases[floor]! + toRaw(fromFloatConst(1.0)); // rest on the slab
+      for (let t = 0; t < 25; t++) {
+        sc.sim.world.py[a] = y; sc.sim.world.vy[a] = 0;
+        sc.sim.world.flags[a] = (sc.sim.world.flags[a]! | BodyFlag.Grounded) & 0xffff;
+        sc.sim.advance(new Array(sc.sim.world.count));
+      }
+    }
+    return { boons: sc.sim.match.crews[0]!.boons.slice(), hash: sc.sim.hash() };
+  };
+  const r1 = climb();
+  check('drafted boons while climbing the tower (cadence fires)', r1.boons.length >= 3);
+  const r2 = climb();
+  check('draft is deterministic (same boons + hash across runs)',
+    JSON.stringify(r1.boons) === JSON.stringify(r2.boons) && r1.hash === r2.hash);
+  // rubber-band: a trailing crew (large deficit) draws a higher average tier than a leader.
+  let lead = 0, trail = 0;
+  for (let i = 0; i < 100; i++) {
+    for (const id of drawOffer(7n, 0, i, 0)) lead += boonById(id)!.tier;
+    for (const id of drawOffer(7n, 1, i, 1)) trail += boonById(id)!.tier;
+  }
+  check('rubber-band: trailing crew draws higher-tier boons', trail > lead);
 }
 
 console.log('----------------------------------------------------------------');

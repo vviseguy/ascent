@@ -217,6 +217,58 @@ export interface WorldState {
   bleedUntil: Int32Array;
   /** Tick at/after which this body may RECALL again (beacon recall cooldown). Hashed. */
   recallReadyAt: Int32Array;
+
+  // --- ROLE ABILITY tick-state (src/sim/verbs/abilities.ts) -----------------
+  // The Button.Ability verb (docs/02 §6) per role. Like the verb fields above,
+  // these are per-body Int32 channels storing absolute TICK numbers ("...Until" =
+  // the tick the effect ends, exclusive; "...At" = the tick an event fires) or
+  // entity ids (sentinel NO_ENTITY). Appended to INT32_FIELDS so they are hashed /
+  // cloned / restored / compared automatically (rollback-safe). Never floats.
+
+  /**
+   * Tick at/after which this body may use its ROLE ABILITY again (per-role cooldown
+   * end). 0/absent => ready. Set when an ability fires; checked on the press edge.
+   * Hashed.
+   */
+  abilityCdUntil: Int32Array;
+  /**
+   * MENDER revive channel: the tick the in-progress revive completes; -1 = no
+   * channel. While >=0, abilityChanTarget holds the ally being revived. Hashed.
+   */
+  abilityChanUntil: Int32Array;
+  /** MENDER revive channel target (the downed ally), or NO_ENTITY when idle. Hashed. */
+  abilityChanTarget: Int32Array;
+  /**
+   * BULWARK brace: tick until which this body's incoming knockback is reduced (a
+   * brief defensive window armed by the Unhand/body-block ability). -1 = not bracing.
+   * Hashed.
+   */
+  braceUntil: Int32Array;
+  /**
+   * ENGINEER bridge: for a spawned bridge BLOCK body, the tick at which it dissolves
+   * (killed). -1 = not a bridge / no scheduled dissolve. Hashed.
+   */
+  bridgeExpireAt: Int32Array;
+  /**
+   * RUNNER scout: the entity id this body has most recently TAGGED (nearest hazard /
+   * highest reachable point), or NO_ENTITY. Minimal deterministic mark used by the
+   * HUD; carries no physics effect. Hashed (so it survives rollback identically).
+   */
+  scoutMark: Int32Array;
+  /**
+   * BREAKER shove: tick until which this body is in the post-AoE-shove beat (a brief
+   * flag; full destructible terrain is future). -1 = idle. Hashed.
+   */
+  breakerShoveUntil: Int32Array;
+  /**
+   * Consecutive STRUGGLE-press burst counter for the mash-ramp (docs/02 §4.2): each
+   * valid struggle press within STRUGGLE_BURST_WINDOW ticks of the previous one
+   * increments this; it resets to 1 when the gap is larger (or on a fresh hold). The
+   * per-press value is ramped by clamp(1 + 0.12*(n-1), 1, 1.8) with n = this counter
+   * at the press. Per-body tick-state, hashed (appended to INT32_FIELDS). 0 = idle.
+   * Hashed.
+   */
+  struggleBurst: Int32Array;
 }
 
 /** Allocate an empty world state of the given capacity. All bodies start dead. */
@@ -263,6 +315,17 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     respawnAt: new Int32Array(capacity).fill(-1),
     bleedUntil: new Int32Array(capacity).fill(-1),
     recallReadyAt: new Int32Array(capacity),
+    // role-ability tick-state — cooldown defaults to 0 (ready); channel/brace/
+    // bridge/scout/breaker channels default to -1 (idle) or NO_ENTITY (no target).
+    abilityCdUntil: new Int32Array(capacity),
+    abilityChanUntil: new Int32Array(capacity).fill(-1),
+    abilityChanTarget: new Int32Array(capacity).fill(NO_ENTITY),
+    braceUntil: new Int32Array(capacity).fill(-1),
+    bridgeExpireAt: new Int32Array(capacity).fill(-1),
+    scoutMark: new Int32Array(capacity).fill(NO_ENTITY),
+    breakerShoveUntil: new Int32Array(capacity).fill(-1),
+    // struggle mash-ramp burst counter — 0 = idle.
+    struggleBurst: new Int32Array(capacity),
   };
 }
 
@@ -336,6 +399,15 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.respawnAt[id] = -1;
   w.bleedUntil[id] = -1;
   w.recallReadyAt[id] = 0;
+  // role-ability tick-state — reset so a reused slot carries no stale ability state.
+  w.abilityCdUntil[id] = 0;
+  w.abilityChanUntil[id] = -1;
+  w.abilityChanTarget[id] = NO_ENTITY;
+  w.braceUntil[id] = -1;
+  w.bridgeExpireAt[id] = -1;
+  w.scoutMark[id] = NO_ENTITY;
+  w.breakerShoveUntil[id] = -1;
+  w.struggleBurst[id] = 0;
   return id;
 }
 
@@ -373,6 +445,11 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'struggleLastPress', 'prevButtons', 'rushUntil', 'rushStart', 'rushCdUntil',
   'airRushUsed', 'staggerUntil', 'lastThrowTick', 'lastShoveTick', 'heldSince',
   'throwCharge', 'downedUntil', 'respawnAt', 'bleedUntil', 'recallReadyAt',
+  // --- role-ability tick-state (appended; see WorldState above) ---
+  'abilityCdUntil', 'abilityChanUntil', 'abilityChanTarget', 'braceUntil',
+  'bridgeExpireAt', 'scoutMark', 'breakerShoveUntil',
+  // --- struggle mash-ramp burst counter (appended; see WorldState above) ---
+  'struggleBurst',
 ];
 
 /**

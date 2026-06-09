@@ -39,8 +39,12 @@
 //      MAX_HELPLESS); enforce REGRAB_IMMUNITY; encumbrance disables new grabs.
 //   D. STRUGGLE: press-edge debounced accumulate; break a hold past threshold.
 //   E. THROW / SHOVE: idempotent impulse on the release tick.
-//   F. ENCUMBRANCE: clamp each carrier's horizontal speed to the carried-tier cap.
-//   G. prevButtons <- buttons (must be LAST so every edge detector above saw the
+//   F. ABILITIES: the Button.Ability role verb (revive/unhand/bridge/break/scout).
+//      Runs AFTER throw/shove (so it sees the settled grab/throw linkage + can free a
+//      body / spawn a bridge this tick) and BEFORE encumbrance (so a freshly-freed or
+//      newly-carried body is speed-clamped this same tick). See abilities.ts.
+//   G. ENCUMBRANCE: clamp each carrier's horizontal speed to the carried-tier cap.
+//   H. prevButtons <- buttons (must be LAST so every edge detector above saw the
 //      previous tick's buttons).
 // ============================================================================
 
@@ -50,7 +54,7 @@ import {
   sqrt, sin, cos, fromInt, ZERO, ONE, toRaw, fromRaw,
 } from '../fixed/fixed.ts';
 import {
-  type WorldState, BodyFlag, MassClass, NO_ENTITY, MASS_OF,
+  type WorldState, BodyFlag, MassClass, NO_ENTITY, NO_CREW, MASS_OF,
   hasFlag, setFlag, clearFlag,
 } from '../world/state.ts';
 import { type PlayerInput, Button, isDown, NEUTRAL_INPUT } from '../world/input.ts';
@@ -59,16 +63,22 @@ import {
   RUSH_DIST, RUSH_TICKS, RUSH_CD_TICKS, RUSH_STAGGER_TICKS,
   RUSH_PUSHBACK_BASE, RUSH_PUSHBACK_MIN, RUSH_PUSHBACK_MAX, RUSH_HIT_RADIUS,
   GRAB_REACH, GRAB_HALF_ANGLE, GRAB_LATCH_TICKS, CARRY_REACH,
+  CATCH_LATCH_TICKS, CATCH_FALL_VY, CATCH_VERTICAL_REACH, MAX_TRAIN_LEN,
   THROW_CHARGE_TICKS, THROW_J, THROW_ANGLE_MIN, THROW_ANGLE_MAX,
   THROW_ANGLE_DEFAULT, THROW_JITTER_RANGE,
+  THROW_AIM_SPOIL_RANGE, THROW_CHARGE_BLEED_PER_TICK, THROW_CHARGE_BLEED_FLOOR_TICKS,
+  HELD_CHIP_PERIOD, HELD_CHIP_DAMAGE,
   SHOVE_J, SHOVE_REACH, SHOVE_CD_TICKS,
-  STRUGGLE_BREAK, STRUGGLE_PRESS, STRUGGLE_DEBOUNCE_TICKS, STRUGGLE_IDLE_TICKS,
-  STRUGGLE_DECAY, CARRIER_GRIP,
+  STRUGGLE_BREAK, STRUGGLE_BREAK_FRIENDLY, STRUGGLE_PRESS, STRUGGLE_DEBOUNCE_TICKS,
+  STRUGGLE_IDLE_TICKS, STRUGGLE_DECAY, CARRIER_GRIP,
+  STRUGGLE_BURST_WINDOW, STRUGGLE_RAMP_STEP, STRUGGLE_RAMP_MIN, STRUGGLE_RAMP_MAX,
+  STRUGGLE_JITTER_RANGE, ENCUMBRANCE_VERB_MUL,
   REGRAB_IMMUNITY_TICKS, MAX_HELPLESS_TICKS,
   Role, THROW_STRENGTH, STRUGGLE_STRENGTH, CARRY_SPEED_MUL,
   JUMP_SPEED, JUMP_MUL,
 } from './config.ts';
 import { jitterUnit, JitterChannel } from './jitter.ts';
+import { applyAbilities, knockbackMul } from './abilities.ts';
 
 /** MAX_SPEED base (mirrors step.ts; encumbrance scales this for carriers). */
 const MAX_SPEED: Fixed = (() => {
@@ -165,7 +175,12 @@ export function applyVerbs(
   // ---- E. THROW / SHOVE ----------------------------------------------------
   throwSystem(w, inputs, index, count, tick, roles);
 
-  // ---- F. ENCUMBRANCE ------------------------------------------------------
+  // ---- F. ABILITIES (role Button.Ability verb) -----------------------------
+  // After throw/shove (settled linkage) and before encumbrance (so a freed/spawned
+  // body is speed-clamped this tick). Reads role via w.role[id]. See abilities.ts.
+  applyAbilities(w, inputs, index, tick);
+
+  // ---- G. ENCUMBRANCE ------------------------------------------------------
   encumbranceSystem(w, count);
 
   // NOTE: prevButtons is committed by the SIM at the very END of the tick (after
@@ -317,22 +332,28 @@ function rushBump(
 
     // stagger (target can't grab/jump/ability) — interrupts a pending latch.
     applyStagger(w, t, tick);
-    // pending latch interrupted (but an established hold is NOT auto-broken here;
-    // bump-to-break SHORTENS/breaks the hold of a body that is itself a CARRIER):
+    // pending latch interrupted: a stagger CANCELS an in-progress grab attempt
+    // (docs/02 §2.1) where t is the target of someone's pending latch...
     cancelPendingLatchOn(w, t);
+    // ...and where t OWNS a pending latch (t was mid-grabbing someone): a rush
+    // staggers the would-be grabber so its acquire fails (it's also gated by
+    // !isStaggered in grabSystem C1, but cancel here so the bookkeeping is clean).
+    cancelLatchByCarrier(w, t);
 
-    // bump-to-break (pressure e): if the staggered body is HOLDING someone,
-    // shorten/break that hold — universal soft counter to grabs.
+    // bump-to-break (pressure e): a rush onto a CARRIER SHORTENS (never snaps) its
+    // hold — docs/02 §2.1: "stagger ... does NOT break an established hold (you have
+    // to STRUGGLE or get a Bulwark for that)." So we push the victim's struggle
+    // progress toward — but capped strictly BELOW — the break threshold. This makes
+    // the next real struggle/bump land faster without the rush itself freeing the
+    // body. No REGRAB_IMMUNITY arms here because no break happens.
     const victim = w.holding[t]!;
     if (victim !== NO_ENTITY) {
-      // shorten by pushing struggle progress near threshold; if already high, break.
       const prog = fromRaw(w.struggleProgress[victim]!);
       const bumped = add(prog, div(STRUGGLE_BREAK, fromInt(2))); // +50 progress
-      if (gte(bumped, STRUGGLE_BREAK)) {
-        breakHold(w, t, victim, tick);
-      } else {
-        w.struggleProgress[victim] = toRaw(bumped);
-      }
+      // clamp just under threshold (BREAK - 1 raw unit) so a single rush can never
+      // cross it; only an actual STRUGGLE press (or a Bulwark Unhand) breaks the hold.
+      const ceil = sub(STRUGGLE_BREAK, fromRaw(1));
+      w.struggleProgress[victim] = toRaw(min(bumped, ceil));
     }
 
     // pushback 1.5u * (rusher_mass/target_mass) clamped [0.3,3.0]u, along dx/dz.
@@ -340,6 +361,8 @@ function rushBump(
     const tm = MASS_OF[w.massClass[t]!]!;
     let push = mul(RUSH_PUSHBACK_BASE, div(rm, tm));
     push = clamp(push, RUSH_PUSHBACK_MIN, RUSH_PUSHBACK_MAX);
+    // BULWARK brace (§4.5): a braced target takes halved incoming knockback.
+    push = mul(push, knockbackMul(w, t, tick));
     // direction from rusher to target (normalize; if coincident, push along facing)
     let nx: Fixed; let nz: Fixed;
     if (gt(dist, ZERO)) {
@@ -371,11 +394,11 @@ function grabSystem(
   for (let i = 0; i < count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
 
-    // grabber-is-prey (pressure d): if carrier i is itself now held, it can't keep
-    // a victim parented through it cleanly — drop what i holds (i becomes cargo).
-    if (w.grabbedBy[i] !== NO_ENTITY && w.holding[i] !== NO_ENTITY) {
-      breakHold(w, i, w.holding[i]!, tick);
-    }
+    // TRAIN (pressure d, docs/02 §2.3/§4.4): a carrier that gets grabbed KEEPS its
+    // cargo — the whole stack travels together ("the whole stack flies"). We do NOT
+    // auto-drop here; the held-of-held linkage chains through carryPhase (step.ts),
+    // and the train is bounded at MAX_TRAIN_LEN by the grab-acquire check (C2). The
+    // previous behavior (drop-on-grabbed) collapsed every train instantly.
 
     const held = w.holding[i]!;
     if (held !== NO_ENTITY) {
@@ -387,6 +410,17 @@ function grabSystem(
         const since = w.heldSince[held]!;
         if (since >= 0 && tick - since >= MAX_HELPLESS_TICKS) {
           breakHold(w, i, held, tick);
+        } else if (since >= 0) {
+          // HELD-PLAYER CHIP (docs/02 §4.2): a held PLAYER/Anchor deals 1 HP every 12
+          // ticks to the carrier (a small cost to holding; never lethal alone). World
+          // objects (Throwable, non-player) don't chip. Integer-tick for determinism.
+          const heldIsPerson =
+            hasFlag(w, held, BodyFlag.Player) || hasFlag(w, held, BodyFlag.Anchor);
+          const elapsed = tick - since;
+          if (heldIsPerson && elapsed > 0 && elapsed % HELD_CHIP_PERIOD === 0) {
+            const hp = sub(fromRaw(w.health[i]!), HELD_CHIP_DAMAGE);
+            w.health[i] = toRaw(max(ZERO, hp)); // clamp at 0 (death/downed owned by sim)
+          }
         }
       }
     }
@@ -429,19 +463,22 @@ function grabSystem(
 
     const target = pickGrabTarget(w, index, i, inp, count, tick);
     if (target === NO_ENTITY) continue;
-    // begin latch on target
-    const latchTicks = GRAB_LATCH_TICKS[w.massClass[target]!]!;
+    // begin latch on target. CATCH fast-latch (docs/02 §5.3/§5.4): catching a body
+    // that is AIRBORNE / falling / thrown uses a SHORT fixed latch (the "alley-oop"
+    // / safety-net) instead of the mass-scaled time — otherwise a fast faller passes
+    // through the cone before a 22-tick Anchor latch could ever complete.
+    const latchTicks = isCatchable(w, target)
+      ? CATCH_LATCH_TICKS
+      : GRAB_LATCH_TICKS[w.massClass[target]!]!;
     w.grabLatchBy[target] = i;
     w.grabLatchUntil[target] = tick + latchTicks;
   }
 }
 
 /**
- * Choose a grab target in i's cone per priority:
- *   enemy Anchor > prompt-able player > world object > player; ties -> lower id.
- * (We have no team data yet, so "enemy Anchor" == any Anchor; "prompt-able player"
- *  == a player flagged Throwable/Downed isn't modeled, so player tier is single.)
- * Honors an explicit inp.grabTarget if that id is a valid in-cone candidate.
+ * Choose a grab target in i's cone by the 4-tier priority (docs/02 §4.1), resolved
+ * deterministically by stable id on ties. Honors an explicit inp.grabTarget if that
+ * id is a valid in-cone candidate.
  */
 function pickGrabTarget(
   w: WorldState,
@@ -453,7 +490,9 @@ function pickGrabTarget(
 ): number {
   const px = w.px[i]!;
   const pz = w.pz[i]!;
-  const reach = toRaw(add(fromRaw(w.radius[i]!), GRAB_REACH));
+  // widen the spatial query by the catch vertical reach so a faller above/below the
+  // catcher's plane is still returned (the cone test does the precise filtering).
+  const reach = toRaw(add(add(fromRaw(w.radius[i]!), GRAB_REACH), CATCH_VERTICAL_REACH));
   index.queryRadius(px, pz, reach, scratch);
 
   // explicit target intent wins if valid
@@ -468,7 +507,7 @@ function pickGrabTarget(
     if (t === i) continue;
     if (!isGrabbable(w, t, i, tick)) continue;
     if (!inCone(w, i, t)) continue;
-    const tier = grabTier(w, t);
+    const tier = grabTier(w, i, t);
     if (tier < bestTier || (tier === bestTier && (best === NO_ENTITY || t < best))) {
       bestTier = tier;
       best = t;
@@ -477,11 +516,21 @@ function pickGrabTarget(
   return best;
 }
 
-/** Priority tier (lower = higher priority). */
-function grabTier(w: WorldState, t: number): number {
-  if (hasFlag(w, t, BodyFlag.Anchor)) return 0; // enemy Anchor
+/**
+ * Grab priority tier (lower = higher priority), 4 tiers w/ crew (docs/02 §4.1):
+ *   0 enemy Anchor (a DIFFERENT crew's Anchor — the prize)
+ *   1 friendly / prompt-able player (a same-crew ally — co-op carry / hand-up)
+ *   2 world object (throwable)
+ *   3 generic player (a rival non-Anchor)
+ * IMPORTANT (audit: own-anchor): your OWN Anchor is never the top adversarial target
+ * — a same-crew Anchor falls into the friendly tier (1), not the enemy-Anchor tier.
+ */
+function grabTier(w: WorldState, i: number, t: number): number {
+  const sameCrew = isSameCrew(w, i, t);
+  if (hasFlag(w, t, BodyFlag.Anchor)) return sameCrew ? 1 : 0; // own=friendly, rival=prize
+  if (sameCrew && hasFlag(w, t, BodyFlag.Player)) return 1; // friendly/prompt-able ally
   if (hasFlag(w, t, BodyFlag.Throwable)) return 2; // world object
-  if (hasFlag(w, t, BodyFlag.Player)) return 3; // player
+  if (hasFlag(w, t, BodyFlag.Player)) return 3; // generic (rival) player
   return 4;
 }
 
@@ -490,8 +539,12 @@ function isGrabbable(w: WorldState, t: number, i: number, tick: number): boolean
   if (!hasFlag(w, t, BodyFlag.Alive)) return false;
   if (t === i) return false;
   if (w.grabbedBy[t] !== NO_ENTITY) return false; // already held
-  if (w.holding[t] !== NO_ENTITY) return false; // a carrier isn't directly grabbable mid-hold
   if (w.regrabUntil[t]! >= 0 && tick < w.regrabUntil[t]!) return false; // REGRAB_IMMUNITY
+  // TRAIN (docs/02 §4.4): a body that is itself a CARRIER CAN be grabbed (you grab
+  // the carrier and the whole stack travels) — UNLESS doing so would exceed the
+  // train-length cap. (Previously a carrier was never directly grabbable, which made
+  // trains impossible.)
+  if (w.holding[t] !== NO_ENTITY && 1 + heldChainCount(w, t) > MAX_TRAIN_LEN) return false;
   // must be a grabbable kind: player, anchor, or throwable object
   return (
     hasFlag(w, t, BodyFlag.Player) ||
@@ -500,14 +553,71 @@ function isGrabbable(w: WorldState, t: number, i: number, tick: number): boolean
   );
 }
 
-/** Is target t inside i's frontal grab cone (reach + half-angle)? */
+/**
+ * Two bodies are SAME-crew iff both carry a real (non-NO_CREW) crew id and they match.
+ * A body with no crew (world object / unassigned) is never "friendly" to anyone — so
+ * absent crew data, every player reads as a rival and the old single-tier behavior is
+ * preserved (no regression for crew-less sandboxes).
+ */
+function isSameCrew(w: WorldState, a: number, b: number): boolean {
+  const ca = w.crewId[a]!;
+  const cb = w.crewId[b]!;
+  return ca !== NO_CREW && ca === cb;
+}
+
+/**
+ * Count the bodies in the held-of-held chain STARTING at `target` and descending via
+ * `holding` (target, target.holding, ...). Used to bound train length. The descent is
+ * deterministic (single linked chain) and guarded against cycles by the entity cap.
+ */
+function heldChainCount(w: WorldState, target: number): number {
+  let n = 0;
+  let cur = target;
+  // capacity-bounded loop: a hold chain can be at most `count` long, and cycles are
+  // impossible (a body holds at most one thing and is held by at most one), but bound
+  // anyway for safety/determinism.
+  for (let guard = 0; guard < w.count && cur !== NO_ENTITY; guard++) {
+    n++;
+    cur = w.holding[cur]!;
+  }
+  return n;
+}
+
+/** Is target catchable as an in-flight body (significant downward vy)? (docs/02 §5.3/§5.4) */
+function isCatchable(w: WorldState, t: number): boolean {
+  // a held body has NoGravity and vy 0; only free, fast-descending bodies are "fallers".
+  if (hasFlag(w, t, BodyFlag.NoGravity)) return false;
+  const vy = fromRaw(w.vy[t]!);
+  return lt(vy, neg(CATCH_FALL_VY)); // descending faster than the threshold
+}
+
+/**
+ * Is target t inside i's frontal grab cone (horizontal reach + half-angle), AND —
+ * for a CATCH of an in-flight faller — within the VERTICAL catch reach (docs/02
+ * §5.3/§5.4)? The cone math is in the (x,z) plane (the camera/aim plane); the vertical
+ * span only matters when catching a faller that is above/below the catcher's own plane.
+ */
 function inCone(w: WorldState, i: number, t: number): boolean {
   const dx = sub(fromRaw(w.px[t]!), fromRaw(w.px[i]!));
   const dz = sub(fromRaw(w.pz[t]!), fromRaw(w.pz[i]!));
   const dist = sqrt(add(mul(dx, dx), mul(dz, dz)));
+  // VERTICAL reach: ONLY a CATCH of an in-flight faller is vertically gated (so a body
+  // dropping above/below your plane is reachable up to CATCH_VERTICAL_REACH). A normal
+  // grab is NOT vertically constrained here (unchanged from before) — the cone math is
+  // in the (x,z) plane; standing/ledge grabs keep working as they did.
+  if (isCatchable(w, t)) {
+    const dyAbs = abs(sub(fromRaw(w.py[t]!), fromRaw(w.py[i]!)));
+    const vReach = add(
+      add(fromRaw(w.halfHeight[i]!), fromRaw(w.halfHeight[t]!)),
+      CATCH_VERTICAL_REACH,
+    );
+    if (gt(dyAbs, vReach)) return false; // faller is outside the vertical catch envelope
+  }
+  // horizontal reach: a catch gets the same in-plane reach (the vertical span is the
+  // extra allowance); both use GRAB_REACH for the cone radius.
   const reach = add(add(fromRaw(w.radius[i]!), fromRaw(w.radius[t]!)), GRAB_REACH);
   if (gt(dist, reach)) return false;
-  if (lte(dist, ZERO)) return true; // coincident -> in cone
+  if (lte(dist, ZERO)) return true; // coincident (in plan) -> in cone
   // angle between facing and (dx,dz): compare via dot product vs cos(halfAngle).
   const f = fromRaw(w.facing[i]!);
   const fx = cos(f);
@@ -527,6 +637,7 @@ function establishHold(w: WorldState, carrier: number, target: number, tick: num
   w.heldSince[target] = tick;
   w.struggleProgress[target] = 0;
   w.struggleLastPress[target] = -1;
+  w.struggleBurst[target] = 0; // fresh hold -> fresh mash burst
   // clear the pending latch bookkeeping on the target
   w.grabLatchBy[target] = NO_ENTITY;
   w.grabLatchUntil[target] = -1;
@@ -547,6 +658,7 @@ function forceDrop(w: WorldState, carrier: number, tick: number): void {
   w.heldSince[target] = -1;
   w.struggleProgress[target] = 0;
   w.struggleLastPress[target] = -1;
+  w.struggleBurst[target] = 0; // hold ended -> reset mash burst
   w.regrabUntil[target] = tick + REGRAB_IMMUNITY_TICKS;
 }
 
@@ -604,18 +716,48 @@ function struggleSystem(
     const pressed = edge(w, inp, Button.Struggle, i);
     if (!pressed) continue;
 
-    // debounce: ignore presses < STRUGGLE_DEBOUNCE_TICKS apart.
+    // debounce: ignore presses < STRUGGLE_DEBOUNCE_TICKS apart (turbo gains nothing).
     const last = w.struggleLastPress[i]!;
-    if (last >= 0 && tick - last < STRUGGLE_DEBOUNCE_TICKS) continue;
+    const gap = last >= 0 ? tick - last : -1;
+    if (gap >= 0 && gap < STRUGGLE_DEBOUNCE_TICKS) continue;
+
+    // MASH RAMP (docs/02 §4.2): consecutive presses within the burst window ramp the
+    // per-press value. Increment the burst counter when this press is within the
+    // window of the last; otherwise it's a fresh burst (n=1). Stored in the hashed
+    // struggleBurst field so it survives rollback.
+    let burst = w.struggleBurst[i]!;
+    burst = gap >= 0 && gap <= STRUGGLE_BURST_WINDOW ? burst + 1 : 1;
+    w.struggleBurst[i] = burst;
     w.struggleLastPress[i] = tick;
 
-    // press = 6 * struggler_strength * (struggler_mass / carrier_grip)
+    // ramp = clamp(1 + 0.12*(n-1), 1, 1.8) — ramps to 1.8x after ~7 presses, then caps.
+    const ramp = clamp(
+      add(STRUGGLE_RAMP_MIN, mul(STRUGGLE_RAMP_STEP, fromInt(burst - 1))),
+      STRUGGLE_RAMP_MIN,
+      STRUGGLE_RAMP_MAX,
+    );
+
+    // press = 6 * struggler_strength * (struggler_mass / carrier_grip) * ramp
     const strength = STRUGGLE_STRENGTH[roleOf(w, roles, i)]!;
     const mass = MASS_OF[w.massClass[i]!]!;
     const grip = CARRIER_GRIP; // carrier resistance (uniform for now)
-    const inc = mul(mul(STRUGGLE_PRESS, strength), div(mass, grip));
+    let inc = mul(mul(mul(STRUGGLE_PRESS, strength), div(mass, grip)), ramp);
+
+    // ENCUMBRANCE (Pressure C, §4.3): a struggler who is itself HANDS-FULL (a train
+    // link carrying cargo) struggles at -20% — you're committed.
+    if (w.holding[i] !== NO_ENTITY) inc = mul(inc, ENCUMBRANCE_VERB_MUL);
+
+    // ANTI-AUTOCLICKER seeded jitter (§4.2/§10.4): ±5% per press, keyed on
+    // (tick, heldId, Struggle) so perfect-bot timing isn't optimal. Deterministic.
+    const jit = mul(STRUGGLE_JITTER_RANGE, jitterUnit(tick, i, JitterChannel.Struggle));
+    inc = mul(inc, add(ONE, jit));
+
+    // FRIENDLY carry (docs/02 §5.1): if carrier and held are the SAME crew, the ally
+    // dismounts almost instantly (low threshold ~30); an adversarial hold uses 100.
+    const breakAt = isSameCrew(w, carrier, i) ? STRUGGLE_BREAK_FRIENDLY : STRUGGLE_BREAK;
+
     const next = add(fromRaw(w.struggleProgress[i]!), inc);
-    if (gte(next, STRUGGLE_BREAK)) {
+    if (gte(next, breakAt)) {
       // break free
       forceDrop(w, carrier, tick);
     } else {
@@ -664,8 +806,11 @@ function throwSystem(
       continue;
     }
 
-    // --- empty-hand SHOVE, on a Throw-button tap with nothing held ---
-    if (throwPressEdge && w.holding[i] === NO_ENTITY) {
+    // --- SHOVE, on a Throw-button tap. Empty-hand is the canonical case (§2.3); a
+    //     hands-full carrier may also shove, ENCUMBERED at -20% (§4.3). Note a held
+    //     body cannot be the thrower here (it's gated out of the throw path by the
+    //     control model: a held body struggles, it doesn't shove).
+    if (throwPressEdge) {
       if (w.lastShoveTick[i]! >= 0 && tick - w.lastShoveTick[i]! < SHOVE_CD_TICKS) continue;
       applyShove(w, index, i, inp, tick);
       w.lastShoveTick[i] = tick;
@@ -673,18 +818,59 @@ function throwSystem(
   }
 
   // Charge accumulation: while GRAB is held AND hands are full, ramp throwCharge
-  // (ticks) toward THROW_CHARGE_TICKS. Released/empty → reset to 0.
+  // (ticks) toward THROW_CHARGE_TICKS. Released/empty → reset to 0. A struggling held
+  // body BLEEDS the carrier's charge (docs/02 §4.2) so a contested throw goes weak.
   for (let i = 0; i < count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
     if (!isPlayerLike(w, i)) continue;
     const inp = inputOf(inputs, i);
-    if (isDown(inp, Button.Grab) && w.holding[i] !== NO_ENTITY) {
+    const target = w.holding[i]!;
+    if (isDown(inp, Button.Grab) && target !== NO_ENTITY) {
       const t = w.throwCharge[i]! + 1;
       w.throwCharge[i] = t > THROW_CHARGE_TICKS ? THROW_CHARGE_TICKS : t;
-    } else if (w.holding[i] === NO_ENTITY) {
+      // CHARGE-BLEED (§4.2): if the held body is ACTIVELY struggling, drain charge by
+      // ~0.02*THROW_CHARGE_TICKS/tick, but never below the bleed floor (~0.6 charge) —
+      // a fully-pinned victim caps the carrier's effective charge, never zeroes it.
+      if (isActivelyStruggling(w, target, tick)) {
+        // current charge as Fixed ticks, minus the per-tick bleed, floored to int,
+        // clamped >= the bleed floor (and >= 0). All Fixed/integer — deterministic.
+        const cur = fromInt(w.throwCharge[i]!);
+        const bled = sub(cur, THROW_CHARGE_BLEED_PER_TICK);
+        const floored = floorToTicks(max(ZERO, bled));
+        w.throwCharge[i] = floored < THROW_CHARGE_BLEED_FLOOR_TICKS
+          ? Math.min(THROW_CHARGE_BLEED_FLOOR_TICKS, w.throwCharge[i]!)
+          : floored;
+      }
+    } else if (target === NO_ENTITY) {
       w.throwCharge[i] = 0;
     }
   }
+}
+
+/** Floor a non-negative Fixed value to an integer tick count (deterministic shift). */
+function floorToTicks(v: Fixed): number {
+  // raw >> 16 is the integer part for a non-negative Fixed (arithmetic shift, exact).
+  return toRaw(v) >> 16;
+}
+
+/**
+ * Is held body `target` ACTIVELY struggling right now? True iff it has accumulated
+ * struggle progress AND pressed struggle within the idle window (so it is currently
+ * fighting, not coasting). Used to gate charge-bleed and aim-spoil (§4.2).
+ */
+function isActivelyStruggling(w: WorldState, target: number, tick: number): boolean {
+  if (w.struggleProgress[target]! <= 0) return false;
+  const last = w.struggleLastPress[target]!;
+  return last >= 0 && tick - last < STRUGGLE_IDLE_TICKS;
+}
+
+/**
+ * Struggle INTENSITY of a held body in [0,1] as Fixed: its current struggle progress
+ * relative to the adversarial break threshold. Drives aim-spoil magnitude (§4.2).
+ */
+function struggleIntensity(w: WorldState, target: number): Fixed {
+  const prog = fromRaw(w.struggleProgress[target]!);
+  return clamp(div(prog, STRUGGLE_BREAK), ZERO, ONE);
 }
 
 /** Charge fraction c in [0,1] as Fixed (throwCharge/THROW_CHARGE_TICKS). */
@@ -712,6 +898,12 @@ function applyThrow(
   tick: number,
   roles: RoleMap,
 ): void {
+  // AIM-SPOIL (docs/02 §4.2): capture the held body's struggle intensity BEFORE we
+  // clear its struggle state below — a struggling victim wriggles the throw aim by
+  // ±(intensity × 8°). Seeded per (thrower, releaseTick, ThrowAim) so it reproduces
+  // exactly on a rollback resim of the release tick.
+  const intensity = struggleIntensity(w, target);
+
   // release linkage (no regrab immunity needed on a throw — it's intentional)
   w.holding[thrower] = NO_ENTITY;
   w.grabbedBy[target] = NO_ENTITY;
@@ -719,6 +911,7 @@ function applyThrow(
   w.heldSince[target] = -1;
   w.struggleProgress[target] = 0;
   w.struggleLastPress[target] = -1;
+  w.struggleBurst[target] = 0;
   w.regrabUntil[target] = tick + REGRAB_IMMUNITY_TICKS;
 
   const mass = MASS_OF[w.massClass[target]!]!;
@@ -726,12 +919,17 @@ function applyThrow(
   const strength = THROW_STRENGTH[roleOf(w, roles, thrower)]!;
   const j = mul(mul(mul(THROW_J, c), invSqrtM), strength);
 
-  // arc angle = default + jitter, clamped.
+  // arc angle = default + base jitter, clamped.
   const jit = mul(THROW_JITTER_RANGE, jitterUnit(tick, thrower, JitterChannel.ThrowAngle));
   const angle = clamp(add(THROW_ANGLE_DEFAULT, jit), THROW_ANGLE_MIN, THROW_ANGLE_MAX);
 
-  // decompose: horizontal along facing scaled by cos(angle); vertical by sin(angle).
-  const f = fromRaw(w.facing[thrower]!);
+  // AIM-SPOIL: rotate the HORIZONTAL facing by ±(intensity × 8°). Applied to the
+  // facing (heading), not the arc elevation, so a contested toss scatters in plan.
+  const spoil = mul(
+    mul(THROW_AIM_SPOIL_RANGE, intensity),
+    jitterUnit(tick, thrower, JitterChannel.ThrowAim),
+  );
+  const f = add(fromRaw(w.facing[thrower]!), spoil);
   const horiz = mul(j, cos(angle));
   const vert = mul(j, sin(angle));
   w.vx[target] = toRaw(mul(horiz, cos(f)));
@@ -770,7 +968,9 @@ function applyShove(
   const f = fromRaw(w.facing[i]!);
   const mass = MASS_OF[w.massClass[best]!]!;
   // micro impulse scaled by 1/mass so an Anchor barely budges.
-  const j = div(SHOVE_J, mass);
+  let j = div(SHOVE_J, mass);
+  // ENCUMBRANCE (Pressure C, §4.3): a hands-full shover is 20% weaker (committed).
+  if (w.holding[i] !== NO_ENTITY) j = mul(j, ENCUMBRANCE_VERB_MUL);
   // Anchors: clamp to a negligible nudge (can't meaningfully move).
   const eff = hasFlag(w, best, BodyFlag.Anchor) ? min(j, fromRaw(2 << 14)) : j;
   if (w.grabbedBy[best] === NO_ENTITY) {
@@ -854,5 +1054,6 @@ function carrierEncumbered(w: WorldState, c: number): boolean {
   return w.holding[c] !== NO_ENTITY;
 }
 
-// Keep a few imports referenced for future tuning without widening churn.
-void abs; void neg; void lt; void MassClass;
+// Keep the MassClass import referenced (it's part of the public state vocabulary the
+// verb layer reads through MASS_OF; kept imported for readers of this module).
+void MassClass;

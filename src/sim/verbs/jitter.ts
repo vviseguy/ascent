@@ -17,7 +17,21 @@ import { type Fixed, fromRaw, mul, sub } from '../fixed/fixed.ts';
 
 /** Distinct channels so two effects on the same (tick,id) don't correlate. */
 export const JitterChannel = {
+  /** Throw arc-angle spread (docs/02 §2.3): the base ±1.5° launch jitter. */
   ThrowAngle: 0x9e3779b1,
+  /**
+   * STRUGGLE per-press micro-jitter (docs/02 §4.2 anti-autoclicker, §10.4): a ±5%
+   * seeded wobble on each valid struggle press so perfect-bot timing isn't optimal.
+   * Distinct constant from ThrowAngle so a struggle and a throw on the same (tick,id)
+   * do not correlate.
+   */
+  Struggle: 0x85ebca77,
+  /**
+   * THROW AIM-SPOIL (docs/02 §4.2): a struggling held player wriggles the carrier's
+   * throw aim by ±(struggle intensity × 8°). Keyed on the THROWER + release tick on
+   * its own channel so it is independent of the base ThrowAngle spread.
+   */
+  ThrowAim: 0xc2b2ae3d,
 } as const;
 export type JitterChannel = (typeof JitterChannel)[keyof typeof JitterChannel];
 

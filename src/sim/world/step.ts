@@ -133,9 +133,20 @@ export function motionPhase(
  * SYSTEM 5 — carry transform. Slaved bodies (grabbedBy set) follow a socket in
  * front of their carrier; the carrier owns the transform (no two-body solver).
  * Does NOT bump the tick. Exported so sim.ts runs it at the right point.
+ *
+ * TRAIN chaining (docs/02 §2.3/§4.4): a held body whose CARRIER is itself held forms
+ * a stack ("the whole stack flies"). We resolve each held body against its carrier's
+ * ALREADY-updated socket, processing in chain-DEPTH order (carriers before their
+ * cargo) so a held-of-held body follows its carrier this same tick regardless of id
+ * order. For a single (non-train) hold this is bit-identical to the previous one-pass
+ * placement, so the world/sim rollback proofs are unchanged.
  */
 export function carryPhase(w: WorldState): void {
   const count = w.count;
+
+  // Pass 0: dangling-link cleanup (a vanished/dead carrier drops both ends). Done as
+  // its own ascending-id sweep first so the depth-ordered placement below sees a
+  // consistent linkage (no half-broken chains).
   for (let i = 0; i < count; i++) {
     if ((w.flags[i]! & BodyFlag.Alive) === 0) continue;
     const carrier = w.grabbedBy[i]!;
@@ -148,22 +159,57 @@ export function carryPhase(w: WorldState): void {
       if (carrier >= 0 && carrier < count && w.holding[carrier] === i) {
         w.holding[carrier] = NO_ENTITY;
       }
-      continue;
     }
-    const f = fromRaw(w.facing[carrier]!);
-    const ox = mul(CARRY_REACH, cos(f));
-    const oz = mul(CARRY_REACH, sin(f));
-    const prevX = fromRaw(w.px[i]!);
-    const prevZ = fromRaw(w.pz[i]!);
-    w.px[i] = toRaw(add(fromRaw(w.px[carrier]!), ox));
-    w.pz[i] = toRaw(add(fromRaw(w.pz[carrier]!), oz));
-    // held slightly above the carrier's base
-    w.py[i] = toRaw(add(fromRaw(w.py[carrier]!), mul(fromRaw(w.halfHeight[carrier]!), fromInt(1))));
-    // velocity tracks the displacement so a subsequent throw inherits motion
-    w.vx[i] = toRaw(sub(fromRaw(w.px[i]!), prevX));
-    w.vz[i] = toRaw(sub(fromRaw(w.pz[i]!), prevZ));
-    w.vy[i] = 0;
   }
+
+  // Depth-ordered placement: depth 0 = a held body whose carrier is FREE; depth 1 =
+  // carrier is itself held by a free body; etc. Bounded by MAX_CARRY_DEPTH passes
+  // (the train cap). Within a pass we sweep ascending id (deterministic order).
+  for (let depth = 0; depth < MAX_CARRY_DEPTH; depth++) {
+    for (let i = 0; i < count; i++) {
+      if ((w.flags[i]! & BodyFlag.Alive) === 0) continue;
+      const carrier = w.grabbedBy[i]!;
+      if (carrier === NO_ENTITY) continue;
+      if (carrierChainDepth(w, i) !== depth) continue; // place at its own depth only
+      placeAtSocket(w, i, carrier);
+    }
+  }
+}
+
+/** Max carry-chain depth resolved per tick (matches the train-length cap of 3). */
+const MAX_CARRY_DEPTH = 3;
+
+/**
+ * Depth of body i in its carry chain: 0 if i's carrier is FREE (not itself held),
+ * else 1 + the carrier's depth. Bounded by the entity count (no cycles possible).
+ */
+function carrierChainDepth(w: WorldState, i: number): number {
+  let d = 0;
+  let carrier = w.grabbedBy[i]!;
+  for (let guard = 0; guard < w.count && carrier !== NO_ENTITY; guard++) {
+    const above = w.grabbedBy[carrier]!;
+    if (above === NO_ENTITY) break;
+    d++;
+    carrier = above;
+  }
+  return d;
+}
+
+/** Place held body i at its carrier's carry socket (the single-hold transform). */
+function placeAtSocket(w: WorldState, i: number, carrier: number): void {
+  const f = fromRaw(w.facing[carrier]!);
+  const ox = mul(CARRY_REACH, cos(f));
+  const oz = mul(CARRY_REACH, sin(f));
+  const prevX = fromRaw(w.px[i]!);
+  const prevZ = fromRaw(w.pz[i]!);
+  w.px[i] = toRaw(add(fromRaw(w.px[carrier]!), ox));
+  w.pz[i] = toRaw(add(fromRaw(w.pz[carrier]!), oz));
+  // held slightly above the carrier's base
+  w.py[i] = toRaw(add(fromRaw(w.py[carrier]!), mul(fromRaw(w.halfHeight[carrier]!), fromInt(1))));
+  // velocity tracks the displacement so a subsequent throw inherits motion
+  w.vx[i] = toRaw(sub(fromRaw(w.px[i]!), prevX));
+  w.vz[i] = toRaw(sub(fromRaw(w.pz[i]!), prevZ));
+  w.vy[i] = 0;
 }
 
 /** v' = v + a*dt (one Euler step for a velocity component). */

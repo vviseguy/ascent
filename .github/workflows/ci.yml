@@ -43,6 +43,8 @@ jobs:
         run: node --experimental-strip-types src/sim/collide/prove.ts
       - name: Proofs — verbs (grab/throw/rush/struggle)
         run: node --experimental-strip-types src/sim/verbs/prove.ts
+      - name: Proofs — role abilities (revive/unhand/bridge)
+        run: node --experimental-strip-types src/sim/verbs/abilities-prove.ts
       - name: Proofs — scripted hazards
         run: node --experimental-strip-types src/sim/hazards/prove.ts
       - name: Proofs — integrated sim (all layers, rollback)
