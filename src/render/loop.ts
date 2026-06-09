@@ -70,13 +70,16 @@ export function startLoop(
     }
     if (steps === MAX_TICKS_PER_FRAME) acc = 0; // single-player anti-spiral only
 
-    // push live standing/win to the HUD (committed Anchor height = the score)
+    // push live standing/win to the HUD (committed Anchor height = the score) +
+    // every crew's height for the standings rail + the win target.
     const localCrew = w.crewId[anchorId]!;
     const cs = sim.match.crews[localCrew];
     renderer.standing = {
       committed: cs ? cs.committed / 65536 : 0,
       winner: sim.match.winner,
       localCrew,
+      crews: sim.match.crews.map((c) => c.committed / 65536),
+      target: sim.match.cfg.targetHeight / 65536,
     };
 
     const alpha = Math.max(0, Math.min(1, acc / MS_PER_TICK));

@@ -30,8 +30,12 @@ export const CREW_COLORS: readonly number[] = [0x2fa8ff, 0xffb02e, 0xff3fa4, 0x3
 /** The gold Anchor (docs/06 — the precious VIP reads gold from any angle). */
 export const ANCHOR_COLOR = 0xffd23f;
 
-/** Roles (mirrors sim Role indices; kept local so character.ts has no sim import). */
-export const enum CharRole { Runner = 0, Bulwark = 1, Mender = 2, Engineer = 3, Breaker = 4, Anchor = 5, None = 6 }
+/** Roles (mirrors sim Role indices; kept local so character.ts has no sim import).
+ *  Const object (not a TS enum) to match the codebase's strip-only convention. */
+export const CharRole = {
+  Runner: 0, Bulwark: 1, Mender: 2, Engineer: 3, Breaker: 4, Anchor: 5, None: 6,
+} as const;
+export type CharRole = (typeof CharRole)[keyof typeof CharRole];
 
 /**
  * Everything the animator needs for one body this frame. The renderer fills it
@@ -63,7 +67,7 @@ export interface AnimSample {
 // Built at BASE_WIDTH so the torso width maps to the body's collision diameter;
 // per-role multipliers reshape the silhouette (docs/06 §1.6 "shape = category").
 const BASE_WIDTH = 0.8;               // == a Player's collision diameter (radius 0.4)
-const TOTAL_HEIGHT = 1.27;            // ~1.25× width → the requested stubby ratio
+// (the rig builds to ~1.27 tall × ~1.0 wide → the requested cube-ish 1×1×1.25 ratio)
 
 interface RoleShape {
   head: number;   // head scale (cute = big)
@@ -188,7 +192,6 @@ export class StubbyCharacter {
     scale.scale.set(bodyScale, bodyScale * s.height, bodyScale);
     scale.position.y = -halfHeight;
     this.root.add(scale);
-    void TOTAL_HEIGHT;
   }
 
   /** Per-frame base color (crew can't change, but kept for completeness/teamswap). */

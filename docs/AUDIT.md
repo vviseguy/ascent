@@ -1,5 +1,30 @@
 # ASCENT — Audit Report
 
+> **RESOLUTION STATUS (updated 2026-06-08).** The bug + UX findings and the entire
+> MISSING-systems backlog have been built out and proven. Highlights:
+> - **CRITICAL bugs fixed:** THROW charge (now off the grab-hold), JUMP implemented,
+>   timer-aliasing/downed-beat split into own fields, encumbered RUSH, caught-body fall
+>   damage, carrier-death linkage, world-space aim, double-ground-resolve.
+> - **MISSING systems built:** crew identity + roles, standing (Anchor height = score)
+>   + win conditions, health/death/respawn + kill-planes, recall beacon, the floor
+>   generator wired into a real climbable tower, role abilities (revive/unhand/bridge/
+>   …), boon draft + Mario-Kart rubber-banding, and the remaining verb mechanics
+>   (friendly-carry, train, catch-latch, grab tiers, aim-spoil, mash ramp).
+> - **UX built:** verb feedback (leash/arc/struggle), Anchor Status HUD, standings rail,
+>   crew colors, onboarding, render interpolation, climb-tuned camera, juice (shake/
+>   hitstop/squash), coalescence (wireframe→solid floors-above + fog floors-below).
+> - **Verification:** 11 standalone determinism proofs + 49 vitest + typecheck + build,
+>   all green in CI; a headless end-to-end run (600 ticks, real inputs, 5-stratum tower)
+>   is deterministic across runs.
+> - **Still pending (known):** PeerJS multiplayer is integration-pending (the rollback
+>   core is proven headless but not yet wired into the running app); between-run meta-
+>   progression is minimal. These are tracked as next steps, not regressions.
+>
+> The detail below is the ORIGINAL audit (pre-fix) and is kept for traceability.
+
+---
+
+
 > Read-only audit of the ASCENT codebase against the design spec (`docs/00`–`docs/09`).
 > Findings are adversarially verified against the actual source and the canonical docs.
 > Grouped by **severity**, then **category**. Overlapping findings across audit dimensions

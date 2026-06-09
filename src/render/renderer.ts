@@ -45,6 +45,7 @@ import { type WorldState, BodyFlag, MassClass, NO_ENTITY } from '../sim/world/st
 import { toFloat, fromRaw, toRaw, TWO_PI } from '../sim/fixed/fixed.ts';
 import { THROW_CHARGE_TICKS, THROW_J, THROW_ANGLE_DEFAULT } from '../sim/verbs/config.ts';
 import type { Terrain, AABB } from '../sim/collide/terrain.ts';
+import { StubbyCharacter, CREW_COLORS, ANCHOR_COLOR, type AnimSample } from './character.ts';
 
 const COLORS = {
   player: 0x4ea1ff, anchor: 0xffd23f, light: 0xa0e060, heavy: 0xff7a3d,
@@ -81,17 +82,25 @@ const REVEAL_RADIUS = 14;
 const REVEAL_FALLOFF = 8;
 /** Below-Anchor desaturation depth (u) over which floors fully recede (floored at 0.18). */
 const BELOW_DEPTH = 22;
+/** Descent speed (u/s, magnitude) mapped to a full-strength stubby landing squash. */
+const LAND_VY_REF = 10;
 
 /** Per-body render record holding previous + current sim positions for interpolation. */
 interface Vis {
-  mesh: THREE.Mesh; px: number; py: number; pz: number; ppx: number; ppy: number; ppz: number;
+  /** the transform target: a StubbyCharacter's root (Player/Anchor) or an object box. */
+  obj: THREE.Object3D;
+  /** procedural stubby body for Player/Anchor bodies; null for world-object boxes. */
+  char: StubbyCharacter | null;
+  px: number; py: number; pz: number; ppx: number; ppy: number; ppz: number;
   pf: number; cf: number;
-  /** view-only squash spring state (1 = neutral); pops on landing, eases back. */
+  /** view-only squash spring state (BOX path only); pops on landing, eases back. */
   squash: number;
-  /** a pending landing-crush impulse (the spring's target dips to this, then eases to 1). */
+  /** a pending landing-crush impulse (BOX path; the spring dips here, then eases to 1). */
   squashImpulse: number;
-  /** the body's base color hex (so coalescence/fog tinting can restore it). */
+  /** the body's base color hex (BOX path; characters bake crew color at build). */
   baseColor: number;
+  /** CHARACTER one-shots, set tick-accurately in detectEvents, consumed by sampleAnim. */
+  landPending: boolean; landStrength: number; throwPending: boolean;
 }
 
 /** One stratum band of terrain: a solid group + a wireframe overlay, styled by reveal. */
@@ -130,6 +139,10 @@ export class Renderer {
   /** HUD elements (DOM overlay; pure readout of sim state). */
   private hud: { root: HTMLElement; height: HTMLElement; state: HTMLElement; health: HTMLElement } | null = null;
   private winBanner: HTMLElement | null = null;
+  private standingsRail: HTMLElement | null = null;
+  private onboard: HTMLElement | null = null;
+  private railBeads: HTMLElement[] = [];
+  private startMs = -1;
 
   // --- JUICE state (view-only) ---
   /** Screen-shake trauma ∈ [0,1] (cosmetic, decays each frame). */
@@ -296,24 +309,43 @@ export class Renderer {
     return w.massClass[id] === MassClass.Heavy ? COLORS.heavy : COLORS.light;
   }
 
+  /** Crew-identity color for a player body (docs/06 §1.4); gold for the Anchor. */
+  private bodyColorFor(w: WorldState, id: number): number {
+    if ((w.flags[id]! & BodyFlag.Anchor) !== 0) return ANCHOR_COLOR;
+    const crew = w.crewId[id]!;
+    return crew < CREW_COLORS.length ? CREW_COLORS[crew]! : COLORS.player;
+  }
+
   private ensureVis(w: WorldState, id: number): Vis {
     let v = this.vis[id] ?? null;
     if (!v) {
       const r = toFloat(fromRaw(w.radius[id]!)), hh = toFloat(fromRaw(w.halfHeight[id]!));
-      const isPlayer = (w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0;
-      const geom = isPlayer ? new THREE.CapsuleGeometry(r, Math.max(0.1, hh * 2 - r * 2), 4, 10) : new THREE.BoxGeometry(r * 2, hh * 2, r * 2);
-      const baseColor = this.colorFor(w, id);
-      const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: 0x000000 });
-      const mesh = new THREE.Mesh(geom, mat);
-      this.bodyGroup.add(mesh);
-      // gold beacon ring + ANCHOR label for the Anchor (always findable)
-      if ((w.flags[id]! & BodyFlag.Anchor) !== 0) {
-        const ring = new THREE.Mesh(new THREE.RingGeometry(r * 1.6, r * 1.9, 24), new THREE.MeshBasicMaterial({ color: COLORS.anchor, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
-        ring.rotation.x = -Math.PI / 2; ring.position.y = -hh + 0.02; mesh.add(ring);
-        mesh.add(this.makeLabel('ANCHOR', COLORS.anchor, hh + 0.9));
+      const isBody = (w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0;
+      const baseColor = isBody ? this.bodyColorFor(w, id) : this.colorFor(w, id);
+      let obj: THREE.Object3D;
+      let char: StubbyCharacter | null = null;
+      if (isBody) {
+        // a procedural STUBBY/CUTE body (docs/06 App-B Phase 1; ~1×1×1.25), crew-tinted,
+        // role-shaped for silhouette readability — replaces the old capsule.
+        char = new StubbyCharacter(w.role[id]!, baseColor, r, hh);
+        obj = char.root;
+        // gold beacon ring + ANCHOR label for the Anchor (always findable)
+        if ((w.flags[id]! & BodyFlag.Anchor) !== 0) {
+          const ring = new THREE.Mesh(new THREE.RingGeometry(r * 1.6, r * 1.9, 24), new THREE.MeshBasicMaterial({ color: COLORS.anchor, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+          ring.rotation.x = -Math.PI / 2; ring.position.y = -hh + 0.02; obj.add(ring);
+          obj.add(this.makeLabel('ANCHOR', COLORS.anchor, hh + 0.9));
+        }
+      } else {
+        // world objects (throwables) stay simple boxes, mass-tier colored.
+        const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: 0x000000 });
+        obj = new THREE.Mesh(new THREE.BoxGeometry(r * 2, hh * 2, r * 2), mat);
       }
+      this.bodyGroup.add(obj);
       const x = toFloat(fromRaw(w.px[id]!)), y = toFloat(fromRaw(w.py[id]!)), z = toFloat(fromRaw(w.pz[id]!)), f = toFloat(fromRaw(w.facing[id]!));
-      v = { mesh, px: x, py: y, pz: z, ppx: x, ppy: y, ppz: z, pf: f, cf: f, squash: 1, squashImpulse: 0, baseColor };
+      v = {
+        obj, char, px: x, py: y, pz: z, ppx: x, ppy: y, ppz: z, pf: f, cf: f,
+        squash: 1, squashImpulse: 0, baseColor, landPending: false, landStrength: 0, throwPending: false,
+      };
       this.vis[id] = v;
     }
     return v;
@@ -346,8 +378,9 @@ export class Renderer {
   }
 
   /** Render a frame. `alpha` ∈ [0,1] interpolates between previous and current tick. */
-  /** Optional live standing/win readout (committed height in m, winner crew or -1). */
-  standing: { committed: number; winner: number; localCrew: number } | null = null;
+  /** Optional live standing/win readout (committed height in m, winner crew or -1).
+   *  `crews` (heights in m, index = crewId) drives the multi-crew standings rail. */
+  standing: { committed: number; winner: number; localCrew: number; crews?: number[]; target?: number } | null = null;
 
   render(w: WorldState, alpha: number, localId: number, anchorId: number): void {
     // wall-clock frame delta (view-only; never touches the sim) for time-based juice
@@ -375,23 +408,29 @@ export class Renderer {
     for (let id = 0; id < w.count; id++) {
       const alive = (w.flags[id]! & BodyFlag.Alive) !== 0;
       const v = this.vis[id] ?? null;
-      if (!alive) { if (v) v.mesh.visible = false; continue; }
+      if (!alive) { if (v) v.obj.visible = false; continue; }
       const vv = this.ensureVis(w, id);
-      vv.mesh.visible = true;
+      vv.obj.visible = true;
       // interpolate position + facing (shortest arc)
       const x = vv.ppx + (vv.px - vv.ppx) * alpha;
       const y = vv.ppy + (vv.py - vv.ppy) * alpha;
       const z = vv.ppz + (vv.pz - vv.ppz) * alpha;
-      vv.mesh.position.set(x, y, z);
-      vv.mesh.rotation.y = -lerpAngle(vv.pf, vv.cf, alpha);
+      vv.obj.position.set(x, y, z);
+      vv.obj.rotation.y = -lerpAngle(vv.pf, vv.cf, alpha);
 
-      // SQUASH/STRETCH: stretch slightly with vertical speed, pop on landing; ease back.
-      this.applySquashStretch(w, id, vv, dtMs);
-
-      const mat = vv.mesh.material as THREE.MeshStandardMaterial;
-      mat.color.setHex(vv.baseColor = this.colorFor(w, id));
-      // held bodies pulse an emissive aura (identity color preserved — audit fix)
-      mat.emissive.setHex(w.grabbedBy[id] !== NO_ENTITY ? 0x442266 : 0x000000);
+      // held bodies pulse an emissive aura (identity preserved); a downed Anchor pulses red.
+      const emissive = w.grabbedBy[id]! !== NO_ENTITY ? 0x442266
+        : (w.flags[id]! & BodyFlag.Downed) !== 0 ? 0x551122 : 0x000000;
+      if (vv.char) {
+        // STUBBY CHARACTER: all deformation + limb posing driven from sim state.
+        vv.char.update(this.sampleAnim(w, id, vv, emissive), dtMs / 1000);
+      } else {
+        // BOX (world object): the original speed-stretch + color/emissive path.
+        this.applySquashStretch(w, id, vv, dtMs);
+        const mat = (vv.obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        mat.color.setHex(vv.baseColor = this.colorFor(w, id));
+        mat.emissive.setHex(emissive);
+      }
 
       // camera weighting: anchor 3.0, local 1.5, other players 1.0, objects 0
       let wt = 0;
@@ -437,7 +476,8 @@ export class Renderer {
       const grounded = (w.flags[id]! & BodyFlag.Grounded) !== 0;
       if (v && this.prevDescend[id]! > LAND_SPEED && (grounded || descend < LAND_SPEED * 0.4)) {
         const hard = this.prevDescend[id]! > HARD_LAND_SPEED;
-        v.squashImpulse = hard ? 0.62 : 0.8; // crush depth on impact
+        if (v.char) { v.landPending = true; v.landStrength = Math.min(1, this.prevDescend[id]! / LAND_VY_REF); } // stubby land-spring
+        else v.squashImpulse = hard ? 0.62 : 0.8; // box crush depth on impact
         this.spawnImpact(v.px, v.py - toFloat(fromRaw(w.halfHeight[id]!)) * 0.9, v.pz, COLORS.dust, hard ? 1.5 : 0.9, hard ? 420 : 300);
         if ((w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0) {
           if (hard) { this.addTrauma(TRAUMA_LAND_HARD); this.chargeHitstop(HITSTOP_HARD_MS); }
@@ -451,6 +491,7 @@ export class Renderer {
       if (lt !== this.prevThrowTick[id] && lt === w.tick) {
         this.addTrauma(TRAUMA_THROW);
         this.chargeHitstop(HITSTOP_SOFT_MS);
+        if (v?.char) v.throwPending = true; // stubby throw-release fling one-shot
         // burst an impact ring at what the thrower is holding (its position) if any,
         // else at the thrower (the launch point).
         const held = w.holding[id]!;
@@ -520,7 +561,42 @@ export class Renderer {
     const k = Math.min(1, dtMs / 90);
     v.squash += (targetY - v.squash) * k;
     const xz = 1 / Math.sqrt(Math.max(0.2, v.squash)); // conserve rough volume (x·z·y ≈ const)
-    v.mesh.scale.set(xz, v.squash, xz);
+    v.obj.scale.set(xz, v.squash, xz);
+  }
+
+  /**
+   * Build the per-frame AnimSample for a stubby character — a PURE READ of sim-truth
+   * fields (the determinism-relevant SELECTION). The character turns it into poses;
+   * only its internal playback phase (stride/land-spring) uses render wall-clock, which
+   * is view-safe (CLAUDE.md / docs/06 §0). One-shots set in detectEvents are consumed here.
+   */
+  private sampleAnim(w: WorldState, id: number, v: Vis, emissive: number): AnimSample {
+    const vx = toFloat(fromRaw(w.vx[id]!)), vy = toFloat(fromRaw(w.vy[id]!)), vz = toFloat(fromRaw(w.vz[id]!));
+    const f = toFloat(fromRaw(w.facing[id]!));
+    const cosF = Math.cos(f), sinF = Math.sin(f);
+    const holding = w.holding[id]! !== NO_ENTITY;
+    const s: AnimSample = {
+      speed: Math.hypot(vx, vz),
+      leanFwd: vx * cosF + vz * sinF,       // velocity along facing (lean into travel)
+      leanSide: -vx * sinF + vz * cosF,     // velocity across facing (strafe lean)
+      vy,
+      grounded: (w.flags[id]! & BodyFlag.Grounded) !== 0,
+      justLanded: v.landPending,
+      landStrength: v.landStrength,
+      holding,
+      carryMass: holding ? w.massClass[w.holding[id]!]! : -1,
+      grabbed: w.grabbedBy[id]! !== NO_ENTITY,
+      struggle: Math.min(1, toFloat(fromRaw(w.struggleProgress[id]!)) / 100), // /STRUGGLE_BREAK(100)
+      throwCharge: Math.min(1, w.throwCharge[id]! / THROW_CHARGE_TICKS),
+      justThrew: v.throwPending,
+      rushing: w.rushUntil[id]! >= w.tick,
+      staggered: w.staggerUntil[id]! >= w.tick,
+      downed: (w.flags[id]! & BodyFlag.Downed) !== 0 || w.downedUntil[id]! >= w.tick,
+      emissive,
+      tick: w.tick,
+    };
+    v.landPending = false; v.throwPending = false; // consume one-shots
+    return s;
   }
 
   // ==========================================================================
@@ -735,6 +811,43 @@ export class Renderer {
     const hp = Math.max(0, Math.min(100, toFloat(fromRaw(w.health[anchorId]!))));
     this.hud.health.style.width = hp + '%';
     this.hud.health.style.background = hp > 50 ? '#6cff8a' : hp > 25 ? '#ffb24f' : '#ff5a6e';
+
+    this.updateStandingsRail();
+    this.updateOnboard();
+  }
+
+  /** Render the per-crew altitude beads on the standings rail (docs/07 §2.1). */
+  private updateStandingsRail(): void {
+    const rail = this.standingsRail;
+    if (!rail || !this.standing?.crews) return;
+    const crews = this.standing.crews;
+    const target = this.standing.target && this.standing.target > 0 ? this.standing.target : Math.max(1, ...crews) * 1.2;
+    // lazily create one bead per crew
+    while (this.railBeads.length < crews.length) {
+      const b = document.createElement('div');
+      b.style.cssText = 'position:absolute;left:6px;width:20px;height:20px;border-radius:50%;transform:translateY(50%);transition:bottom .2s;border:2px solid #0a0a12;font:9px/20px system-ui;text-align:center;color:#0a0a12;font-weight:800';
+      rail.appendChild(b);
+      this.railBeads.push(b);
+    }
+    for (let c = 0; c < crews.length; c++) {
+      const bead = this.railBeads[c]!;
+      const frac = Math.max(0, Math.min(1, crews[c]! / target));
+      bead.style.bottom = `calc(${(frac * 100).toFixed(1)}% - 10px)`;
+      bead.style.background = '#' + this.crewColor(c).toString(16).padStart(6, '0');
+      const mine = c === this.standing.localCrew;
+      bead.style.boxShadow = mine ? '0 0 10px #fff' : 'none';
+      bead.style.zIndex = mine ? '2' : '1';
+      bead.textContent = mine ? 'YOU' : String(c + 1);
+      bead.style.fontSize = mine ? '8px' : '10px';
+    }
+  }
+
+  /** Fade the onboarding panel out after a grace period. */
+  private updateOnboard(): void {
+    if (!this.onboard) return;
+    if (this.startMs < 0) this.startMs = (this.lastFrameMs ?? 0) || 1;
+    const now = this.lastFrameMs ?? 0;
+    if (now - this.startMs > 14000) this.onboard.style.opacity = '0';
   }
 
   /** Attach the DOM HUD overlay (called once by main). */
@@ -754,6 +867,30 @@ export class Renderer {
     banner.style.cssText = 'position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);font-family:system-ui;font-weight:800;font-size:48px;color:#ffd23f;text-shadow:0 4px 24px #000;display:none;pointer-events:none';
     app.appendChild(banner);
     this.winBanner = banner;
+
+    // STANDINGS RAIL (top-left): a vertical track with a bead per crew at its relative
+    // Anchor altitude — "am I winning?" at a glance (docs/07 §2.1). Pure reader.
+    const rail = document.createElement('div');
+    rail.style.cssText = 'position:fixed;left:14px;top:80px;bottom:80px;width:34px;pointer-events:none;font-family:system-ui';
+    const track = document.createElement('div');
+    track.style.cssText = 'position:absolute;left:15px;top:0;bottom:0;width:3px;background:#ffffff22;border-radius:2px';
+    rail.appendChild(track);
+    app.appendChild(rail);
+    this.standingsRail = rail;
+
+    // ONBOARDING (bottom-center): the thesis + verb prompts, fades after ~14s.
+    const onboard = document.createElement('div');
+    onboard.style.cssText = 'position:fixed;bottom:64px;left:50%;transform:translateX(-50%);font-family:system-ui;color:#cdd;background:rgba(10,10,22,0.7);padding:10px 16px;border-radius:10px;pointer-events:none;text-align:center;transition:opacity 1.2s;max-width:440px';
+    onboard.innerHTML = '<b style="color:#ffd23f">Get your gold Anchor to the top.</b><br>' +
+      '<span style="opacity:.75;font-size:13px">Its height is your score. Climb together — carry it across gaps, ' +
+      'hold <b>K</b> to grab &amp; <b>release</b> to throw, <b>E</b> for your role ability, <b>Q</b> to plant/recall.</span>';
+    app.appendChild(onboard);
+    this.onboard = onboard;
+  }
+
+  /** Crew identity colors (index = crewId). Crew 0 = the local crew (warm gold-blue). */
+  private crewColor(crewId: number): number {
+    return CREW_COLORS[crewId % CREW_COLORS.length]!;
   }
 
   private resize(): void {
