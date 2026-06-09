@@ -167,7 +167,9 @@ function runReference(streams: PlayerInput[][], steps: number): number {
     }
     sim.advance(frame);
   }
-  return hashWorld(sim.world);
+  // FULL game-state hash (world + match) — matches RollbackManager.hashAt, which
+  // now hashes both halves so standings/beacons/win are part of the consensus.
+  return sim.hash();
 }
 
 /** The common verified tick to compare across peers (min frontier, minus slack). */

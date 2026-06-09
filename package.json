@@ -19,8 +19,9 @@
     "prove:verbs": "node --experimental-strip-types src/sim/verbs/prove.ts",
     "prove:hazards": "node --experimental-strip-types src/sim/hazards/prove.ts",
     "prove:sim": "node --experimental-strip-types src/sim/prove.ts",
+    "prove:game": "node --experimental-strip-types src/game/prove.ts",
     "prove:net": "node --experimental-strip-types src/net/prove.ts",
-    "prove": "npm run prove:fixed && npm run prove:floor && npm run prove:world && npm run prove:spatial && npm run prove:collide && npm run prove:verbs && npm run prove:hazards && npm run prove:sim && npm run prove:net"
+    "prove": "npm run prove:fixed && npm run prove:floor && npm run prove:world && npm run prove:spatial && npm run prove:collide && npm run prove:verbs && npm run prove:hazards && npm run prove:sim && npm run prove:game && npm run prove:net"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

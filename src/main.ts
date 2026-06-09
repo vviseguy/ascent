@@ -34,7 +34,8 @@ function boot(): void {
   renderer.buildTerrain(scene.sim.ctx.terrain);
   renderer.attachHud(app);
   const input = new InputController(canvas);
-  startLoop(scene.sim, renderer, input, scene.localPlayerId, scene.anchorId);
+  const anchorId = scene.anchorIds[scene.localCrew]!;
+  startLoop(scene.sim, renderer, input, scene.localPlayerId, anchorId);
 
   app.appendChild(makeControlsLegend());
 }

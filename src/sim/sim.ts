@@ -49,7 +49,14 @@ import { flatGround } from './collide/terrain.ts';
 import { applyHazards } from './hazards/apply.ts';
 import { applyFallDamage, FALL_SAFE_SPEED } from './hazards/falldamage.ts';
 import type { Hazard } from './hazards/model.ts';
-import { applyVerbs, type RoleMap } from './verbs/verbs.ts';
+import { applyVerbs, commitPrevButtons, type RoleMap } from './verbs/verbs.ts';
+import { hashWorld } from './world/hash.ts';
+import {
+  type MatchState, createMatch, cloneMatch, restoreMatch, hashMatch, stepMatch,
+  DEFAULT_MATCH, type MatchConfig,
+} from '../game/match.ts';
+import { applySurvival } from '../game/survival.ts';
+import { applyBeacons } from '../game/beacon.ts';
 
 /** Everything the integrated tick needs beyond the world + inputs. */
 export interface SimContext {
@@ -59,12 +66,22 @@ export interface SimContext {
   hazards: readonly Hazard[];
   /** Optional per-body role map for verb strength numbers (defaults Runner). */
   roles?: RoleMap;
+  /** Match config (win condition, kill-plane, crews). Defaults to a solo race. */
+  match?: MatchConfig;
+  /** Anchor body id per crew (index = crewId). Required for standings/beacons. */
+  anchorIds?: readonly number[];
+  /** Ground Y (raw Fixed) for height/standing. Defaults to terrain.groundY. */
+  groundY?: number;
 }
 
 /** A ready-to-run integrated simulation around a world + context. */
 export class Sim {
   readonly world: WorldState;
   readonly ctx: SimContext;
+  /** Per-crew standing + beacons + win state. Part of the snapshot (rollback-safe). */
+  readonly match: MatchState;
+  /** Ground reference Y (raw Fixed) for height/standing. */
+  private readonly groundY: number;
   /** The shared spatial index (derived; rebuilt each advance, never persisted). */
   private readonly index: SpatialIndex;
   /** Per-advance scratch: pre-motion downward velocity, for fall-damage detection. */
@@ -74,11 +91,15 @@ export class Sim {
 
   constructor(world: WorldState, ctx?: Partial<SimContext>) {
     this.world = world;
+    const terrain = ctx?.terrain ?? flatGround();
     this.ctx = {
-      terrain: ctx?.terrain ?? flatGround(),
+      terrain,
       hazards: ctx?.hazards ?? [],
       ...(ctx?.roles !== undefined ? { roles: ctx.roles } : {}),
     };
+    this.groundY = ctx?.groundY ?? terrain.groundY;
+    const cfg = ctx?.match ?? DEFAULT_MATCH;
+    this.match = createMatch(cfg, ctx?.anchorIds ?? []);
     this.index = new GridIndex();
     this.preVy = new Int32Array(world.capacity);
     this.preGrounded = new Uint8Array(world.capacity);
@@ -99,8 +120,10 @@ export class Sim {
       this.preGrounded[i] = (w.flags[i]! & BodyFlag.Grounded) !== 0 ? 1 : 0;
     }
 
-    // SYSTEMS 1-4: motion (input→accel, gravity, integrate, ground+friction)
-    motionPhase(w, inputs);
+    // SYSTEMS 1-4: motion. Pass the TERRAIN's ground Y so motion's ground clamp and
+    // the terrain resolver agree (no double-floor). With a deep terrain ground under
+    // a platform world, a body in an open void falls past the kill-plane uncaught.
+    motionPhase(w, inputs, fromRaw(this.ctx.terrain.groundY));
 
     // SYSTEM 3.5: collision — rebuild the index against just-moved positions, then
     // resolve terrain + body-body. (Index is derived state for THIS tick.)
@@ -135,8 +158,30 @@ export class Sim {
       if (gt(impact, FALL_SAFE_SPEED)) applyFallDamage(w, i, impact, w.tick);
     }
 
+    // GAME LAYER (after physics/verbs, all deterministic + part of the snapshot):
+    //   beacons (Anchor plant + crew recall) → survival (death/bleed/respawn/
+    //   kill-plane) → standing+win evaluation. Order: beacons before survival so a
+    //   just-planted beacon is a valid respawn target; survival before match so a
+    //   respawned-low Anchor's committed height reflects reality this tick.
+    applyBeacons(w, this.match, inputs, w.tick);
+    applySurvival(w, this.match, w.tick);
+    stepMatch(this.match, w, w.tick, this.groundY);
+
+    // LAST: commit prevButtons for next-tick edge detection (after verbs AND
+    // beacons, so all edge-reading systems shared one previous-buttons snapshot).
+    commitPrevButtons(w, inputs);
+
     w.tick = (w.tick + 1) | 0;
   }
+
+  /** Hash of the FULL game state (world + match) for desync detection / rollback. */
+  hash(): number {
+    return hashMatch(this.match, hashWorld(this.world));
+  }
+
+  /** Snapshot the match half (the world half uses world/snapshot clone/restore). */
+  snapshotMatch(): MatchState { return cloneMatch(this.match); }
+  restoreMatchFrom(m: MatchState): void { restoreMatch(this.match, m); }
 }
 
 /** Convenience: build a Sim around a world with optional context. */

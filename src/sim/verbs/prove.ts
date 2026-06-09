@@ -34,7 +34,7 @@ import { step } from '../world/step.ts';
 import { hashWorld } from '../world/hash.ts';
 import { clone, restoreInto, statesEqual } from '../world/snapshot.ts';
 import { GridIndex } from '../spatial/grid.ts';
-import { applyVerbs, type RoleMap } from './verbs.ts';
+import { applyVerbs, commitPrevButtons, type RoleMap } from './verbs.ts';
 import {
   REGRAB_IMMUNITY_TICKS, MAX_HELPLESS_TICKS, GRAB_LATCH_TICKS, THROW_CHARGE_TICKS,
 } from './config.ts';
@@ -63,6 +63,9 @@ function stepWithVerbs(
   step(w, inputs);
   index.rebuild(w);
   applyVerbs(w, inputs, index, roles);
+  // prevButtons is now committed by the SIM at end-of-tick (so beacons & other
+  // edge readers share one snapshot); mirror that here for the standalone proof.
+  commitPrevButtons(w, inputs);
 }
 
 function mkInput(over: Partial<PlayerInput>): PlayerInput {
@@ -148,6 +151,7 @@ function proveGrabThrow(): void {
   applyVerbs(b, releaseInput, index);
   const tickAfterFirst = b.tick;
   applyVerbs(b, releaseInput, index); // second apply, SAME tick -> must be a no-op
+  commitPrevButtons(b, releaseInput); // match `a`'s end-of-tick commit
   check('throw idempotent: 2nd same-tick apply is a no-op (state equal)',
     statesEqual(a, b));
   check('throw idempotent: tick unchanged by re-apply', b.tick === tickAfterFirst);

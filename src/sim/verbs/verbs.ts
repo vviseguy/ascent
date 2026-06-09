@@ -85,9 +85,14 @@ const MAX_SPEED: Fixed = (() => {
  */
 export type RoleMap = ReadonlyArray<Role | undefined> | undefined;
 
-const roleOf = (roles: RoleMap, id: number): Role => {
+// Prefer an explicit RoleMap override; else read the body's own role from world
+// state (set at spawn). Anchor/None map to Runner-baseline strength (they aren't in
+// the strength tables' 0..5 role slots beyond Anchor=5, which IS valid).
+const roleOf = (w: WorldState, roles: RoleMap, id: number): Role => {
   const r = roles?.[id];
-  return r === undefined ? Role.Runner : r;
+  if (r !== undefined) return r;
+  const wr = w.role[id]!;
+  return wr <= Role.Anchor ? (wr as Role) : Role.Runner;
 };
 
 const inputOf = (inputs: ReadonlyArray<PlayerInput | undefined>, id: number): PlayerInput =>
@@ -163,13 +168,25 @@ export function applyVerbs(
   // ---- F. ENCUMBRANCE ------------------------------------------------------
   encumbranceSystem(w, count);
 
-  // ---- G. prevButtons <- buttons (LAST) ------------------------------------
-  for (let i = 0; i < count; i++) {
+  // NOTE: prevButtons is committed by the SIM at the very END of the tick (after
+  // beacons/other edge-reading systems also run), via commitPrevButtons() — not
+  // here — so every edge detector this tick saw the SAME previous-tick buttons.
+  return w;
+}
+
+/**
+ * Commit each body's buttons into prevButtons for next-tick edge detection. MUST be
+ * the LAST thing in the tick (after verbs AND beacons), so all edge-reading systems
+ * share one consistent previous-buttons snapshot. Pure ascending-id sweep.
+ */
+export function commitPrevButtons(
+  w: WorldState,
+  inputs: ReadonlyArray<PlayerInput | undefined>,
+): void {
+  for (let i = 0; i < w.count; i++) {
     if (!hasFlag(w, i, BodyFlag.Alive)) continue;
     w.prevButtons[i] = inputOf(inputs, i).buttons | 0;
   }
-
-  return w;
 }
 
 // ============================================================================
@@ -593,7 +610,7 @@ function struggleSystem(
     w.struggleLastPress[i] = tick;
 
     // press = 6 * struggler_strength * (struggler_mass / carrier_grip)
-    const strength = STRUGGLE_STRENGTH[roleOf(roles, i)]!;
+    const strength = STRUGGLE_STRENGTH[roleOf(w, roles, i)]!;
     const mass = MASS_OF[w.massClass[i]!]!;
     const grip = CARRIER_GRIP; // carrier resistance (uniform for now)
     const inc = mul(mul(STRUGGLE_PRESS, strength), div(mass, grip));
@@ -706,7 +723,7 @@ function applyThrow(
 
   const mass = MASS_OF[w.massClass[target]!]!;
   const invSqrtM = div(ONE, sqrt(mass)); // 1/sqrt(mass)
-  const strength = THROW_STRENGTH[roleOf(roles, thrower)]!;
+  const strength = THROW_STRENGTH[roleOf(w, roles, thrower)]!;
   const j = mul(mul(mul(THROW_J, c), invSqrtM), strength);
 
   // arc angle = default + jitter, clamped.

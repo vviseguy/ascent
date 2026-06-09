@@ -47,6 +47,8 @@ jobs:
         run: node --experimental-strip-types src/sim/hazards/prove.ts
       - name: Proofs — integrated sim (all layers, rollback)
         run: node --experimental-strip-types src/sim/prove.ts
+      - name: Proofs — game layer (standing/win/death/beacon)
+        run: node --experimental-strip-types src/game/prove.ts
       - name: Proofs — netcode (rollback over a degraded link)
         run: node --experimental-strip-types src/net/prove.ts
 

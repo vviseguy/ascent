@@ -51,6 +51,7 @@ export class Renderer {
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   /** HUD elements (DOM overlay; pure readout of sim state). */
   private hud: { root: HTMLElement; height: HTMLElement; state: HTMLElement; health: HTMLElement } | null = null;
+  private winBanner: HTMLElement | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -159,6 +160,9 @@ export class Renderer {
   }
 
   /** Render a frame. `alpha` ∈ [0,1] interpolates between previous and current tick. */
+  /** Optional live standing/win readout (committed height in m, winner crew or -1). */
+  standing: { committed: number; winner: number; localCrew: number } | null = null;
+
   render(w: WorldState, alpha: number, localId: number, anchorId: number): void {
     // clear per-frame FX overlay
     while (this.fxGroup.children.length) {
@@ -255,12 +259,19 @@ export class Renderer {
     this.camera.lookAt(this.camTarget.x, this.camTarget.y + D * 0.12, this.camTarget.z);
   }
 
-  /** Top-center Anchor Status: HEIGHT (=score), state word, health arc. */
+  /** Top-center Anchor Status: HEIGHT (=score, COMMITTED), state word, health arc. */
   private updateHud(w: WorldState, anchorId: number): void {
     if (!this.hud) return;
     if (anchorId < 0 || anchorId >= w.count) return;
-    const heightU = Math.max(0, toFloat(fromRaw(w.py[anchorId]!)) - this.groundY);
+    // Prefer the COMMITTED standing (the actual score) when available; else live Y.
+    const liveH = Math.max(0, toFloat(fromRaw(w.py[anchorId]!)) - this.groundY);
+    const heightU = this.standing ? this.standing.committed : liveH;
     this.hud.height.textContent = heightU.toFixed(1) + ' m';
+    // win banner
+    if (this.standing && this.standing.winner >= 0 && this.winBanner) {
+      this.winBanner.style.display = 'block';
+      this.winBanner.textContent = this.standing.winner === this.standing.localCrew ? 'YOUR CREW WINS!' : `CREW ${this.standing.winner + 1} WINS`;
+    }
     const grabbed = w.grabbedBy[anchorId] !== NO_ENTITY;
     const downed = (w.flags[anchorId]! & BodyFlag.Downed) !== 0;
     const state = downed ? 'DOWNED' : grabbed ? 'GRABBED' : 'SECURE';
@@ -284,6 +295,11 @@ export class Renderer {
     root.append(label, height, state, bar);
     app.appendChild(root);
     this.hud = { root, height, state, health };
+
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);font-family:system-ui;font-weight:800;font-size:48px;color:#ffd23f;text-shadow:0 4px 24px #000;display:none;pointer-events:none';
+    app.appendChild(banner);
+    this.winBanner = banner;
   }
 
   private resize(): void {

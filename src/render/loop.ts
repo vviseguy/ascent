@@ -70,6 +70,15 @@ export function startLoop(
     }
     if (steps === MAX_TICKS_PER_FRAME) acc = 0; // single-player anti-spiral only
 
+    // push live standing/win to the HUD (committed Anchor height = the score)
+    const localCrew = w.crewId[anchorId]!;
+    const cs = sim.match.crews[localCrew];
+    renderer.standing = {
+      committed: cs ? cs.committed / 65536 : 0,
+      winner: sim.match.winner,
+      localCrew,
+    };
+
     const alpha = Math.max(0, Math.min(1, acc / MS_PER_TICK));
     renderer.render(w, alpha, localPlayerId, anchorId);
     requestAnimationFrame(frameTick);

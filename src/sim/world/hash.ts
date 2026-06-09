@@ -23,7 +23,7 @@
 // ever warranted — kept simple now.)
 // ============================================================================
 
-import { type WorldState, INT32_FIELDS } from './state.ts';
+import { type WorldState, INT32_FIELDS, BYTE_FIELDS } from './state.ts';
 
 const FNV_OFFSET = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
@@ -55,8 +55,11 @@ export function hashWorld(w: WorldState): number {
     const arr = w[field] as Int32Array;
     for (let i = 0; i < count; i++) h = fold(h, arr[i]!);
   }
-  // byte/small fields
-  for (let i = 0; i < count; i++) h = fold(h, w.massClass[i]!);
+  // byte fields (massClass, crewId, role) in fixed order
+  for (const field of BYTE_FIELDS) {
+    const arr = w[field] as Uint8Array;
+    for (let i = 0; i < count; i++) h = fold(h, arr[i]!);
+  }
   for (let i = 0; i < count; i++) h = fold(h, w.flags[i]!);
 
   return h >>> 0;

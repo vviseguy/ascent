@@ -22,6 +22,10 @@ export const Button = {
   Throw: 1 << 2,
   Struggle: 1 << 3,
   Jump: 1 << 4,
+  /** Anchor: plant/replant the crew beacon. Others: recall to the beacon. */
+  Recall: 1 << 5,
+  /** Role ability (context: Mender revive, Bulwark body-block, Engineer bridge…). */
+  Ability: 1 << 6,
 } as const;
 export type Button = (typeof Button)[keyof typeof Button];
 

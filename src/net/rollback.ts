@@ -27,6 +27,7 @@ import { hashWorld } from '../sim/world/hash.ts';
 import { clone, restoreInto } from '../sim/world/snapshot.ts';
 import type { PlayerInput } from '../sim/world/input.ts';
 import type { Sim } from '../sim/sim.ts';
+import { hashMatch } from '../game/match.ts';
 import { InputBus, INPUT_HISTORY } from './input-bus.ts';
 import { Channel, type Transport } from './transport.ts';
 import {
@@ -49,6 +50,8 @@ export class RollbackManager {
 
   /** snapshot ring: states[tick & MASK] = world AT THE START of that tick. */
   private states: (WorldState | null)[] = new Array(RING).fill(null);
+  /** parallel ring of MATCH snapshots (standings/beacons/win) for the same ticks. */
+  private matchStates: (ReturnType<Sim['snapshotMatch']> | null)[] = new Array(RING).fill(null);
   /** scratch for assembling per-tick input arrays. */
   private inScratch: (PlayerInput | undefined)[] = [];
   /** earliest tick contradicted by an arrival since last resolve (-1 = none). */
@@ -118,16 +121,24 @@ export class RollbackManager {
     this.saveAt(cur);
     this.stepOnce(cur);
 
-    // 5. periodic check-frame on a verified tick
+    // 5. periodic check-frame on a verified tick (FULL state: world + match).
     const verified = this.bus.verifiedThrough();
     if (verified >= 0 && verified % CHECK_PERIOD === 0) {
-      const snap = this.states[verified & RING_MASK];
-      if (snap) {
-        this.transport.broadcast(encodeCheckFrame(this.selfId, verified, hashWorld(snap)), Channel.Ctrl);
-        this.compareChecks(verified, hashWorld(snap));
+      const h = this.fullHashAt(verified);
+      if (h !== null) {
+        this.transport.broadcast(encodeCheckFrame(this.selfId, verified, h), Channel.Ctrl);
+        this.compareChecks(verified, h);
       }
     }
     return this.sim.world.tick;
+  }
+
+  /** Combined world+match hash at a saved tick, or null if not in the ring. */
+  private fullHashAt(tick: number): number | null {
+    const snap = this.states[tick & RING_MASK];
+    const m = this.matchStates[tick & RING_MASK];
+    if (!snap || snap.tick !== tick || !m) return null;
+    return hashMatch(m, hashWorld(snap));
   }
 
   /** Broadcast our input at `tick` plus the last MAX_REDUNDANT-1 for self-heal. */
@@ -143,12 +154,14 @@ export class RollbackManager {
     this.transport.broadcast(encodeInput(this.selfId, tick, frames), Channel.Hot);
   }
 
-  /** Save the world AT THE START of `tick` into the ring. */
+  /** Save the world + match AT THE START of `tick` into the ring. */
   private saveAt(tick: number): void {
     const slot = tick & RING_MASK;
     const existing = this.states[slot];
     if (existing) restoreInto(existing, this.sim.world);
     else this.states[slot] = clone(this.sim.world);
+    // match half snapshots by value each save (small: per-crew structs).
+    this.matchStates[slot] = this.sim.snapshotMatch();
   }
 
   /** Step the sim one tick using bus inputs for `tick`. */
@@ -160,8 +173,10 @@ export class RollbackManager {
   /** Restore to tick R and re-simulate forward to `target` (current tick). */
   private rollbackTo(r: number, target: number): void {
     const snap = this.states[r & RING_MASK];
-    if (!snap) return; // outside ring — unrecoverable here (would resync via check-frame)
+    const matchSnap = this.matchStates[r & RING_MASK];
+    if (!snap || !matchSnap) return; // outside ring — would resync via check-frame
     restoreInto(this.sim.world, snap);
+    this.sim.restoreMatchFrom(matchSnap);
     // re-run from r up to (but not past) target, re-saving each frame
     for (let t = r; t < target; t++) {
       this.saveAt(t);
@@ -183,9 +198,7 @@ export class RollbackManager {
    */
   hashAt(tick: number): number | null {
     if (tick < 0) return null;
-    const snap = this.states[tick & RING_MASK];
-    if (!snap || snap.tick !== tick) return null;
-    return hashWorld(snap);
+    return this.fullHashAt(tick);
   }
 
   /** Compare our verified-tick hash to any peer hashes we have for that tick. */

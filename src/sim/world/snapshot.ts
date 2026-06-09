@@ -18,7 +18,7 @@
 // future exactly. Any drift here breaks rollback silently — hence the proof.
 // ============================================================================
 
-import { type WorldState, INT32_FIELDS, createWorld } from './state.ts';
+import { type WorldState, INT32_FIELDS, BYTE_FIELDS, createWorld } from './state.ts';
 
 /** Deep, independent copy of a world state (a saved rollback frame). */
 export function clone(w: WorldState): WorldState {
@@ -28,7 +28,9 @@ export function clone(w: WorldState): WorldState {
   for (const field of INT32_FIELDS) {
     (c[field] as Int32Array).set(w[field] as Int32Array);
   }
-  c.massClass.set(w.massClass);
+  for (const field of BYTE_FIELDS) {
+    (c[field] as Uint8Array).set(w[field] as Uint8Array);
+  }
   c.flags.set(w.flags);
   return c;
 }
@@ -47,7 +49,9 @@ export function restoreInto(dst: WorldState, src: WorldState): void {
   for (const field of INT32_FIELDS) {
     (dst[field] as Int32Array).set(src[field] as Int32Array);
   }
-  dst.massClass.set(src.massClass);
+  for (const field of BYTE_FIELDS) {
+    (dst[field] as Uint8Array).set(src[field] as Uint8Array);
+  }
   dst.flags.set(src.flags);
 }
 
@@ -64,7 +68,11 @@ export function statesEqual(a: WorldState, b: WorldState): boolean {
     const bb = b[field] as Int32Array;
     for (let i = 0; i < n; i++) if (aa[i] !== bb[i]) return false;
   }
-  for (let i = 0; i < n; i++) if (a.massClass[i] !== b.massClass[i]) return false;
+  for (const field of BYTE_FIELDS) {
+    const aa = a[field] as Uint8Array;
+    const bb = b[field] as Uint8Array;
+    for (let i = 0; i < n; i++) if (aa[i] !== bb[i]) return false;
+  }
   for (let i = 0; i < n; i++) if (a.flags[i] !== b.flags[i]) return false;
   return true;
 }

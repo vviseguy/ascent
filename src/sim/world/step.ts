@@ -73,7 +73,11 @@ export function step(w: WorldState, inputs: ReadonlyArray<PlayerInput | undefine
  * SYSTEMS 1-4 for every alive, non-carried body (ascending id). Does NOT bump the
  * tick. Exported so sim.ts can interleave collision/hazards between this and carry.
  */
-export function motionPhase(w: WorldState, inputs: ReadonlyArray<PlayerInput | undefined>): void {
+export function motionPhase(
+  w: WorldState,
+  inputs: ReadonlyArray<PlayerInput | undefined>,
+  groundY: Fixed = GROUND_Y,
+): void {
   const count = w.count;
   for (let i = 0; i < count; i++) {
     const fl = w.flags[i]!;
@@ -106,8 +110,11 @@ export function motionPhase(w: WorldState, inputs: ReadonlyArray<PlayerInput | u
     w.py[i] = toRaw(add(fromRaw(w.py[i]!), mul(fromRaw(w.vy[i]!), DT)));
     w.pz[i] = toRaw(add(fromRaw(w.pz[i]!), mul(fromRaw(w.vz[i]!), DT)));
 
-    // SYSTEM 4: ground plane resolve + friction.
-    const floorY = add(GROUND_Y, fromRaw(w.halfHeight[i]!)); // base rests on the plane
+    // SYSTEM 4: ground plane resolve + friction. In the integrated sim the terrain
+    // layer owns the authoritative floor; we pass the SAME groundY so the two agree
+    // (no double-floor disagreement), and a body in an open void (below groundY with
+    // no terrain under it) is NOT caught here — the terrain layer / kill-plane decide.
+    const floorY = add(groundY, fromRaw(w.halfHeight[i]!)); // base rests on the plane
     if (lt(fromRaw(w.py[i]!), floorY)) {
       w.py[i] = toRaw(floorY);
       if (lt(fromRaw(w.vy[i]!), ZERO)) w.vy[i] = 0;

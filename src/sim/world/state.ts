@@ -72,6 +72,26 @@ export type BodyFlag = (typeof BodyFlag)[keyof typeof BodyFlag];
 /** Sentinel for "no entity" in id-valued fields (grabbedBy / holding). */
 export const NO_ENTITY = -1;
 
+/** Sentinel crew id for "no crew" (world objects, hazards). */
+export const NO_CREW = 255;
+
+/**
+ * Player role (the six identities, docs/02 §6). A small per-body byte. Drives verb
+ * strength tables AND role abilities (catch/revive/body-block/bridge/break). World
+ * objects use Role.None. Const object (strip-only friendly), kept in sync with the
+ * verb config's Role indices (Runner..Anchor map to 0..5).
+ */
+export const Role = {
+  Runner: 0,
+  Bulwark: 1,
+  Mender: 2,
+  Engineer: 3,
+  Breaker: 4,
+  Anchor: 5,
+  None: 6, // non-player bodies (objects)
+} as const;
+export type Role = (typeof Role)[keyof typeof Role];
+
 /**
  * The world state. All numeric arrays hold RAW Q16.16 integers (via toRaw/fromRaw)
  * or small enums/flags. Treat every array as parallel: index `i` across all arrays
@@ -104,6 +124,10 @@ export interface WorldState {
   halfHeight: Int32Array;
   /** MassClass enum per body. */
   massClass: Uint8Array;
+  /** Crew id per body (0..numCrews-1), or NO_CREW for objects/hazards. Hashed. */
+  crewId: Uint8Array;
+  /** Role per body (see Role const). Drives verb strength + role abilities. Hashed. */
+  role: Uint8Array;
 
   // --- gameplay relations ---
   /** Bitfield of BodyFlag. */
@@ -181,6 +205,18 @@ export interface WorldState {
    * downed. Cleared (and BodyFlag.Downed removed) when tick >= this. Hashed.
    */
   downedUntil: Int32Array;
+  /**
+   * Tick at which a dead regular player respawns (at their crew beacon). -1 = alive
+   * / not scheduled. Death/respawn resolution (sim.ts) sets and consumes it. Hashed.
+   */
+  respawnAt: Int32Array;
+  /**
+   * Tick until which a downed (0-HP) regular player is bleeding out; if not revived
+   * by then they die. -1 = not bleeding. Hashed.
+   */
+  bleedUntil: Int32Array;
+  /** Tick at/after which this body may RECALL again (beacon recall cooldown). Hashed. */
+  recallReadyAt: Int32Array;
 }
 
 /** Allocate an empty world state of the given capacity. All bodies start dead. */
@@ -199,6 +235,8 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     radius: new Int32Array(capacity),
     halfHeight: new Int32Array(capacity),
     massClass: new Uint8Array(capacity),
+    crewId: new Uint8Array(capacity).fill(NO_CREW),
+    role: new Uint8Array(capacity).fill(Role.None),
     flags: new Uint16Array(capacity),
     grabbedBy: new Int32Array(capacity).fill(NO_ENTITY),
     holding: new Int32Array(capacity).fill(NO_ENTITY),
@@ -222,6 +260,9 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     heldSince: new Int32Array(capacity).fill(-1),
     throwCharge: new Int32Array(capacity),
     downedUntil: new Int32Array(capacity).fill(-1),
+    respawnAt: new Int32Array(capacity).fill(-1),
+    bleedUntil: new Int32Array(capacity).fill(-1),
+    recallReadyAt: new Int32Array(capacity),
   };
 }
 
@@ -236,6 +277,8 @@ export interface BodySpec {
   flags: number; // BodyFlag bits (Alive is added automatically)
   health?: Fixed;
   facing?: Fixed;
+  crewId?: number; // defaults to NO_CREW (objects)
+  role?: Role; // defaults to Role.None
 }
 
 /**
@@ -266,6 +309,8 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.radius[id] = spec.radius;
   w.halfHeight[id] = spec.halfHeight;
   w.massClass[id] = spec.massClass;
+  w.crewId[id] = spec.crewId ?? NO_CREW;
+  w.role[id] = spec.role ?? Role.None;
   w.flags[id] = (spec.flags | BodyFlag.Alive) & 0xffff;
   w.grabbedBy[id] = NO_ENTITY;
   w.holding[id] = NO_ENTITY;
@@ -288,6 +333,9 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.heldSince[id] = -1;
   w.throwCharge[id] = 0;
   w.downedUntil[id] = -1;
+  w.respawnAt[id] = -1;
+  w.bleedUntil[id] = -1;
+  w.recallReadyAt[id] = 0;
   return id;
 }
 
@@ -324,5 +372,12 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'grabLatchUntil', 'grabLatchBy', 'regrabUntil', 'struggleProgress',
   'struggleLastPress', 'prevButtons', 'rushUntil', 'rushStart', 'rushCdUntil',
   'airRushUsed', 'staggerUntil', 'lastThrowTick', 'lastShoveTick', 'heldSince',
-  'throwCharge', 'downedUntil',
+  'throwCharge', 'downedUntil', 'respawnAt', 'bleedUntil', 'recallReadyAt',
 ];
+
+/**
+ * The parallel Uint8 field arrays, in a FIXED order — used by hash & snapshot
+ * alongside INT32_FIELDS. Same append-only contract: only append, never reorder.
+ * (massClass/crewId/role are body identity/relations that are part of the state.)
+ */
+export const BYTE_FIELDS: readonly (keyof WorldState)[] = ['massClass', 'crewId', 'role'];
