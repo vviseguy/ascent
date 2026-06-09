@@ -24,7 +24,7 @@
 
 import {
   type Fixed,
-  add, sub, mul, fromInt, fromFloatConst, fromRaw, toRaw, ZERO, abs, lt, gt, neg, clamp, sin, cos,
+  add, sub, mul, fromInt, fromFloatConst, fromRaw, toRaw, ZERO, ONE, sign, abs, lt, gt, neg, clamp, sin, cos,
 } from '../fixed/fixed.ts';
 import {
   type WorldState, BodyFlag, NO_ENTITY, MASS_OF,
@@ -37,12 +37,25 @@ const DT: Fixed = fromFloatConst(1 / TICK_HZ);
 
 // --- tuning constants (authoring; converted once) ---
 const GRAVITY: Fixed = fromFloatConst(-22); // m/s^2 (snappy platformer gravity)
-const MOVE_ACCEL: Fixed = fromFloatConst(60); // ground accel toward stick (m/s^2)
 const MAX_SPEED: Fixed = fromFloatConst(7); // base horizontal speed cap (m/s)
-const GROUND_FRICTION: Fixed = fromFloatConst(0.86); // per-tick horizontal damping when grounded
 const GROUND_Y: Fixed = ZERO; // the single ground plane (floor terrain comes later)
 /** Distance in front of a carrier where a held body sits (socket offset, m). */
 const CARRY_REACH: Fixed = fromFloatConst(0.9);
+
+// MOVEMENT FEEL (a "well-oiled" target-velocity controller, fully deterministic):
+// instead of accel + exponential friction (which creeps and never crisply stops),
+// we drive the horizontal velocity TOWARD a target (stick·maxSpeed) at a fixed rate,
+// using a faster rate when STOPPING (no input or reversing) than when ACCELERATING.
+// This gives responsive starts, a firm auto-stop on release, and a snap-to-zero
+// dead band so the body parks cleanly. All in fixed-point → identical every peer.
+/** Max horizontal speed change per TICK while accelerating toward the stick (u/s per tick). */
+const ACCEL_PER_TICK: Fixed = fromFloatConst(1.1);
+/** Max horizontal speed change per TICK while braking to a stop / reversing (firmer). */
+const BRAKE_PER_TICK: Fixed = fromFloatConst(1.9);
+/** Below this speed with no input, snap straight to 0 (clean park, no infinite creep). */
+const STOP_EPS: Fixed = fromFloatConst(0.25);
+/** Airborne control authority (fraction of ground rate) — some drift, not zero. */
+const AIR_CONTROL: Fixed = fromFloatConst(0.45);
 
 /**
  * Per-mass-class horizontal speed multiplier — the Anchor is slower, light objects
@@ -86,18 +99,23 @@ export function motionPhase(
     // Carried bodies are slaved in carryPhase; skip their own dynamics.
     if (w.grabbedBy[i] !== NO_ENTITY) continue;
 
-    // SYSTEM 1: input → horizontal acceleration (players only).
+    // SYSTEM 1: input → horizontal velocity via a target-velocity controller
+    // (players only). Drive vx/vz toward (stick · maxSpeed) at a capped per-tick
+    // rate — faster when braking/reversing than when accelerating — with a snap-to-0
+    // dead band so the body parks cleanly instead of creeping. Deterministic.
     if ((fl & BodyFlag.Player) !== 0 || (fl & BodyFlag.Anchor) !== 0) {
       const inp: PlayerInput = inputs[i] ?? NEUTRAL_INPUT;
-      const mv = moveVec(inp);
+      const mv = moveVec(inp); // components in ~[-1,1]
       const sm = SPEED_MUL[w.massClass[i]!]!;
-      // accel toward stick direction; clamp resulting horizontal speed to MAX_SPEED*sm
-      w.vx[i] = toRaw(applyAccel(fromRaw(w.vx[i]!), mul(mv.x, MOVE_ACCEL), DT));
-      w.vz[i] = toRaw(applyAccel(fromRaw(w.vz[i]!), mul(mv.z, MOVE_ACCEL), DT));
-      const cap = mul(MAX_SPEED, sm);
-      clampHorizontalSpeed(w, i, cap);
-      // face the aim direction (view/aim; cheap, deterministic)
-      w.facing[i] = inp.aim;
+      const maxV = mul(MAX_SPEED, sm);
+      const onGround = (w.flags[i]! & BodyFlag.Grounded) !== 0;
+      // air control reduces authority but never to zero (some steering mid-jump)
+      const authority = onGround ? ONE : AIR_CONTROL;
+      const tgtX = mul(mv.x, maxV);
+      const tgtZ = mul(mv.z, maxV);
+      w.vx[i] = toRaw(approach(fromRaw(w.vx[i]!), tgtX, authority));
+      w.vz[i] = toRaw(approach(fromRaw(w.vz[i]!), tgtZ, authority));
+      w.facing[i] = inp.aim; // aim/facing (view); cheap, deterministic
     }
 
     // SYSTEM 2: gravity (unless flagged NoGravity).
@@ -110,10 +128,11 @@ export function motionPhase(
     w.py[i] = toRaw(add(fromRaw(w.py[i]!), mul(fromRaw(w.vy[i]!), DT)));
     w.pz[i] = toRaw(add(fromRaw(w.pz[i]!), mul(fromRaw(w.vz[i]!), DT)));
 
-    // SYSTEM 4: ground plane resolve + friction. In the integrated sim the terrain
-    // layer owns the authoritative floor; we pass the SAME groundY so the two agree
-    // (no double-floor disagreement), and a body in an open void (below groundY with
-    // no terrain under it) is NOT caught here — the terrain layer / kill-plane decide.
+    // SYSTEM 4: ground plane resolve. The terrain layer owns the authoritative floor
+    // in the integrated sim; we pass the SAME groundY so the two agree (no double
+    // floor), and a body in an open void (below groundY, no terrain under it) is NOT
+    // caught here — the terrain layer / kill-plane decide. (Horizontal braking now
+    // lives in the SYSTEM-1 controller, not a separate friction multiply.)
     const floorY = add(groundY, fromRaw(w.halfHeight[i]!)); // base rests on the plane
     if (lt(fromRaw(w.py[i]!), floorY)) {
       w.py[i] = toRaw(floorY);
@@ -121,10 +140,6 @@ export function motionPhase(
       w.flags[i] = (w.flags[i]! | BodyFlag.Grounded) & 0xffff;
     } else {
       w.flags[i] = w.flags[i]! & ~BodyFlag.Grounded & 0xffff;
-    }
-    if ((w.flags[i]! & BodyFlag.Grounded) !== 0) {
-      w.vx[i] = toRaw(mul(fromRaw(w.vx[i]!), GROUND_FRICTION));
-      w.vz[i] = toRaw(mul(fromRaw(w.vz[i]!), GROUND_FRICTION));
     }
   }
 }
@@ -212,37 +227,28 @@ function placeAtSocket(w: WorldState, i: number, carrier: number): void {
   w.vy[i] = 0;
 }
 
-/** v' = v + a*dt (one Euler step for a velocity component). */
-function applyAccel(v: Fixed, a: Fixed, dt: Fixed): Fixed {
-  return add(v, mul(a, dt));
+/**
+ * Move a velocity component `v` toward `target` by at most a per-tick step, choosing
+ * the ACCEL rate when speeding up toward the target and the firmer BRAKE rate when
+ * slowing/reversing (target smaller in magnitude, or opposite sign). `authority` ∈
+ * (0,1] scales the rate (air control). Snaps to 0 in the dead band when target is 0,
+ * so the body parks cleanly. Pure fixed-point → deterministic.
+ */
+function approach(v: Fixed, target: Fixed, authority: Fixed): Fixed {
+  // braking when there's no input, or the target pulls toward/through zero
+  const slowing = eqZero(target) || (sign(v) !== 0 && sign(target) !== sign(v)) || lt(absF(target), absF(v));
+  let rate = mul(slowing ? BRAKE_PER_TICK : ACCEL_PER_TICK, authority);
+  if (lt(rate, ZERO)) rate = ZERO;
+  const diff = sub(target, v);
+  let next: Fixed;
+  if (lt(absF(diff), rate)) next = target; // close enough — land exactly on target
+  else next = gt(diff, ZERO) ? add(v, rate) : sub(v, rate);
+  // dead-band snap: if we're meant to be stopping and we're under STOP_EPS, park at 0
+  if (eqZero(target) && lt(absF(next), STOP_EPS)) return ZERO;
+  return next;
 }
-
-/** Clamp the horizontal (x,z) speed of body i to `cap` while preserving direction. */
-function clampHorizontalSpeed(w: WorldState, i: number, cap: Fixed): void {
-  const vx = fromRaw(w.vx[i]!);
-  const vz = fromRaw(w.vz[i]!);
-  // Compare squared magnitude vs cap^2 to avoid a sqrt on the common path.
-  const speedSq = add(mul(vx, vx), mul(vz, vz));
-  const capSq = mul(cap, cap);
-  if (gt(speedSq, capSq)) {
-    // scale down by cap/|v| — needs the magnitude; use fixed sqrt (deterministic).
-    const mag = fixedSqrtMag(vx, vz);
-    if (gt(mag, ZERO)) {
-      const s = divSafe(cap, mag);
-      w.vx[i] = toRaw(mul(vx, s));
-      w.vz[i] = toRaw(mul(vz, s));
-    }
-  }
-}
-
-// local helpers kept tiny; import sqrt/div lazily to avoid widening the hot import
-import { sqrt as fxSqrt, div as fxDiv } from '../fixed/fixed.ts';
-function fixedSqrtMag(x: Fixed, z: Fixed): Fixed {
-  return fxSqrt(add(mul(x, x), mul(z, z)));
-}
-function divSafe(a: Fixed, b: Fixed): Fixed {
-  return fxDiv(a, b);
-}
+function absF(a: Fixed): Fixed { return lt(a, ZERO) ? sub(ZERO, a) : a; }
+function eqZero(a: Fixed): boolean { return !lt(a, ZERO) && !gt(a, ZERO); }
 
 /** Mass (Fixed) of a body, by its class. Exposed for the verb/collision layers. */
 export function massOf(w: WorldState, id: number): Fixed {

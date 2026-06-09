@@ -261,7 +261,10 @@ export class Renderer {
         const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
         box.position.set(cxw, cyw, czw);
         solid.add(box);
-        appendBoxEdges(wirePos, cxw, cyw, czw, w, h, d);
+        // wireframe is a flat 2D plan: every cell's outline drawn on ONE plane (the
+        // band's walkable surface), so the "potential" floor above reads as a clean
+        // map, not a 3D lattice. (planeY = the band base, shared by all its boxes.)
+        appendBoxEdges(wirePos, cxw, czw, w, d, toFloat(fromRaw(baseY)) + 0.02);
       }
       const wireGeo = new THREE.BufferGeometry();
       wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(wirePos, 3));
@@ -663,12 +666,15 @@ export class Renderer {
         // The floor DIRECTLY ABOVE → a faint 2D floor-plan that resolves to a lit slab
         // as the Anchor climbs the last stretch toward it (reveal 0→1 over rel 1.0→0.5).
         const reveal = clamp01((1.6 - rel) / 1.1);
-        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.45;
+        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.3;
         band.wire.visible = reveal < 0.999;
         const lit = reveal * reveal;
         const col = lerpHex(COLORS.wall, COLORS.lit, lit * 0.5);
         for (const m of band.solidMats) {
-          m.opacity = 0.04 + 0.96 * reveal; // ghost plan → solid
+          // keep the floor above SEE-THROUGH: it only approaches ~0.6 opacity right as
+          // you arrive (reveal→1), staying a translucent ghost most of the approach so
+          // it never blocks the view of your own floor.
+          m.opacity = 0.02 + 0.58 * (reveal * reveal);
           m.color.setHex(col);
           m.emissive.setHex(lerpHex(0x000000, COLORS.lit, lit * 0.35));
         }
@@ -978,12 +984,11 @@ function shakeNoise(t: number, ch: number): number {
 // pile up in front of the tilted up-looking camera and bury the playfield. The top
 // quad alone (4 edges) reads as "a platform is up there" with ~1/3 the visual weight
 // and no vertical struts crossing the view. Collision is sim-truth regardless.
-function appendBoxEdges(out: number[], cx: number, cy: number, cz: number, w: number, h: number, d: number): void {
+function appendBoxEdges(out: number[], cx: number, cz: number, w: number, d: number, planeY: number): void {
   const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2;
-  const yTop = cy + h / 2; // the walkable surface plane
-  // four corners of the top face, in plan order
-  const c = [[x0, yTop, z0], [x1, yTop, z0], [x1, yTop, z1], [x0, yTop, z1]];
-  const E = [[0, 1], [1, 2], [2, 3], [3, 0]]; // just the rectangle outline
+  // four corners of the cell footprint, ALL on the band's single surface plane
+  const c = [[x0, planeY, z0], [x1, planeY, z0], [x1, planeY, z1], [x0, planeY, z1]];
+  const E = [[0, 1], [1, 2], [2, 3], [3, 0]]; // rectangle outline only — pure 2D plan
   for (const [a, b] of E) {
     const p = c[a!]!, q = c[b!]!;
     out.push(p[0]!, p[1]!, p[2]!, q[0]!, q[1]!, q[2]!);

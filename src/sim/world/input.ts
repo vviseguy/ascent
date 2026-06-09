@@ -26,6 +26,9 @@ export const Button = {
   Recall: 1 << 5,
   /** Role ability (context: Mender revive, Bulwark body-block, Engineer bridge…). */
   Ability: 1 << 6,
+  /** RIGHT button held (mouse-first scheme): the SIM resolves a short TAP → Ability,
+   *  a sustained HOLD → Rush, using a held-tick counter (deterministic, rollback-safe). */
+  RightHold: 1 << 7,
 } as const;
 export type Button = (typeof Button)[keyof typeof Button];
 

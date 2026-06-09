@@ -68,13 +68,18 @@ export class InputController {
     if (this.has('w', 'arrowup')) mz -= MOVE_Q;
     if (this.has('s', 'arrowdown')) mz += MOVE_Q;
 
+    // Simplified mouse-first scheme (a pure level report — the SIM derives tap-vs-hold
+    // from how long a button is held, so edge/duration logic stays deterministic):
+    //   LEFT  = GRAB  (hold to carry & charge, release to throw; empty tap = shove/use)
+    //   RIGHT = RUSH on hold, ROLE ABILITY on a short tap (sim splits them)
+    // Keyboard fallbacks keep the old keys working for testing.
     let buttons = 0;
-    if (this.has('j') || this.mouseDownL) buttons |= Button.Rush;
-    if (this.has('k') || this.mouseDownR) buttons |= Button.Grab; // hold to grab/charge; sim throws on release
-    if (this.has('f')) buttons |= Button.Throw; // empty-hand shove tap (sim edge-detects)
+    if (this.mouseDownL || this.has('k')) buttons |= Button.Grab;
+    if (this.has('f')) buttons |= Button.Throw; // explicit empty-hand shove (keyboard)
+    if (this.mouseDownR || this.has('j')) buttons |= Button.RightHold; // sim: tap→ability, hold→rush
     if (this.has('l')) buttons |= Button.Struggle;
     if (this.has(' ')) buttons |= Button.Jump;
-    if (this.has('e')) buttons |= Button.Ability; // role ability (revive/unhand/bridge/…)
+    if (this.has('e')) buttons |= Button.Ability; // explicit ability (keyboard)
     if (this.has('q')) buttons |= Button.Recall; // Anchor: plant beacon · others: recall
 
     return { moveX: mx, moveZ: mz, aim: this.aimRaw, buttons, grabTarget: -1 };

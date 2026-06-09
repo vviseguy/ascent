@@ -49,7 +49,7 @@ import { flatGround } from './collide/terrain.ts';
 import { applyHazards } from './hazards/apply.ts';
 import { applyFallDamage, FALL_SAFE_SPEED } from './hazards/falldamage.ts';
 import type { Hazard } from './hazards/model.ts';
-import { applyVerbs, commitPrevButtons, type RoleMap } from './verbs/verbs.ts';
+import { applyVerbs, commitPrevButtons, resolveRightButton, type RoleMap } from './verbs/verbs.ts';
 import { hashWorld } from './world/hash.ts';
 import {
   type MatchState, createMatch, cloneMatch, restoreMatch, hashMatch, stepMatch,
@@ -88,6 +88,8 @@ export class Sim {
   private preVy: Int32Array;
   /** Per-advance scratch: was each body Grounded at tick start (transition detect)? */
   private preGrounded: Uint8Array;
+  /** Per-advance scratch: inputs after mouse-first right-button resolution. */
+  private resolvedInputs: (PlayerInput | undefined)[] = [];
 
   constructor(world: WorldState, ctx?: Partial<SimContext>) {
     this.world = world;
@@ -109,9 +111,14 @@ export class Sim {
    * Advance the integrated sim by exactly one tick. Pure function of (world, inputs,
    * ctx): deterministic, rollback-safe (proven in sim/prove.ts). MUTATES world.
    */
-  advance(inputs: ReadonlyArray<PlayerInput | undefined>): void {
+  advance(rawInputs: ReadonlyArray<PlayerInput | undefined>): void {
     const w = this.world;
     const count = w.count;
+
+    // Mouse-first control resolution: translate the raw RIGHT button into Rush(hold)/
+    // Ability(tap) deterministically, ONCE, so every verb sub-system AND the end-of-
+    // tick prevButtons commit see the same resolved buttons (consistent edges).
+    const inputs = resolveRightButton(w, rawInputs, this.resolvedInputs);
 
     // capture pre-motion downward speed + grounded state for fall-damage detection
     // (fall damage fires only on the falling→grounded TRANSITION this tick)

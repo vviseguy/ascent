@@ -1038,6 +1038,54 @@ function applyStagger(w: WorldState, t: number, tick: number): void {
   setFlag(w, t, BodyFlag.Downed); // visible stagger beat
 }
 
+/** Ticks the RIGHT button must be held to count as a HOLD (→Rush); a shorter press
+ *  is a TAP (→Ability). ~9 ticks ≈ 150 ms — snappy but distinguishable. */
+export const RIGHT_HOLD_TICKS = 9;
+
+/**
+ * Mouse-first control resolver. Translates the raw RIGHT button (Button.RightHold)
+ * into the existing Rush/Ability semantics, deterministically, BEFORE the verb
+ * systems run. Returns a NEW per-tick input array (originals untouched) that both
+ * applyVerbs and commitPrevButtons consume, so edge detection stays consistent.
+ *
+ * Rule (per-body, tracked in the hashed rightHoldStart field):
+ *   - while RightHold is held past RIGHT_HOLD_TICKS → set Rush (a sustained dash);
+ *     Rush's own press-edge + cooldown make this "hold to dash".
+ *   - on RELEASE before the threshold → it was a TAP → set Ability for that one tick.
+ * Keyboard Rush/Ability bits already present pass through untouched.
+ */
+export function resolveRightButton(
+  w: WorldState,
+  inputs: ReadonlyArray<PlayerInput | undefined>,
+  out: (PlayerInput | undefined)[],
+): (PlayerInput | undefined)[] {
+  const tick = w.tick;
+  out.length = w.count;
+  for (let i = 0; i < w.count; i++) {
+    const inp = inputs[i];
+    if (!inp) { out[i] = undefined; continue; }
+    const rightNow = (inp.buttons & Button.RightHold) !== 0;
+    const rightPrev = (w.prevButtons[i]! & Button.RightHold) !== 0;
+    // KEEP the raw RightHold bit in `buttons` so prevButtons records it next tick
+    // (stripping it broke press-edge detection — every tick looked like a fresh press).
+    let buttons = inp.buttons;
+    if (rightNow) {
+      if (!rightPrev) w.rightHoldStart[i] = tick; // press edge — start the clock
+      const held = w.rightHoldStart[i]! >= 0 ? tick - w.rightHoldStart[i]! : 0;
+      // emit a Rush press-EDGE exactly on the tick we cross the hold threshold (so the
+      // rush system's own edge detector fires once → one dash per hold).
+      if (held === RIGHT_HOLD_TICKS) buttons |= Button.Rush;
+    } else if (rightPrev) {
+      // release: a short hold was a TAP → fire the role ability this tick
+      const start = w.rightHoldStart[i]!;
+      if (start >= 0 && tick - start < RIGHT_HOLD_TICKS) buttons |= Button.Ability;
+      w.rightHoldStart[i] = -1;
+    }
+    out[i] = buttons === inp.buttons ? inp : { ...inp, buttons };
+  }
+  return out;
+}
+
 /**
  * Press EDGE detector: true iff button b is down this tick and was UP last tick
  * (per the body's stored prevButtons). Used for Rush/Grab/Struggle so a held

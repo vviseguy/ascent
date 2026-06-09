@@ -269,6 +269,13 @@ export interface WorldState {
    * Hashed.
    */
   struggleBurst: Int32Array;
+  /**
+   * Tick the RIGHT button (mouse-first scheme) began being held; -1 = not held. On
+   * release the verb layer resolves a SHORT hold → role Ability (tap) and a LONG hold
+   * → Rush (dash). Hashed (appended to INT32_FIELDS) so tap/hold resolution survives
+   * rollback. Keyboard inputs that set Rush/Ability directly bypass this.
+   */
+  rightHoldStart: Int32Array;
 }
 
 /** Allocate an empty world state of the given capacity. All bodies start dead. */
@@ -326,6 +333,7 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     breakerShoveUntil: new Int32Array(capacity).fill(-1),
     // struggle mash-ramp burst counter — 0 = idle.
     struggleBurst: new Int32Array(capacity),
+    rightHoldStart: new Int32Array(capacity).fill(-1),
   };
 }
 
@@ -408,6 +416,7 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.scoutMark[id] = NO_ENTITY;
   w.breakerShoveUntil[id] = -1;
   w.struggleBurst[id] = 0;
+  w.rightHoldStart[id] = -1;
   return id;
 }
 
@@ -450,6 +459,8 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'bridgeExpireAt', 'scoutMark', 'breakerShoveUntil',
   // --- struggle mash-ramp burst counter (appended; see WorldState above) ---
   'struggleBurst',
+  // --- mouse-first right-button tap/hold resolver (appended) ---
+  'rightHoldStart',
 ];
 
 /**
