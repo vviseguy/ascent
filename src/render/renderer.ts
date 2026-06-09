@@ -351,6 +351,24 @@ export class Renderer {
     return v;
   }
 
+  /** Local-player "YOU" marker: a bright ground ring + floating label, attached once. */
+  private localMarkerDone = false;
+  private ensureLocalMarker(w: WorldState, localId: number): void {
+    if (this.localMarkerDone || localId < 0 || localId >= w.count) return;
+    const v = this.vis[localId];
+    if (!v) return; // body not yet built; try again next frame
+    const r = toFloat(fromRaw(w.radius[localId]!)), hh = toFloat(fromRaw(w.halfHeight[localId]!));
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(r * 1.5, r * 1.85, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.9, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = -hh + 0.02;
+    v.obj.add(ring);
+    v.obj.add(this.makeLabel('YOU', 0xffffff, hh + 0.7));
+    this.localMarkerDone = true;
+  }
+
   /** A camera-facing text sprite (world-space label). */
   private makeLabel(text: string, color: number, yOff: number): THREE.Sprite {
     const c = document.createElement('canvas'); c.width = 256; c.height = 64;
@@ -383,6 +401,10 @@ export class Renderer {
   standing: { committed: number; winner: number; localCrew: number; crews?: number[]; target?: number } | null = null;
 
   render(w: WorldState, alpha: number, localId: number, anchorId: number): void {
+    // Attach a persistent "YOU" marker (ground ring + label) to the local player the
+    // first time we render — so the player can always find which body they drive.
+    this.ensureLocalMarker(w, localId);
+
     // wall-clock frame delta (view-only; never touches the sim) for time-based juice
     const nowMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const dtMs = this.lastFrameMs < 0 ? 16.7 : Math.min(100, nowMs - this.lastFrameMs);
@@ -618,8 +640,9 @@ export class Renderer {
       if (dist >= -0.5) {
         // AT or ABOVE the crew → coalescence reveal
         const reveal = clamp01((REVEAL_RADIUS - dist) / REVEAL_FALLOFF);
-        // wireframe fades OUT as reveal → 1; solid fades IN.
-        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.85;
+        // wireframe fades OUT as reveal → 1; solid fades IN. The "potential" plan is
+        // kept faint (0.4 ceiling) so stacked floors above never crowd the camera.
+        (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.4;
         band.wire.visible = reveal < 0.999;
         const lit = reveal * reveal; // ease-in the "earned warmth"
         const col = lerpHex(COLORS.wall, COLORS.lit, lit * 0.5); // warm sodium accent on resolve
@@ -936,13 +959,18 @@ function shakeNoise(t: number, ch: number): number {
 }
 
 /** Append the 12 edges of an axis-aligned box (center + size) as line-segment verts. */
+// "Potential" floors above the crew are drawn as a FLAT 2D FLOOR-PLAN — just the
+// top-face rectangle of each slab at its walkable surface — not a full 3D wire box.
+// Rationale (player feedback): full box edges (12 per slab: verticals + both faces)
+// pile up in front of the tilted up-looking camera and bury the playfield. The top
+// quad alone (4 edges) reads as "a platform is up there" with ~1/3 the visual weight
+// and no vertical struts crossing the view. Collision is sim-truth regardless.
 function appendBoxEdges(out: number[], cx: number, cy: number, cz: number, w: number, h: number, d: number): void {
-  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2, z0 = cz - d / 2, z1 = cz + d / 2;
-  const c = [
-    [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
-    [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1],
-  ];
-  const E = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+  const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2;
+  const yTop = cy + h / 2; // the walkable surface plane
+  // four corners of the top face, in plan order
+  const c = [[x0, yTop, z0], [x1, yTop, z0], [x1, yTop, z1], [x0, yTop, z1]];
+  const E = [[0, 1], [1, 2], [2, 3], [3, 0]]; // just the rectangle outline
   for (const [a, b] of E) {
     const p = c[a!]!, q = c[b!]!;
     out.push(p[0]!, p[1]!, p[2]!, q[0]!, q[1]!, q[2]!);
