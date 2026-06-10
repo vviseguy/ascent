@@ -55,8 +55,9 @@ function makeControlsLegend(): HTMLElement {
     '<b style="letter-spacing:.08em">ASCENT</b> — sandbox<br>' +
     '<span style="opacity:.85">Get the <b style="color:#ffd23f">gold Anchor</b> high — its height is your score.</span><br>' +
     '<span style="opacity:.6">WASD move · mouse aim · <b>hold Left</b> grab/carry, ' +
-    '<b>release Left</b> throw (a tap = shove) · <b>hold Right</b> dash, <b>tap Right</b> ability · ' +
-    'Space jump · Q recall/plant · L struggle</span>';
+    '<b>release Left</b> throw · <b>hold Right</b> dash, <b>tap Right</b> ability · ' +
+    'Space jump · F shove · Q recall/plant · L struggle · ' +
+    '<b>wheel</b> zoom · <b>middle-drag</b> pan (recenters as you move)</span>';
   return hud;
 }
 

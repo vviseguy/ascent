@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCENT — Asset Lab</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; }
+      #lab { position: fixed; inset: 0; }
+      #hud {
+        position: fixed; left: 10px; top: 10px; color: #aab; font: 12px/1.5 system-ui;
+        background: rgba(10,10,22,.6); padding: 8px 12px; border-radius: 8px; pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="lab"></div>
+    <div id="hud"></div>
+    <script type="module" src="/src/lab/lab.ts"></script>
+  </body>
+</html>

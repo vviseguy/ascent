@@ -11,12 +11,16 @@
 // multi-tick catch-up frame every tick would see identical live input and an edge
 // would land on the wrong tick — and (b) desync the moment this feeds rollback.
 //
-// Controls (Overcooked-simple, docs/02 §1):
+// Controls (mouse-first, docs/02 §1 — this block IS the source of truth; keep the
+// on-screen legend in main.ts in sync with it):
 //   WASD / arrows : MOVE              Space : JUMP
-//   J / LMB       : RUSH              K / RMB (hold) : GRAB → release = THROW
-//   F             : SHOVE (empty-hand throw tap)
-//   L             : STRUGGLE (mash)
-//   mouse         : AIM — resolved to a WORLD ground-plane angle (see loop.ts)
+//   LMB (hold)    : GRAB → release = THROW        (K = keyboard fallback)
+//   RMB           : hold = RUSH · short tap = ROLE ABILITY (sim splits them;
+//                   J = keyboard fallback, E = explicit ability)
+//   F             : SHOVE (empty-hand throw tap; keyboard only)
+//   L             : STRUGGLE (mash)   Q : Anchor plants beacon · crew recalls
+//   mouse         : AIM — resolved to the local player's floor plane (see loop.ts)
+//   wheel / MMB-drag : camera ZOOM / PAN — VIEW-ONLY, never enters PlayerInput
 // ============================================================================
 
 import { type PlayerInput, Button, MOVE_Q } from '../sim/world/input.ts';
@@ -25,6 +29,15 @@ export class InputController {
   private keys = new Set<string>();
   private mouseDownL = false;
   private mouseDownR = false;
+  // --- VIEW-ONLY camera control state (wheel zoom + middle-drag pan) ---------
+  // Tracked alongside the other listeners but NEVER included in sample(): camera
+  // framing is per-client cosmetic state — if it entered PlayerInput it would have
+  // to be synced and would desync rollback (CLAUDE.md determinism rule). The loop
+  // consumes these once per frame via takeViewDeltas() and feeds the renderer only.
+  private mouseDownM = false;
+  private wheelAcc = 0;
+  private panAccX = 0;
+  private panAccY = 0;
   /** Latest cursor position in screen pixels (resolved to a world aim in the loop). */
   mouseX = 0;
   mouseY = 0;
@@ -39,21 +52,47 @@ export class InputController {
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     target.addEventListener('mousedown', (e) => {
       if (e.button === 0) this.mouseDownL = true;
+      // middle button starts a camera pan; preventDefault so the browser's
+      // autoscroll icon never appears over the playfield.
+      if (e.button === 1) { this.mouseDownM = true; e.preventDefault(); }
       if (e.button === 2) this.mouseDownR = true;
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseDownL = false;
+      if (e.button === 1) this.mouseDownM = false;
       if (e.button === 2) this.mouseDownR = false;
     });
     target.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
+      // accumulate middle-drag pan pixels (window-level so a drag survives leaving
+      // the canvas); consumed per frame by takeViewDeltas().
+      if (this.mouseDownM) { this.panAccX += e.movementX; this.panAccY += e.movementY; }
     });
+    // wheel ZOOM (view-only): accumulate deltaY; preventDefault stops page scroll /
+    // browser pinch-zoom. passive:false is required for preventDefault to work.
+    target.addEventListener('wheel', (e) => {
+      this.wheelAcc += e.deltaY;
+      e.preventDefault();
+    }, { passive: false });
   }
 
   private has(...k: string[]): boolean {
     return k.some((s) => this.keys.has(s));
+  }
+
+  /**
+   * Consume this frame's VIEW-ONLY camera deltas (wheel zoom + middle-drag pan).
+   * Deliberately a separate channel from sample(): these drive the renderer's
+   * camera rig and must never reach PlayerInput / the deterministic sim.
+   */
+  takeViewDeltas(): { wheel: number; panDX: number; panDY: number } {
+    const out = { wheel: this.wheelAcc, panDX: this.panAccX, panDY: this.panAccY };
+    this.wheelAcc = 0;
+    this.panAccX = 0;
+    this.panAccY = 0;
+    return out;
   }
 
   /**

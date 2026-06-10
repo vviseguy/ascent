@@ -17,10 +17,14 @@
 //   - ANCHOR readability: gold, larger, a floating "ANCHOR" label, an always-on
 //     beacon ring; plus a top-center ANCHOR STATUS HUD (height = score, state word,
 //     health arc) and a controls legend.
-//   - CAMERA tuned for the climb: anchor-weighted centroid, framed ~42% up, FOV ~40,
-//     ~55° down-pitch, spread-driven dolly, asymmetric up/down smoothing.
-//   - WORLD-SPACE AIM: a ray from the cursor onto the ground plane (so screen aim
-//     equals world direction under the tilted camera).
+//   - CAMERA tuned for the climb: anchor-weighted centroid, a TRUE 55° down-pitch
+//     (exact lookAt) with the subject framed 42% up via a PROJECTION SHIFT
+//     (setViewOffset), FOV ~40, spread-driven dolly, dt-compensated asymmetric
+//     smoothing — plus user wheel-zoom and middle-drag pan with recenter-on-move
+//     (all view-only; never in PlayerInput).
+//   - WORLD-SPACE AIM: a ray from the cursor onto the LOCAL PLAYER'S floor plane
+//     (their current standing Y, updated per query — so screen aim equals world
+//     direction under the tilted camera on every stratum, not just the ground).
 //
 // ...PLUS the JUICE + COALESCENCE visual identity (docs/06 + docs/07 §4), all
 // view-only and snapshot-driven (never writes sim state):
@@ -85,6 +89,42 @@ const BELOW_DEPTH = 22;
 /** Descent speed (u/s, magnitude) mapped to a full-strength stubby landing squash. */
 const LAND_VY_REF = 10;
 
+// --- CAMERA RIG tuning (all view-only) --------------------------------------
+/**
+ * TRUE 55° down-pitch components: camera offset = (0, D·sin55°, D·cos55°) and the
+ * camera looks at the target EXACTLY, so pitch = atan(0.819/0.574) = 54.97° ≈ 55°
+ * (spec 07 §1.1). The old code raised lookAt by 0.12·D, which ROTATED the boresight
+ * up to atan((0.819−0.12)/0.574) ≈ 50.6° and dropped the subject to ~39% from the
+ * bottom — framing must be a projection SHIFT (FRAME_SHIFT below), not a rotation.
+ */
+const CAM_SIN55 = 0.819, CAM_COS55 = 0.574;
+/**
+ * 42%-up framing (07 §1.3) as a view-plane shift: with an exact lookAt the subject
+ * projects at the screen center (50% from the bottom). setViewOffset renders a
+ * same-size window shifted UP by FRAME_SHIFT·height inside a virtual larger image,
+ * which moves all content DOWN by that fraction → the subject sits at
+ * 50% − 8% = 42% from the bottom while the true 55° pitch is untouched.
+ */
+const FRAME_SHIFT = 0.08;
+/**
+ * dt-compensated smoothing rates (per second): factor = 1 − e^(−rate·dt). Chosen to
+ * reproduce the old per-frame lerps at 60 Hz — 1−e^(−12/60) ≈ 0.18 (rise),
+ * 1−e^(−6.5/60) ≈ 0.10 (fall), 1−e^(−5/60) ≈ 0.08 (dolly) — so the feel is the same
+ * at 60 fps but no longer twice as twitchy at 144 Hz (GAPS M8).
+ */
+const CAM_RISE_RATE = 12, CAM_FALL_RATE = 6.5, CAM_DOLLY_RATE = 5;
+/** Spread-driven dolly base: D = clamp((D_CLOSE + spread·0.9)·userZoom, MIN..MAX).
+ *  D_CLOSE 14 per spec 07 §1.4 (was 16); MIN/MAX clamp the user wheel zoom. */
+const CAM_D_CLOSE = 14, CAM_D_FAR = 30, CAM_DIST_MIN = 10, CAM_DIST_MAX = 40;
+/** Wheel zoom: exponential scale per wheel deltaY unit (≈1.13× per 100-unit notch),
+ *  with the multiplier itself clamped (the absolute distance is clamped above too). */
+const ZOOM_PER_DELTA = 0.0012, ZOOM_MIN = 0.45, ZOOM_MAX = 2.6;
+/** Recenter-on-move: while the local player actively moves, the manual pan drifts
+ *  home at this rate (/s → settles in ~1-2 s), toward a small forward LEAD in the
+ *  facing direction (≤ PAN_LEAD_MAX u, scaled by speed) so the view settles slightly
+ *  ahead of travel. While stationary the manual pan stays exactly where it was put. */
+const PAN_RECENTER_RATE = 1.2, PAN_LEAD_MAX = 1.5, PAN_LEAD_PER_SPEED = 0.25;
+
 /** Per-body render record holding previous + current sim positions for interpolation. */
 interface Vis {
   /** the transform target: a StubbyCharacter's root (Player/Anchor) or an object box. */
@@ -133,6 +173,16 @@ export class Renderer {
   private camTarget = new THREE.Vector3();
   private camDist = 20;
   private camReady = false;
+  // --- USER CAMERA state (wheel zoom / middle-drag pan / recenter; view-only) ---
+  /** Wheel-driven multiplier on the dolly distance (clamped; see ZOOM_*). */
+  private userZoom = 1;
+  /** Middle-drag pan of the camera target on the ground plane (world u). */
+  private panX = 0;
+  private panZ = 0;
+  /** Local-player motion snapshot (set per frame by the loop) for recenter-on-move. */
+  private localMoving = false;
+  private localFacing = 0;
+  private localSpeed = 0;
   private groundY = 0;
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -218,8 +268,11 @@ export class Renderer {
   }
 
   buildTerrain(terrain: Terrain): void {
+    // NOTE: terrain.groundY is the DEEP slab (≈ −14 for the compiled tower), used
+    // only to place the cosmetic ground mesh below. The AIM plane is set per query
+    // in worldAimFrom from the local player's feet (GAPS C7: aiming against the deep
+    // slab skewed every cursor ray up-screen by whole floors of height).
     this.groundY = toFloat(fromRaw(terrain.groundY));
-    this.groundPlane.constant = -this.groundY;
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(60, 60),
       new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 0.95 }),
@@ -294,16 +347,52 @@ export class Renderer {
     return chosen === -Infinity ? best : chosen;
   }
 
-  /** Resolve a screen cursor (px) to a WORLD ground-plane aim angle (raw Fixed),
-   *  relative to a world origin (the local player's x,z). Screen aim → world dir. */
-  worldAimFrom(screenX: number, screenY: number, originX: number, originZ: number): number {
+  /** Resolve a screen cursor (px) to a WORLD aim angle (raw Fixed) on the plane of
+   *  the LOCAL PLAYER'S FEET — `standY` (float), updated per call — relative to a
+   *  world origin (the player's x,z). Intersecting the player's own floor instead of
+   *  the deep terrain slab keeps screen aim == world direction on every stratum.
+   *  (The raycaster goes through the camera's projection matrix, so the 42%-framing
+   *  view offset is automatically accounted for.) */
+  worldAimFrom(screenX: number, screenY: number, originX: number, originZ: number, standY: number): number {
     const ndc = new THREE.Vector2((screenX / window.innerWidth) * 2 - 1, -(screenY / window.innerHeight) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
+    this.groundPlane.constant = -standY; // plane y = standY (normal +Y ⇒ constant = −y)
     const hit = new THREE.Vector3();
     if (!this.raycaster.ray.intersectPlane(this.groundPlane, hit)) return 0;
     let ang = Math.atan2(hit.z - originZ, hit.x - originX); // world ground-plane angle
     if (ang < 0) ang += Math.PI * 2;
     return toRaw(fromRaw(Math.round((ang / (Math.PI * 2)) * toRaw(TWO_PI)))); // quantize like the wire
+  }
+
+  /**
+   * Per-frame USER camera controls from the loop. VIEW-ONLY by construction: this
+   * state never enters PlayerInput or the sim, so each client may frame the scene
+   * differently with zero sync impact (CLAUDE.md determinism rule).
+   *  - `wheel`: accumulated wheel deltaY this frame → exponential zoom multiplier on
+   *    the dolly distance (eased by the dt-smoothed dolly in updateCamera).
+   *  - `panDX/panDY`: middle-drag pixels this frame → "grab the world" pan of the
+   *    camera target on the ground plane. Pixel→world mapping: at distance D the
+   *    screen spans 2·D·tan(fov/2) world u vertically, so s = that/screenHeight is
+   *    u-per-pixel; horizontal screen maps straight to world X (camera yaw is fixed),
+   *    and vertical screen maps to ground Z divided by sin(pitch) — a ground step in
+   *    Z is foreshortened by sin55° on screen — so the drag feels ~1:1 (the point
+   *    under the cursor stays under it). Signs are negative because dragging the
+   *    world right means moving the camera target left.
+   *  - `moving/facing/speed`: the local player's live motion, consumed with dt in
+   *    updateCamera for the recenter-on-move drift.
+   */
+  setViewControls(wheel: number, panDX: number, panDY: number, moving: boolean, facing: number, speed: number): void {
+    if (wheel !== 0) {
+      this.userZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.userZoom * Math.exp(wheel * ZOOM_PER_DELTA)));
+    }
+    if (panDX !== 0 || panDY !== 0) {
+      const s = (2 * this.camDist * Math.tan((this.camera.fov * Math.PI) / 360)) / window.innerHeight;
+      this.panX -= panDX * s;
+      this.panZ -= (panDY * s) / CAM_SIN55;
+    }
+    this.localMoving = moving;
+    this.localFacing = facing;
+    this.localSpeed = speed;
   }
 
   private colorFor(w: WorldState, id: number): number {
@@ -467,7 +556,7 @@ export class Renderer {
     this.updateCoalescence(anchorY);
     this.updateImpactFx(nowMs);
     this.drawVerbFx(w, alpha, localId);
-    this.updateCamera(w, wsum, cx, cy, cz, minX, maxX, minZ, maxZ);
+    this.updateCamera(dtMs / 1000, wsum, cx, cy, cz, minX, maxX, minZ, maxZ);
     this.updateHud(w, anchorId);
     this.renderer.render(this.scene, this.camera);
   }
@@ -781,12 +870,18 @@ export class Renderer {
     // local player's THROW aim-arc (only while holding + charging)
     if (localId >= 0 && localId < w.count && w.holding[localId] !== NO_ENTITY) {
       const charge = Math.min(1, w.throwCharge[localId]! / THROW_CHARGE_TICKS);
-      this.fxGroup.add(this.throwArc(posOf(localId), toFloat(fromRaw(w.facing[localId]!)), charge, w.massClass[w.holding[localId]!]! as MassClass));
+      const from = posOf(localId);
+      // Terminate the preview at the LOCAL PLAYER'S floor (feet Y), not the deep
+      // terrain slab at ≈ −14 (GAPS M5: the arc used to pierce every floor). Good
+      // enough until real per-box terrain termination lands.
+      const floorY = from.y - toFloat(fromRaw(w.halfHeight[localId]!));
+      this.fxGroup.add(this.throwArc(from, toFloat(fromRaw(w.facing[localId]!)), charge, w.massClass[w.holding[localId]!]! as MassClass, floorY));
     }
   }
 
-  /** A dotted parabolic arc previewing where a held body would land at this charge. */
-  private throwArc(from: THREE.Vector3, facing: number, charge: number, heldMass: MassClass): THREE.Object3D {
+  /** A dotted parabolic arc previewing where a held body would land at this charge.
+   *  `floorY` = the world Y the arc terminates against (the local player's floor). */
+  private throwArc(from: THREE.Vector3, facing: number, charge: number, heldMass: MassClass, floorY: number): THREE.Object3D {
     const massV = [0.4, 1.0, 1.8, 3.2][heldMass] ?? 1.0;
     const j = toFloat(THROW_J) * Math.max(0.05, charge) * (1 / Math.sqrt(massV));
     const ang = toFloat(THROW_ANGLE_DEFAULT);
@@ -794,7 +889,7 @@ export class Renderer {
     const g = 22, pts: THREE.Vector3[] = [];
     for (let t = 0; t <= 1.2; t += 0.06) {
       const py = from.y + vy * t - 0.5 * g * t * t;
-      if (py < this.groundY && t > 0.1) break;
+      if (py < floorY && t > 0.1) break;
       pts.push(new THREE.Vector3(from.x + vx * t, py, from.z + vz * t));
     }
     const geo = new THREE.BufferGeometry().setFromPoints(pts);
@@ -802,21 +897,42 @@ export class Renderer {
     return new THREE.Line(geo, new THREE.LineDashedMaterial({ color: col, dashSize: 0.25, gapSize: 0.2 })).computeLineDistances();
   }
 
-  private updateCamera(_w: WorldState, wsum: number, cx: number, cy: number, cz: number, minX: number, maxX: number, minZ: number, maxZ: number): void {
+  private updateCamera(dt: number, wsum: number, cx: number, cy: number, cz: number, minX: number, maxX: number, minZ: number, maxZ: number): void {
     if (wsum <= 0) { this.renderer.render(this.scene, this.camera); return; }
     const target = new THREE.Vector3(cx / wsum, cy / wsum, cz / wsum);
     if (!this.camReady) { this.camTarget.copy(target); this.camReady = true; }
-    // asymmetric smoothing: snappier when target rises (climb), looser when it drops
+    // FRAMERATE-INDEPENDENT asymmetric smoothing: factor = 1 − e^(−rate·dt) converges
+    // identically per second at any refresh (the old per-frame lerp(0.18/0.10) was
+    // ~2× twitchier at 144 Hz). Snappier when the target rises (climb), looser down.
     const up = target.y > this.camTarget.y;
-    this.camTarget.lerp(target, up ? 0.18 : 0.10);
-    // spread-driven dolly: D_close 16 → D_far 30
+    this.camTarget.lerp(target, 1 - Math.exp(-(up ? CAM_RISE_RATE : CAM_FALL_RATE) * dt));
+
+    // RECENTER-ON-MOVE: while the local player actively moves, the manual pan drifts
+    // back toward a small forward LEAD in their facing direction (speed-scaled,
+    // capped) so the view settles slightly ahead of travel — "the pan shifts back to
+    // the prescribed angle in the direction the user is facing". While stationary
+    // the manual pan stays exactly where the user put it.
+    if (this.localMoving) {
+      const lead = Math.min(PAN_LEAD_MAX, this.localSpeed * PAN_LEAD_PER_SPEED);
+      const leadX = Math.cos(this.localFacing) * lead, leadZ = Math.sin(this.localFacing) * lead;
+      const k = 1 - Math.exp(-PAN_RECENTER_RATE * dt);
+      this.panX += (leadX - this.panX) * k;
+      this.panZ += (leadZ - this.panZ) * k;
+    }
+
+    // spread-driven dolly × user wheel zoom, clamped to an absolute distance range
     const extent = Math.max(maxX - minX, maxZ - minZ, 0);
-    const wantDist = Math.min(30, 16 + extent * 0.9);
-    this.camDist += (wantDist - this.camDist) * 0.08;
-    // ~55° down-pitch: offset (0, D·sin55, D·cos55); frame target ~42% up by lowering lookAt
+    const baseDist = Math.min(CAM_D_FAR, CAM_D_CLOSE + extent * 0.9);
+    const wantDist = Math.min(CAM_DIST_MAX, Math.max(CAM_DIST_MIN, baseDist * this.userZoom));
+    this.camDist += (wantDist - this.camDist) * (1 - Math.exp(-CAM_DOLLY_RATE * dt));
+
+    // TRUE 55° pitch: offset (0, D·sin55, D·cos55) and lookAt the (panned) target
+    // EXACTLY — pitch = atan(0.819/0.574) = 54.97° ≈ 55°. The 42%-up framing is a
+    // projection SHIFT via setViewOffset in resize() (see CAM_SIN55/FRAME_SHIFT docs).
     const D = this.camDist;
-    this.camera.position.set(this.camTarget.x, this.camTarget.y + D * 0.819, this.camTarget.z + D * 0.574);
-    this.camera.lookAt(this.camTarget.x, this.camTarget.y + D * 0.12, this.camTarget.z);
+    const fx = this.camTarget.x + this.panX, fy = this.camTarget.y, fz = this.camTarget.z + this.panZ;
+    this.camera.position.set(fx, fy + D * CAM_SIN55, fz + D * CAM_COS55);
+    this.camera.lookAt(fx, fy, fz);
 
     // SCREEN SHAKE (docs/07 §1.7): offset = trauma² · maxOffset · cosmetic-noise.
     // Squared so the low end is gentle. Accessibility-gated by shakeIntensity.
@@ -939,6 +1055,14 @@ export class Renderer {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
+    // 42%-up FRAMING (07 §1.3): render a same-size window shifted UP by 8% of the
+    // image height inside a virtual larger frustum — all content moves DOWN 8%, so
+    // the exactly-lookAt'd subject (screen center, 50%) lands at 42% from the bottom
+    // with the true 55° pitch untouched. Recomputed on every resize because the
+    // offset is in pixels. setViewOffset keeps aspect = w/h (full == sub size) and
+    // bakes the shift into the projection matrix, so cursor raycasts in worldAimFrom
+    // automatically see the shifted frustum.
+    this.camera.setViewOffset(w, h, 0, -FRAME_SHIFT * h, w, h);
     this.camera.updateProjectionMatrix();
   }
 }

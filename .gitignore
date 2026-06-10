@@ -6,3 +6,5 @@ dist/
 .vite/
 coverage/
 *.tsbuildinfo
+lab-shots/
+dist-lab-*/
