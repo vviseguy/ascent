@@ -49,6 +49,82 @@ export type EdgeKind = 'WALK' | 'GAP' | 'BREAK' | 'BUTTON' | 'WEIGHT';
 export const EDGE_KINDS: readonly EdgeKind[] = ['WALK', 'GAP', 'BREAK', 'BUTTON', 'WEIGHT'];
 
 /**
+ * Coarse ROLE a cell plays in the laid-out floor, so a tileset (e.g. KayKit dungeon)
+ * can map onto the grid: open ROOM interiors, CORRIDOR links between them, structural
+ * WALL/VOID cells the layout leaves un-roomed, and DOORWAY cells that punch the opening
+ * between a room and its corridor. This is a LAYOUT classification — distinct from the
+ * traversal `EdgeKind` (which is about how a seam is crossed). It is purely additive:
+ * solvability still rides on the edge graph; the cell role only tells the renderer what
+ * to dress a cell as.
+ *
+ *  - ROOM    : interior of a rectangular room → drop a floor tile, walls auto-placed on
+ *              edges that face VOID/WALL (see `wallMask` helpers in tower.ts).
+ *  - CORRIDOR: a 1-wide connector cell between rooms / to the perimeter → narrow floor.
+ *  - DOORWAY : a cell on a room's boundary where a corridor pierces the wall → an opening
+ *              (place a doorway/arch tile; no wall on the pierced edge).
+ *  - WALL    : a solid, un-roomed structural cell (renders as a wall block / rubble).
+ *  - VOID    : empty, outside any room or corridor (no floor tile; pure negative space).
+ *
+ * EVERY cell still exists in the grid and still has its traversal edges — VOID/WALL cells
+ * are just *dressed* as not-walkable-room; the fallback layer (perimeter + breakables)
+ * keeps the floor solvable regardless of this cosmetic role. So adding room classification
+ * can never make a floor unsolvable.
+ */
+export type CellType = 'ROOM' | 'CORRIDOR' | 'DOORWAY' | 'WALL' | 'VOID';
+
+/** All cell types, ordered (stable iteration / index mapping). */
+export const CELL_TYPES: readonly CellType[] = ['ROOM', 'CORRIDOR', 'DOORWAY', 'WALL', 'VOID'];
+
+/**
+ * Where a KEY is obtained on the floor (docs/14 §2). Two deterministic sources:
+ *  - LOOSE : the key sits as a Pickup body on the floor → obtainable the moment its
+ *            cell is REACHED.
+ *  - RUG   : the key is hidden under a movable RUG → obtainable once the rug's cell is
+ *            reached AND the player interacts with the rug (which reveals the pickup).
+ *            For solvability the two collapse to the same condition: "reachable cell ⇒
+ *            obtainable key" (interacting a reachable rug is always possible), so the
+ *            verifier treats both identically; the distinction is purely the spawn shape.
+ */
+export type KeySource = 'LOOSE' | 'RUG';
+
+/** All key sources, ordered (stable iteration). */
+export const KEY_SOURCES: readonly KeySource[] = ['LOOSE', 'RUG'];
+
+/**
+ * A LOCKED DOOR placed on a traversal edge (docs/14 §2). Passing the edge requires the
+ * KEY whose `doorId` matches. The door GATES the edge in BOTH directions until opened.
+ * Stored on the Floor (additive); the compiler spawns a solid Door body in the doorway
+ * and the verifier models the edge as traversable only when `doorId` is held.
+ *
+ * Canonical `a < b` like Edge, so a door is matched to its edge unambiguously. A door's
+ * edge MUST be a real traversal edge in `Floor.edges` (the placer guarantees this); the
+ * verifier looks the edge up to know which two cells the lock separates.
+ */
+export interface LockedDoor {
+  /** Endpoint cell id (smaller). */
+  a: number;
+  /** Endpoint cell id (larger). */
+  b: number;
+  /** The lock id (>= 0). The matching key carries the same id. Unique per floor. */
+  doorId: number;
+}
+
+/**
+ * A KEY placed on the floor (docs/14 §2). Opens the door whose `doorId` matches; sits at
+ * `cell` and is obtained per `source`. The verifier models it as: once `cell` is in the
+ * reachable set, the key `doorId` is acquired (which may unlock a door and open more of
+ * the floor — the lock-and-key fixpoint).
+ */
+export interface KeyItem {
+  /** Cell id the key is obtained at. */
+  cell: number;
+  /** The door id this key opens (>= 0; matches a LockedDoor.doorId). */
+  doorId: number;
+  /** How the key is obtained (LOOSE pickup vs hidden under a RUG). */
+  source: KeySource;
+}
+
+/**
  * A traversal edge between two adjacent cells. Undirected for traversal purposes
  * (you can cross a floor edge either way in the fallback layer), stored once with
  * `a < b` by cellId for a canonical, dedupe-friendly representation.
@@ -100,6 +176,39 @@ export interface Cell {
    * is produced here. Stable small integer; meaning defined by the dressing layer.
    */
   chunkType: number;
+  /**
+   * Layout ROLE of this cell (see CellType) — which room/corridor/wall/void slot it
+   * fills. OPTIONAL & purely cosmetic-for-routing: the generator now always sets it
+   * (rooms-and-corridors pass), but a hand-built / legacy Floor may omit it, in which
+   * case consumers should treat the cell as ROOM (the permissive default). Solvability
+   * is proven on the edge graph and never reads this field.
+   */
+  cellType?: CellType;
+  /**
+   * Index of the ROOM this cell belongs to (into Floor.rooms), or -1 if the cell is a
+   * corridor/wall/void not inside a room. Optional for the same back-compat reason as
+   * `cellType`. Lets the renderer group a room's cells (one floor mesh, shared theme).
+   */
+  roomId?: number;
+}
+
+/**
+ * A laid-out rectangular ROOM in grid coordinates (inclusive bounds). The generator's
+ * rooms pass carves these; the renderer can place one floor slab + a wall ring with
+ * doorway gaps per room. Purely additive layout data — the traversal graph is what the
+ * verifier proves on. Rooms never overlap and always lie inside the grid.
+ */
+export interface Room {
+  /** Stable index into Floor.rooms (also stored on member cells as roomId). */
+  id: number;
+  /** Inclusive min column. */
+  x0: number;
+  /** Inclusive min row. */
+  y0: number;
+  /** Inclusive max column. */
+  x1: number;
+  /** Inclusive max row. */
+  y1: number;
 }
 
 /**
@@ -142,6 +251,29 @@ export interface Floor {
    * verifier's logic, but printed in any failure repro.
    */
   meta: FloorMeta;
+  /**
+   * The rectangular rooms the layout carved (rooms-and-corridors pass), in stable id
+   * order. OPTIONAL & additive: legacy/hand-built floors omit it. Member cells carry
+   * `roomId` back-references. The renderer uses these to place room floor slabs + wall
+   * rings; the verifier ignores them entirely.
+   */
+  rooms?: Room[];
+  /**
+   * LOCKED DOORS placed on traversal edges (docs/14 §2), in stable doorId order.
+   * OPTIONAL & additive: a floor with no puzzles omits it. Each gates its edge until the
+   * matching KEY is held. The lock-and-key verifier (verify.ts) re-derives solvability
+   * from these + `keys` independently of the placer. The compiler spawns a Door body per
+   * entry; the base reachability/route-count proofs ignore them (a stricter, separate
+   * lock-and-key check models them).
+   */
+  lockedDoors?: LockedDoor[];
+  /**
+   * KEYS placed on the floor (docs/14 §2), in stable order. OPTIONAL & additive. Each is
+   * obtained once its `cell` is reachable and unlocks its `doorId`. The verifier's
+   * lock-and-key fixpoint floods reachability, collects reachable keys, unlocks their
+   * doors, and repeats until the exit is reachable (SOLVABLE) or no progress (UNSOLVABLE).
+   */
+  keys?: KeyItem[];
 }
 
 /** Reproducibility metadata carried on the floor (for repro printing). */

@@ -13,12 +13,13 @@
 
 import { createWorld, spawnBody, BodyFlag, MassClass, Role } from '../sim/world/state.ts';
 import { fromInt, fromFloatConst, toRaw, fromRaw, add } from '../sim/fixed/fixed.ts';
+import { BREAKABLE_INTEGRITY } from '../sim/breakable/config.ts';
 import { Sim, type SimContext } from '../sim/sim.ts';
 import { makeArena } from '../sim/collide/terrain.ts';
 import { HazardKind, type Hazard } from '../sim/hazards/model.ts';
 import { WinCondition, type MatchConfig } from './match.ts';
 import { generateFloor } from '../floor/generate.ts';
-import { compileTower, FLOOR_HEIGHT } from './tower.ts';
+import { compileTower, FLOOR_HEIGHT, GAME_GRID_SIZE } from './tower.ts';
 
 export interface SceneHandle {
   sim: Sim;
@@ -35,6 +36,16 @@ export interface SceneHandle {
    * NOT sim state — the sandbox (flat arena) leaves it undefined.
    */
   stratumBaseY?: number[];
+  /** VIEW-ONLY: per-stratum tile LAYOUT grid (from the compiled tower) so the renderer
+   *  can place a KayKit dungeon tileset. NOT sim state. Undefined for the flat sandbox. */
+  cellGrid?: import('./tower.ts').StratumCellGrid[];
+  /** VIEW-ONLY: exact stair placements (origin/dir/width/run/rise) from the compiled tower so
+   *  the renderer drops the KayKit staircase aligned to the sim collision. NOT sim state. */
+  stairs?: import('./tower.ts').StairInfo[];
+  /** VIEW-ONLY: puzzle-body spawn list (doors/keys/rugs) from the compiled tower so a later
+   *  render pass can dress them. The bodies themselves ARE sim state (spawned in the world);
+   *  this is just the placement metadata. Undefined for the flat sandbox. */
+  puzzleSpawns?: import('./tower.ts').PuzzleSpawn[];
 }
 
 /** Non-anchor role rotation for crew members. */
@@ -91,6 +102,18 @@ export function buildSandbox(crewSizeOrOpts: number | SandboxOpts = 3): SceneHan
     });
   }
 
+  // a few BREAKABLE props (crates/pots/barrels) the Breaker can smash for drops.
+  // Heavy mass so they sit as solid obstacles; low integrity so a shove/rush/throw
+  // clears them. Lined up off to one side, clear of the throwable scatter above.
+  for (let i = 0; i < 4; i++) {
+    spawnBody(w, {
+      px: fromInt(i * 2 - 3), py: fromInt(1), pz: fromInt(8),
+      radius: fromFloatConst(0.4), halfHeight: fromFloatConst(0.4),
+      massClass: MassClass.Heavy, flags: BodyFlag.Breakable,
+      health: BREAKABLE_INTEGRITY,
+    });
+  }
+
   const terrain = makeArena(fromInt(0), fromInt(14), fromInt(3), fromFloatConst(0.5));
   const hazards: Hazard[] = [
     {
@@ -134,13 +157,15 @@ export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?:
   // generate + compile the tower
   const floors = [];
   for (let s = 0; s < numStrata; s++) {
-    floors.push(generateFloor({ gridSize: 5, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
+    floors.push(generateFloor({ gridSize: GAME_GRID_SIZE, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
   }
   const groundY = fromInt(0);
   const killPlaneY = fromInt(-10);
   const tower = compileTower(floors, 0, { groundY, killPlaneY });
 
-  const w = createWorld(128);
+  // Capacity headroom for crew + breakables + the floor's puzzle bodies (doors/keys/rugs
+  // across all strata, plus revealed-key drops). 256 = MAX_ENTITIES; sized to never throw.
+  const w = createWorld(256);
   const playerIds: number[] = [];
   const anchorIds: number[] = [];
   // spawn at stratum 0's entry, slightly above the slab so they drop onto it
@@ -161,6 +186,69 @@ export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?:
     crewId: 0, role: Role.Anchor,
   }));
 
+  // BREAKABLE props (crates/pots/barrels): ~8 destructibles scattered across
+  // stratum 0's floor near the entry, for the Breaker to smash into item drops.
+  // A 3×3-ish grid (minus the center cell, kept clear for the spawn cluster), each
+  // just above the slab so it settles onto the floor. Heavy mass = solid obstacle;
+  // low integrity (BREAKABLE_INTEGRITY) so a shove/rush/throw clears it. Positions
+  // are authored Fixed offsets — no spawn randomness (deterministic).
+  const propHalf = fromFloatConst(0.4);
+  const dropY = add(spawnY, fromFloatConst(0.5)); // base ~rests on the slab
+  let placed = 0;
+  for (let gx = -1; gx <= 1 && placed < 8; gx++) {
+    for (let gz = -1; gz <= 1 && placed < 8; gz++) {
+      if (gx === 0 && gz === 0) continue; // leave the center clear (crew spawns there)
+      spawnBody(w, {
+        px: add(fromRaw(e0.x), fromInt(gx * 3)),
+        py: dropY,
+        pz: add(fromRaw(e0.z), fromInt(gz * 3)),
+        radius: propHalf, halfHeight: propHalf,
+        massClass: MassClass.Heavy, flags: BodyFlag.Breakable,
+        health: BREAKABLE_INTEGRITY,
+      });
+      placed++;
+    }
+  }
+
+  // PUZZLE BODIES (docs/14 §2): spawn each locked DOOR / KEY / RUG the floor generator
+  // placed (tower.puzzleSpawns). These are deterministic sim entities (hashed doorId /
+  // lockState / rugRevealed), so rollback-safe:
+  //  - DOOR: a heavy, near-immovable solid plug filling the doorway seam, flagged Door +
+  //    locked. The interaction door hook opens it (kills it) when a player uses the
+  //    matching key. Anchor mass + the doorway's terrain walls on both sides keep it from
+  //    being shoved aside, so it functions as a wall until unlocked.
+  //  - KEY : a loose Key Pickup body carrying the doorId it opens (picked into the hotbar).
+  //  - RUG : a movable Throwable + Rug body; interacting (or shoving it off its tile)
+  //    reveals its hidden key (spawns a Key Pickup for its doorId).
+  const doorHalf = fromFloatConst(1.0);
+  const itemHalf = fromFloatConst(0.3);
+  const rugHalf = fromFloatConst(0.45);
+  for (const ps of tower.puzzleSpawns ?? []) {
+    if (ps.kind === 'door') {
+      spawnBody(w, {
+        px: fromRaw(ps.x), py: fromRaw(ps.y), pz: fromRaw(ps.z),
+        radius: fromFloatConst(0.8), halfHeight: doorHalf,
+        massClass: MassClass.Anchor, // heaviest → barely budges (a wedged plug)
+        flags: BodyFlag.Door,
+        doorId: ps.doorId, lockState: 1, // starts LOCKED
+      });
+    } else if (ps.kind === 'key') {
+      spawnBody(w, {
+        px: fromRaw(ps.x), py: fromRaw(ps.y), pz: fromRaw(ps.z),
+        radius: itemHalf, halfHeight: itemHalf,
+        massClass: MassClass.Light, flags: BodyFlag.Throwable | BodyFlag.Pickup,
+        health: fromInt(1), doorId: ps.doorId, // the door this key opens
+      });
+    } else { // rug
+      spawnBody(w, {
+        px: fromRaw(ps.x), py: fromRaw(ps.y), pz: fromRaw(ps.z),
+        radius: rugHalf, halfHeight: fromFloatConst(0.1), // a flat movable mat
+        massClass: MassClass.Light, flags: BodyFlag.Throwable | BodyFlag.Rug,
+        health: fromInt(1), doorId: ps.doorId, // the door the hidden key opens
+      });
+    }
+  }
+
   // target height = top stratum's floor (raw → meters)
   const topBaseRaw = tower.stratumBaseY[numStrata - 1]!;
   const match: MatchConfig = {
@@ -177,5 +265,10 @@ export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?:
   const ctx: Partial<SimContext> = {
     terrain: tower.terrain, hazards: [], match, anchorIds, groundY: toRaw(groundY),
   };
-  return { sim: new Sim(w, ctx), localPlayerId: playerIds[0]!, playerIds, anchorIds, localCrew: 0, stratumBaseY: tower.stratumBaseY };
+  return {
+    sim: new Sim(w, ctx), localPlayerId: playerIds[0]!, playerIds, anchorIds, localCrew: 0,
+    stratumBaseY: tower.stratumBaseY, ...(tower.cellGrid ? { cellGrid: tower.cellGrid } : {}),
+    ...(tower.stairs.length ? { stairs: tower.stairs } : {}),
+    ...(tower.puzzleSpawns && tower.puzzleSpawns.length ? { puzzleSpawns: tower.puzzleSpawns } : {}),
+  };
 }

@@ -91,18 +91,22 @@ function makeStreams(seed: number): PlayerInput[][] {
   for (let p = 0; p < NUM_PLAYERS; p++) {
     const rnd = mulberry32(seed + p * 1000);
     const s: PlayerInput[] = [];
-    let cur: PlayerInput = { moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1 };
+    let cur: PlayerInput = { moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1, slot: -1 };
     for (let t = 0; t < TICKS; t++) {
       if (rnd() < 0.12) {
         let b = 0;
         const r = rnd();
         if (r < 0.12) b |= Button.Grab; else if (r < 0.2) b |= Button.Throw;
         else if (r < 0.28) b |= Button.Rush; else if (r < 0.34) b |= Button.Struggle;
+        // exercise the new interaction bits + slot field through the wire codec.
+        if (rnd() < 0.3) b |= Button.Primary;
+        if (rnd() < 0.3) b |= Button.Secondary;
+        const slot = rnd() < 0.4 ? Math.floor(rnd() * 5) : -1;
         cur = {
           moveX: Math.floor((rnd() * 2 - 1) * MOVE_Q),
           moveZ: Math.floor((rnd() * 2 - 1) * MOVE_Q),
           aim: Math.floor((rnd() * 2 - 1) * 205887),
-          buttons: b, grabTarget: -1,
+          buttons: b, grabTarget: -1, slot,
         };
       }
       s.push(cur);

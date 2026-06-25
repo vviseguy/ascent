@@ -50,6 +50,8 @@ import { applyHazards } from './hazards/apply.ts';
 import { applyFallDamage, FALL_SAFE_SPEED } from './hazards/falldamage.ts';
 import type { Hazard } from './hazards/model.ts';
 import { applyVerbs, commitPrevButtons, resolveRightButton, type RoleMap } from './verbs/verbs.ts';
+import { applyBreakables } from './breakable/break.ts';
+import { applyInteract } from './interact/interact.ts';
 import { hashWorld } from './world/hash.ts';
 import {
   type MatchState, createMatch, cloneMatch, restoreMatch, hashMatch, stepMatch,
@@ -148,6 +150,24 @@ export class Sim {
     // SYSTEM 6: verbs (rush/grab/throw/struggle). Index is still valid for queries
     // (positions only moved by carry for held bodies, which verbs treat specially).
     applyVerbs(w, inputs, this.index, this.ctx.roles);
+
+    // SYSTEM 6.5: BREAKABLES — destructible props take damage from the Breaker AoE
+    // shove (breakerShoveUntil, armed in verbs), RUSH dashes, and fast thrown-body
+    // impacts; at 0 integrity they're destroyed and spawn seeded Pickup drops. Runs
+    // AFTER verbs so impact speeds + the shove flag are settled, BEFORE fall-damage.
+    // Reuses the same index (positions are final post-collision; verbs only moved
+    // carried bodies, which this system skips). New drop ids land above the captured
+    // `count`, so the pre-tick loops below won't re-scan them this tick.
+    applyBreakables(w, this.index, w.tick);
+
+    // SYSTEM 6.6: INTERACTION + INVENTORY (docs/12) — contextual targeting + the 5-slot
+    // hotbar. Runs AFTER verbs/breakables so grab linkage + drops are settled (a freshly
+    // dropped item is a valid pickup target next tick) and BEFORE fall-damage/game-layer.
+    // Reuses the same index (queries only). Item bodies it spawns (placed/thrown) land at
+    // ids >= the captured `count` (or reused dead slots), so the pre-`count` loops below
+    // don't re-scan them this tick — same discipline as breakable drops. Reads the SAME
+    // resolved inputs + prevButtons the verbs used, so its press-edges stay consistent.
+    applyInteract(w, inputs, this.index, w.tick);
 
     // FALL DAMAGE: a body that TRANSITIONED falling→Grounded this tick with a fast
     // inbound descent takes impact damage (Anchor is fall-durable — handled inside).

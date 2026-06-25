@@ -26,6 +26,9 @@ import type { Renderer } from './renderer.ts';
 import type { InputController } from './input-controller.ts';
 import { canonicalizeInput } from '../net/wire.ts';
 import { fromRaw, toFloat } from '../sim/fixed/fixed.ts';
+import { NO_ENTITY } from '../sim/world/state.ts';
+import { ItemKind } from '../sim/interact/model.ts';
+import type { InteractCtx } from './input-controller.ts';
 
 const MS_PER_TICK = 1000 / TICK_HZ;
 const MAX_TICKS_PER_FRAME = 5;
@@ -55,12 +58,24 @@ export function startLoop(
     // terrain.groundY — the deep slab ≈ 14 u below the playfield — skewed every aim
     // up-screen by floors of height (GAPS C7).
     const w = sim.world;
-    const lx = toFloat(fromRaw(w.px[localPlayerId]!)), lz = toFloat(fromRaw(w.pz[localPlayerId]!));
-    const standY = toFloat(fromRaw(w.py[localPlayerId]!)) - toFloat(fromRaw(w.halfHeight[localPlayerId]!));
-    input.aimRaw = renderer.worldAimFrom(input.mouseX, input.mouseY, lx, lz, standY);
+    // FOCUS-RELATIVE controls (docs/11): advance the view-layer focus heading (cursor
+    // edge-pan + middle-click snap) and the body-facing reorientation, then sample WASD
+    // in that focus frame. Aim is derived from movement now, not a cursor raycast.
+    input.updateFocus(dt / 1000, window.innerWidth);
+
+    // Read the local player's CONTEXTUAL sim state so the IO layer can route the
+    // contextual PRIMARY/SECONDARY onto the proven body verbs (carry/throw) — and the
+    // current selected slot so wheel-scroll is relative. Pure reader of WorldState.
+    const sel = w.selSlot[localPlayerId] ?? 0;
+    const activeItem = readSlot(w, localPlayerId, sel);
+    const ctx: InteractCtx = {
+      carryingBody: (w.holding[localPlayerId] ?? NO_ENTITY) !== NO_ENTITY,
+      holdingItem: activeItem !== ItemKind.Empty,
+      actions: w.targetActions[localPlayerId] ?? 0,
+    };
 
     // Sample ONCE per frame; canonicalize; feed the same input to every tick this frame.
-    const localInput = canonicalizeInput(input.sample());
+    const localInput = canonicalizeInput(input.sample(sel, ctx));
 
     // USER CAMERA controls (wheel zoom / middle-drag pan / recenter-on-move): these
     // deltas + the local player's live motion feed ONLY the renderer's view rig.
@@ -72,6 +87,7 @@ export function startLoop(
       localInput.moveX !== 0 || localInput.moveZ !== 0,
       toFloat(fromRaw(w.facing[localPlayerId]!)),
       Math.hypot(toFloat(fromRaw(w.vx[localPlayerId]!)), toFloat(fromRaw(w.vz[localPlayerId]!))),
+      input.focusYaw,
     );
 
     let steps = 0;
@@ -104,4 +120,10 @@ export function startLoop(
   requestAnimationFrame(frameTick);
 
   return { stop() { running = false; }, tick: () => sim.world.tick };
+}
+
+/** Read inventory slot `s` (ItemKind) of body `id` from the world (view-only helper). */
+function readSlot(w: { inv0: Int32Array; inv1: Int32Array; inv2: Int32Array; inv3: Int32Array; inv4: Int32Array }, id: number, s: number): number {
+  const arr = s === 0 ? w.inv0 : s === 1 ? w.inv1 : s === 2 ? w.inv2 : s === 3 ? w.inv3 : w.inv4;
+  return arr[id] ?? 0;
 }

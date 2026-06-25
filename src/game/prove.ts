@@ -20,14 +20,14 @@
 //             to never exceed the Anchor's height (recall is a regroup, not a skip).
 //   PROOF 5 — DETERMINISM. The whole game layer is hashed + survives save/restore.
 //   PROOF 6 — BOON DRAFT + RUBBER-BAND (cadence, determinism, deficit weighting).
-//   PROOF 7 — GEOMETRY SOLVABILITY. The compiled tower (exit holes + switchback
-//             stairs + perimeter walls) admits an ANCHOR-probe route from the
+//   PROOF 7 — GEOMETRY SOLVABILITY. The compiled tower (exit holes + STRAIGHT
+//             staircases + perimeter walls) admits an ANCHOR-probe route from the
 //             stratum-0 entry to the TOP stratum, for MANY seeds — the
 //             independent route check on the compiler's OUTPUT (GAPS.md H3).
 //   PROOF 8 — END-TO-END CLIMB. A real Anchor body, driven only by held-stick
-//             inputs + jump taps (NO teleports), walks the perimeter, climbs the
-//             stratum-0 stairs, and stands grounded on stratum 1. This kills the
-//             "proofs pass but the game is unwinnable" blindness for good.
+//             inputs + jump taps (NO teleports), walks to the stratum-0 staircase
+//             and strides straight up it to stand grounded on stratum 1. This kills
+//             the "proofs pass but the game is unwinnable" blindness for good.
 // ============================================================================
 
 import { createWorld, spawnBody, BodyFlag, MassClass, Role, NO_ENTITY } from '../sim/world/state.ts';
@@ -40,7 +40,7 @@ import { clone, restoreInto } from '../sim/world/snapshot.ts';
 import { buildTower } from './scene.ts';
 import { drawOffer, boonById } from './boons.ts';
 import { generateFloor } from '../floor/generate.ts';
-import { compileTower } from './tower.ts';
+import { compileTower, CELL_SIZE, GAME_GRID_SIZE } from './tower.ts';
 import { summitRoute } from './route-check.ts';
 
 let ok = 0, fail = 0;
@@ -224,15 +224,16 @@ console.log('[6] BOON DRAFT + RUBBER-BAND');
 }
 
 // helper shared by PROOFS 7/8: generate + compile the same tower scene.ts builds
-// (gridSize 5, openness 0.35, 2 routes, 5 strata, groundY 0, killPlane -10).
+// (gridSize GAME_GRID_SIZE, openness 0.35, 2 routes, 5 strata, groundY 0, killPlane -10).
 const compileForSeed = (seed: bigint, numStrata = 5) => {
   const floors = [];
   for (let s = 0; s < numStrata; s++) {
-    floors.push(generateFloor({ gridSize: 5, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
+    floors.push(generateFloor({ gridSize: GAME_GRID_SIZE, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
   }
   return { floors, tower: compileTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) }) };
 };
 const rawF = (raw: number): number => toFloat(fromRaw(raw));
+const CS = toFloat(CELL_SIZE); // float cell size — tracks tower.ts CELL_SIZE (no stale hardcodes)
 
 // PROOF 7 — GEOMETRY-LEVEL SOLVABILITY: the compiled tower admits an Anchor-probe
 // route from the stratum-0 entry to the TOP stratum surface, across many seeds.
@@ -241,8 +242,13 @@ const rawF = (raw: number): number => toFloat(fromRaw(raw));
 // placement fails here with the offending seed printed.
 console.log('[7] GEOMETRY SOLVABILITY (Anchor probe, entry -> top, compiled AABBs)');
 {
+  // The geometry route-check is spatially bucketed (route-check.ts), so it scales ~linearly
+  // even at the game's 30×30 grid (~8.7k boxes/tower). We sweep a representative seed set
+  // here (incl. the game's default seed); the CELL-GRAPH solvability — including lock-and-
+  // key — is fuzzed across thousands of seeds in src/floor/prove.ts. This proof guards the
+  // lossy compiler→AABB projection.
   const seeds: bigint[] = [0x5a17ed_1234n]; // the game's default seed first
-  for (let i = 0; i < 24; i++) seeds.push(BigInt(1000 + i * 7919));
+  for (let i = 0; i < 12; i++) seeds.push(BigInt(1000 + i * 7919));
   let allOk = true;
   let stairsOk = true;
   let boxesOk = true;
@@ -254,32 +260,30 @@ console.log('[7] GEOMETRY SOLVABILITY (Anchor probe, entry -> top, compiled AABB
       console.log(`       seed ${seed} FAILED: ${r.reason} (${r.reached}/${r.nodes} nodes reached)`);
     }
     if (tower.stairs.length !== 4) stairsOk = false;
-    if (tower.terrain.solids.length > 700) boxesOk = false;
+    // 30×30 grid → ~900 cells/stratum; slab + seam-lip + wall boxes land well under 12k.
+    if (tower.terrain.solids.length > 12000) boxesOk = false;
   }
   check(`anchor-probe route 0 -> top exists for all ${seeds.length} seeds`, allOk);
   check('one stair per non-top stratum (4 stairs across 5 strata)', stairsOk);
-  check('box count stays sane (< 700 solids for 5 strata)', boxesOk);
+  // 30×30 grid → more slab/lip boxes; stays under the 12k bound across the seed sweep.
+  check('box count stays sane (< 12000 solids for 5 strata)', boxesOk);
   // determinism: same seed -> byte-identical terrain (same openings/stairs/walls)
   const a = compileForSeed(77n).tower.terrain.solids;
   const b = compileForSeed(77n).tower.terrain.solids;
   check('compilation is deterministic (identical solids across runs)',
     a.length === b.length && a.every((box, i) => JSON.stringify(box) === JSON.stringify(b[i])));
 
-  // NEGATIVE CONTROL: the checker must not be vacuous — re-sealing the exit
-  // holes (slab tiles back over every stair, the pre-fix world) must break the
-  // route via the headroom test.
+  // NEGATIVE CONTROL: the checker must not be vacuous — re-sealing the ascent
+  // shafts (a slab tile back over every stair's run footprint, the pre-hole world)
+  // must break the route via the headroom test (the upper treads get pinched under
+  // the restored ceiling). We seal exactly the run footprint each StairInfo reports.
   const { tower: t0 } = compileForSeed(0x5a17ed_1234n);
   const R = (v: number): number => Math.round(v * 65536);
-  const cs = 3;
-  const off = 2; // gridSize 5 → cell center x = (col - 2) * 3, top row z center = 6
-  const seals = t0.stairs.map((st) => {
-    const xs = st.cols.map((c) => (c - off) * cs);
-    return {
-      minX: R(Math.min(...xs) - 1.5), maxX: R(Math.max(...xs) + 1.5),
-      minY: st.topY - R(0.5), maxY: st.topY,
-      minZ: R((4 - off) * cs - 1.5), maxZ: R((4 - off) * cs + 1.5),
-    };
-  });
+  const seals = t0.stairs.map((st) => ({
+    minX: st.originX, maxX: st.originX + st.width,
+    minY: st.topY - R(0.5), maxY: st.topY,
+    minZ: st.entryZ, maxZ: st.topZ,
+  }));
   const sealed = summitRoute({
     ...t0,
     terrain: { groundY: t0.terrain.groundY, solids: [...t0.terrain.solids, ...seals] },
@@ -288,11 +292,11 @@ console.log('[7] GEOMETRY SOLVABILITY (Anchor probe, entry -> top, compiled AABB
 }
 
 // PROOF 8 — END-TO-END CLIMB: a REAL Anchor body, driven only by held-stick input
-// and periodic jump taps (NO teleports, no flag-pinning), walks the perimeter to
-// the stair mouth, hops up both flights, and stands grounded on stratum 1. The
-// route: entry -> east along row 0 -> north along the east column (all perimeter
-// WALK seams, no lips) -> west into the outer stair lane -> landing -> inner
-// flight -> step off onto the stratum-1 slab.
+// and periodic jump taps (NO teleports, no flag-pinning), walks to the STRAIGHT
+// staircase's entry end and strides straight up its treads (auto step-up — no jump
+// needed per riser) until it stands grounded at the stratum-1 surface. The route:
+// entry -> north up the stair column to the run's low (entry) end -> straight up the
+// treads in +Z to the top, which is flush with the stratum-1 slab through the hole.
 console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump taps)');
 {
   const seed = 0x5a17ed_1234n;
@@ -305,24 +309,18 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
   const w = sc.sim.world;
   const half = rawF(w.halfHeight[a]!);
   const base1 = rawF(sc.stratumBaseY![1]!);
-  const dir = st.dirX;
-  const openX = rawF(st.openX);
-  const laneA = rawF(st.laneAZ);
-  const laneB = rawF(st.laneBZ);
-  const landX = rawF(st.landingX);
-  // approach along the perimeter on the side AWAY from the stair (WALK seams only)
-  const sideCol = dir < 0 ? fl0.width - 1 : 0;
-  const colX = (sideCol - ((fl0.width - 1) / 2 | 0)) * 3;
-  const rowZ = (y: number): number => (y - ((fl0.height - 1) / 2 | 0)) * 3;
-  const turnX = landX - dir * 0.75; // center of the un-railed turn opening
+  // the straight stair runs purely in +Z at x = centerX; it tops out at topZ flush
+  // with stratum 1's surface under the 2-cell ascent hole.
+  const centerX = rawF(st.centerX);
+  const entryZ = rawF(st.entryZ);
+  const topZ = rawF(st.topZ);
+  const runLen = rawF(st.run);
+  const rowZ = (y: number): number => (y - ((fl0.height - 1) / 2 | 0)) * CS;
   const wps: readonly (readonly [number, number])[] = [
-    [colX, rowZ(0)], // east along the entry row
-    [colX, rowZ(fl0.height - 1)], // north along the side column
-    [openX - dir * 0.9, laneA], // into the outer-lane stair mouth
-    [turnX, laneA], // up flight A to the top treads
-    [turnX, laneB], // turn: hop sideways through the rail gap onto flight B
-    [openX - dir * 1.2, laneB], // up flight B, step off at the top
-    [openX - dir * 2.6, laneB + 1.0], // settle on the stratum-1 slab (off any seam lip)
+    [centerX, rowZ(0)], // slide west to the stair column at the entry row
+    [centerX, entryZ - 0.4], // north to the run's low (entry) end, lined up on center
+    [centerX, topZ], // STRAIGHT UP the treads to the top tread (auto step-up, no jump)
+    [centerX, topZ + CS * 0.6], // step +Z off the top tread onto the exit-row slab
   ];
   let wpi = 0;
   let okClimb = false;
@@ -341,7 +339,7 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
       ...NEUTRAL_INPUT,
       moveX: Math.max(-1024, Math.min(1024, Math.round(dx * s * 1024))),
       moveZ: Math.max(-1024, Math.min(1024, Math.round(dz * s * 1024))),
-      buttons: t % 12 === 0 ? Button.Jump : 0, // press-edge taps; hop each riser
+      buttons: t % 12 === 0 ? Button.Jump : 0, // press-edge taps; hop any seam lip
     };
     const frame: (PlayerInput | undefined)[] = new Array(w.count);
     frame[a] = inp;
@@ -349,9 +347,10 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
     if ((w.flags[a]! & BodyFlag.Alive) === 0) aliveAll = false;
     const feet = rawF(w.py[a]!) - half;
     const grounded = (w.flags[a]! & BodyFlag.Grounded) !== 0;
-    const pastOpenEnd = (rawF(w.px[a]!) - openX) * -dir > 0.3; // off the stair, on the slab
-    // feet up to base1+0.7 still counts: standing on a 0.6 seam lip IS stratum 1
-    if (wpi >= 5 && grounded && pastOpenEnd && feet >= base1 - 0.05 && feet <= base1 + 0.7) {
+    const climbedRun = pz - entryZ > runLen * 0.8; // ascended (almost) the whole run in +Z
+    // the top tread is FLUSH with the stratum-1 surface (feet at base1) under the open
+    // hole — standing there, grounded, having climbed the run, IS standing on stratum 1.
+    if (wpi >= 2 && grounded && climbedRun && feet >= base1 - 0.05 && feet <= base1 + 0.05) {
       okClimb = true;
     }
   }

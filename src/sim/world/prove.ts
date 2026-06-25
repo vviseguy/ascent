@@ -99,7 +99,7 @@ function makeInputStream(seed: number, players: number[], ticks: number, capacit
   const rnd = mulberry32(seed);
   const stream: PlayerInput[][] = [];
   // persistent per-player intent that changes occasionally (more realistic motion)
-  const cur: PlayerInput[] = players.map(() => ({ moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1 }));
+  const cur: PlayerInput[] = players.map(() => ({ moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1, slot: -1 }));
   for (let t = 0; t < ticks; t++) {
     const frame: PlayerInput[] = new Array(capacity);
     for (let pi = 0; pi < players.length; pi++) {
@@ -111,6 +111,7 @@ function makeInputStream(seed: number, players: number[], ticks: number, capacit
           aim: Math.floor((rnd() * 2 - 1) * 205887), // ~[-PI,PI] raw
           buttons: rnd() < 0.1 ? Button.Jump : 0,
           grabTarget: -1,
+          slot: -1,
         };
       }
       frame[players[pi]!] = cur[pi]!;

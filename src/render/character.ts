@@ -105,8 +105,16 @@ function damp(cur: number, target: number, rate: number, dt: number): number {
 }
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
+/** The minimal surface the renderer drives, so the procedural body and a loaded glTF
+ *  skeletal body are interchangeable (Step 3 swap). Both place `root` at the body centre
+ *  (rotated by facing) and translate an AnimSample into poses each frame. */
+export interface BodyCharacter {
+  readonly root: THREE.Object3D;
+  update(a: AnimSample, dt: number): void;
+}
+
 /** A composed stubby body + its procedural animator. One per Player/Anchor body. */
-export class StubbyCharacter {
+export class StubbyCharacter implements BodyCharacter {
   /** Placed by the renderer at the interpolated body centre; rotated by facing. */
   readonly root = new THREE.Object3D();
   private readonly pose = new THREE.Object3D();   // squash + lean pivot at the feet
@@ -121,6 +129,9 @@ export class StubbyCharacter {
   private landT = 99; private landMag = 0;
   private aL = 0; private aR = 0; private lL = 0; private lR = 0; // smoothed limb angles
   private leanX = 0; private leanZ = 0; private squashY = 1;
+  private readonly blobMat: THREE.MeshBasicMaterial; // contact-shadow opacity, faded when airborne
+  private blobOpacity = 0.34;
+  private headBaseY = 0; private headLeanLag = 0; // secondary-motion state (head bob/whip)
 
   constructor(role: number, baseColor: number, radius: number, halfHeight: number) {
     const s = ROLE_SHAPE[role] ?? ROLE_SHAPE[CharRole.None]!;
@@ -129,6 +140,10 @@ export class StubbyCharacter {
     const limb = new THREE.MeshStandardMaterial({ color: base.clone().multiplyScalar(0.8), roughness: 0.7 });
     const headMat = new THREE.MeshStandardMaterial({ color: base.clone().lerp(new THREE.Color(0xffffff), 0.18), roughness: 0.55 });
     const eyeMat = new THREE.MeshStandardMaterial({ color: 0x10121a, roughness: 0.3 });
+    // crew-color Fresnel RIM (docs/06 §1.5): a grazing-angle glow so allegiance reads
+    // from any angle + through fog; additive into outgoingLight so it feeds bloom. Patches
+    // the standard shader (keeps PBR + IBL + future GPU skinning) rather than replacing it.
+    for (const m of [body, limb, headMat]) applyRim(m, base);
     this.tinted.push(body, limb, headMat);
 
     // --- rig (feet at y=0) -------------------------------------------------
@@ -142,6 +157,7 @@ export class StubbyCharacter {
     this.head = new THREE.Mesh(new THREE.SphereGeometry(headR, 18, 14), headMat);
     this.head.position.y = torsoY + torsoH + headR * 0.55; // sits low on torso — no neck (cute)
     this.head.scale.set(1, 0.95, 0.95);
+    this.headBaseY = this.head.position.y; // rest height for the bob/whip secondary motion
     rig.add(this.head);
     // eyes on the FRONT (+X) so orientation/aim reads at a glance
     for (const dz of [-1, 1]) {
@@ -187,6 +203,13 @@ export class StubbyCharacter {
     this.pose.add(rig);
     const scale = new THREE.Object3D();
     scale.add(this.pose);
+    // soft BLOB contact shadow at the feet (cheap grounding — docs/06 §1.5). On the
+    // SCALE group (not pose) so it stays flat on the floor, unaffected by lean/squash.
+    // Uses a procedurally-generated radial-alpha texture (no asset; node-test safe).
+    this.blobMat = new THREE.MeshBasicMaterial({ map: shadowTex(), color: 0x000000, transparent: true, opacity: this.blobOpacity, depthWrite: false });
+    const blob = new THREE.Mesh(new THREE.CircleGeometry(BASE_WIDTH * 0.62 * s.stance, 20), this.blobMat);
+    blob.rotation.x = -Math.PI / 2; blob.position.y = 0.02;
+    scale.add(blob);
     // map torso width to collision diameter, apply role height; plant feet at -halfHeight
     const bodyScale = (radius * 2) / BASE_WIDTH;
     scale.scale.set(bodyScale, bodyScale * s.height, bodyScale);
@@ -253,7 +276,8 @@ export class StubbyCharacter {
     const targetSY = clamp(tSquash + landSquash + airStretch + idle, 0.45, 1.3);
 
     // ---- smooth everything (soft crossfade between states) -----------------
-    this.aL = damp(this.aL, tAL, SMOOTH, dt); this.aR = damp(this.aR, tAR, SMOOTH, dt);
+    // arms a touch slower than legs → they trail (follow-through), reads less robotic
+    this.aL = damp(this.aL, tAL, SMOOTH * 0.85, dt); this.aR = damp(this.aR, tAR, SMOOTH * 0.85, dt);
     this.lL = damp(this.lL, tLL, SMOOTH, dt); this.lR = damp(this.lR, tLR, SMOOTH, dt);
     this.leanZ = damp(this.leanZ, tLeanZ, SMOOTH, dt);
     this.leanX = damp(this.leanX, tLeanX, SMOOTH, dt);
@@ -265,6 +289,17 @@ export class StubbyCharacter {
     this.pose.rotation.z = this.leanZ; this.pose.rotation.x = this.leanX;
     const sxz = 1 / Math.sqrt(this.squashY);              // preserve volume
     this.pose.scale.set(sxz, this.squashY, sxz);
+
+    // ---- SECONDARY MOTION: head bob + lagged tilt (the "alive" beat) --------
+    const bob = Math.sin(this.stride * 2) * 0.022 * gait;        // a bounce per footfall
+    this.head.position.y = this.headBaseY + bob + landSquash * 0.18;
+    this.headLeanLag = damp(this.headLeanLag, this.leanZ, SMOOTH * 0.45, dt); // trails the body
+    this.head.rotation.z = (this.leanZ - this.headLeanLag) * 1.8; // whip when the lean changes
+    this.head.rotation.x = landSquash * 0.6;                     // a nod on landing
+
+    // contact shadow: solid grounded, fades when airborne (view-only)
+    this.blobOpacity = damp(this.blobOpacity, a.grounded ? 0.34 : 0.1, 8, dt);
+    this.blobMat.opacity = this.blobOpacity;
 
     // held / vulnerable emissive pulse (parity with the old per-frame mutation)
     for (const m of this.tinted) m.emissive.setHex(a.emissive);
@@ -286,4 +321,49 @@ function roundedBox(w: number, h: number, d: number): THREE.BufferGeometry {
   const g = new THREE.SphereGeometry(0.5, 16, 12);
   g.scale(w, h, d);
   return g;
+}
+
+/**
+ * Patch a MeshStandardMaterial with a crew-color Fresnel RIM (docs/06 §1.5): grazing-
+ * angle pixels get an additive `color` glow, so a body's allegiance reads from any angle
+ * and the rim feeds bloom. We PATCH the standard shader (via onBeforeCompile) rather than
+ * replace it, so PBR + IBL + (future) GPU skinning keep working. A fresh closure per
+ * material keeps each crew's rim color correct (distinct programs, tiny count).
+ */
+export function applyRim(mat: THREE.MeshStandardMaterial, color: THREE.Color): void {
+  const rim = color.clone();
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uRimColor = { value: rim };
+    shader.uniforms.uRimStrength = { value: 0.5 };
+    shader.uniforms.uRimPower = { value: 3.0 };
+    shader.fragmentShader =
+      'uniform vec3 uRimColor;\nuniform float uRimStrength;\nuniform float uRimPower;\n' +
+      shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        'float rimF = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), uRimPower);\n' +
+        'outgoingLight += uRimColor * (rimF * uRimStrength);\n' +
+        '#include <opaque_fragment>',
+      );
+  };
+}
+
+/** A shared, procedurally-built soft radial-alpha texture for the blob contact shadow
+ *  (squared falloff → soft core). No image asset; runs under node (vitest) too. */
+let _shadowTex: THREE.DataTexture | null = null;
+export function shadowTex(): THREE.DataTexture {
+  if (_shadowTex) return _shadowTex;
+  const N = 64, data = new Uint8Array(N * N * 4);
+  const c = (N - 1) / 2;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dx = (x - c) / c, dy = (y - c) / c;
+      const a = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy));
+      const i = (y * N + x) * 4;
+      data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = Math.round(255 * a * a);
+    }
+  }
+  const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+  t.needsUpdate = true;
+  _shadowTex = t;
+  return t;
 }

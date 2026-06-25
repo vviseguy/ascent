@@ -49,7 +49,18 @@ import { type WorldState, BodyFlag, MassClass, NO_ENTITY } from '../sim/world/st
 import { toFloat, fromRaw, toRaw, TWO_PI } from '../sim/fixed/fixed.ts';
 import { THROW_CHARGE_TICKS, THROW_J, THROW_ANGLE_DEFAULT } from '../sim/verbs/config.ts';
 import type { Terrain, AABB } from '../sim/collide/terrain.ts';
-import { StubbyCharacter, CREW_COLORS, ANCHOR_COLOR, type AnimSample } from './character.ts';
+import { StubbyCharacter, CREW_COLORS, ANCHOR_COLOR, type AnimSample, type BodyCharacter } from './character.ts';
+import { Hotbar } from './hotbar.ts';
+import { GltfCharacter, type GltfOpts } from './gltf-character.ts';
+import { Dungeon } from './dungeon.ts';
+import type { StratumCellGrid } from '../game/tower.ts';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 const COLORS = {
   player: 0x4ea1ff, anchor: 0xffd23f, light: 0xa0e060, heavy: 0xff7a3d,
@@ -88,16 +99,55 @@ const REVEAL_FALLOFF = 8;
 const BELOW_DEPTH = 22;
 /** Descent speed (u/s, magnitude) mapped to a full-strength stubby landing squash. */
 const LAND_VY_REF = 10;
+/** Vertical glide rate (/s) for characters — rounds off short step/hop pops; big falls snap. */
+const CHAR_GLIDE_RATE = 18;
+/** Above this vertical delta (u) the glide snaps (real jumps/falls never float). */
+const CHAR_GLIDE_SNAP = 0.7;
+/** Fog-of-war reveal radius (u) around each crew body — reveals the current cell + neighbours. */
+const FOG_RADIUS = 7.5;
+
+/** A WORLD/BLOCK visual style (opt-in `?world=NAME` demos) — restyles the tower look. */
+interface WorldStyle {
+  bg: number;        // scene background + fog tint
+  ground: number;    // ground plane
+  wall: number;      // base terrain-block color (lit/below blend from this)
+  lit: number;       // warm "resolved" accent
+  belowDark: number; // color floors fade toward going down
+  potential: number; // dotted floor-plan wireframe
+  wallRough: number; // block roughness (matte ↔ glossy)
+  exposure: number;  // tonemap exposure
+  bloom: number;     // bloom strength
+}
+const WORLD_STYLES: Record<string, WorldStyle> = {
+  // the shipped slate look
+  default: { bg: 0x0a0a12, ground: 0x1a1a2e, wall: 0x2e2e4a, lit: 0xffb24f, belowDark: 0x0a0a14, potential: 0x5a78ff, wallRough: 0.9, exposure: 1.05, bloom: 0.3 },
+  // brighter, flatter cubes — a Minecraft/Crossy-Road toy block look
+  blocky: { bg: 0x121826, ground: 0x2a3550, wall: 0x55647f, lit: 0xffd27a, belowDark: 0x10131f, potential: 0x7390ff, wallRough: 1.0, exposure: 1.1, bloom: 0.24 },
+  // pale pastel high-key — Monument Valley toy architecture
+  clean: { bg: 0x2b2746, ground: 0xc9c4e2, wall: 0xb4aed2, lit: 0xffdca6, belowDark: 0x6b6690, potential: 0x9080ff, wallRough: 0.95, exposure: 1.18, bloom: 0.2 },
+  // dark with glowing edges — synthwave / TRON
+  neon: { bg: 0x05060d, ground: 0x0a0c18, wall: 0x141a30, lit: 0x39d2ff, belowDark: 0x05060d, potential: 0x00e6ff, wallRough: 0.45, exposure: 1.0, bloom: 0.6 },
+  // warm candy — pinks & purples
+  candy: { bg: 0x1d1233, ground: 0x3a2a52, wall: 0x5d4480, lit: 0xff9ecb, belowDark: 0x140d24, potential: 0xff86d6, wallRough: 0.8, exposure: 1.1, bloom: 0.4 },
+};
 
 // --- CAMERA RIG tuning (all view-only) --------------------------------------
 /**
- * TRUE 55° down-pitch components: camera offset = (0, D·sin55°, D·cos55°) and the
- * camera looks at the target EXACTLY, so pitch = atan(0.819/0.574) = 54.97° ≈ 55°
- * (spec 07 §1.1). The old code raised lookAt by 0.12·D, which ROTATED the boresight
- * up to atan((0.819−0.12)/0.574) ≈ 50.6° and dropped the subject to ~39% from the
- * bottom — framing must be a projection SHIFT (FRAME_SHIFT below), not a rotation.
+ * TRUE down-pitch components: camera offset = (0, D·sinθ, D·cosθ) and the camera looks
+ * at the target EXACTLY, so pitch = atan(sinθ/cosθ) = θ. Framing is a projection SHIFT
+ * (FRAME_SHIFT below), never a lookAt rotation, so the pitch stays exact.
+ *
+ * θ = 72° (was 55°). At the 30×30 scale the dungeon is a SPARSE top-down map (rooms +
+ * corridors with genuine void between them, on a 135u footprint), and the crew spawns on
+ * the entry row at the floor's −Z EDGE. A shallow 55° pitch looked out toward the horizon
+ * — which at an edge spawn is unexplored VOID — so the lit room sat crushed at the bottom
+ * of frame under a wall of black (boss #1). A near-top-down 72° looks DOWN onto the floor
+ * PLANE, so the player's lit room fills the frame whichever way it extends and the forward
+ * void all but disappears (a flat dungeon-crawler map read). At this steep angle the
+ * forward look-point is close to straight-down, so a 2-axis framing bias no longer shoves
+ * the player off the bottom. (CAM_SIN/COS keep the historical names; the value is now 72°.)
  */
-const CAM_SIN55 = 0.819, CAM_COS55 = 0.574;
+const CAM_SIN55 = 0.951, CAM_COS55 = 0.309;
 /**
  * 42%-up framing (07 §1.3) as a view-plane shift: with an exact lookAt the subject
  * projects at the screen center (50% from the bottom). setViewOffset renders a
@@ -113,9 +163,11 @@ const FRAME_SHIFT = 0.08;
  * at 60 fps but no longer twice as twitchy at 144 Hz (GAPS M8).
  */
 const CAM_RISE_RATE = 12, CAM_FALL_RATE = 6.5, CAM_DOLLY_RATE = 5;
-/** Spread-driven dolly base: D = clamp((D_CLOSE + spread·0.9)·userZoom, MIN..MAX).
- *  D_CLOSE 14 per spec 07 §1.4 (was 16); MIN/MAX clamp the user wheel zoom. */
-const CAM_D_CLOSE = 14, CAM_D_FAR = 30, CAM_DIST_MIN = 10, CAM_DIST_MAX = 40;
+/** Dolly base: D = clamp((D_CLOSE + extent·0.9)·userZoom, MIN..MAX). D_CLOSE 17 frames the
+ *  player's room tightly at the 30×30 dungeon scale so the lit area fills the frame on load
+ *  (a far opening dolly shrank the sparse room into a void speck = the "black on load" read);
+ *  MIN/MAX clamp the user wheel zoom so they can still pull back for an overview. */
+const CAM_D_CLOSE = 17, CAM_D_FAR = 40, CAM_DIST_MIN = 11, CAM_DIST_MAX = 56;
 /** Wheel zoom: exponential scale per wheel deltaY unit (≈1.13× per 100-unit notch),
  *  with the multiplier itself clamped (the absolute distance is clamped above too). */
 const ZOOM_PER_DELTA = 0.0012, ZOOM_MIN = 0.45, ZOOM_MAX = 2.6;
@@ -124,15 +176,23 @@ const ZOOM_PER_DELTA = 0.0012, ZOOM_MIN = 0.45, ZOOM_MAX = 2.6;
  *  facing direction (≤ PAN_LEAD_MAX u, scaled by speed) so the view settles slightly
  *  ahead of travel. While stationary the manual pan stays exactly where it was put. */
 const PAN_RECENTER_RATE = 1.2, PAN_LEAD_MAX = 1.5, PAN_LEAD_PER_SPEED = 0.25;
+/** FRAMING BIAS (boss #1/#2): how far (world u, max) the camera target slides off the
+ *  player toward the proximity-weighted centroid of the EXPLORED dungeon cells, so the
+ *  opening view sits over the lit room instead of the perimeter void. Capped so the
+ *  player stays well in frame. The weighting (in Dungeon.exploredFrameNear) keeps the
+ *  player's own room dominant, so far corridor cells can't drag the target into the dark. */
+const FRAME_BIAS_MAX = 0, FRAME_BIAS_RATE = 2.5;
 
 /** Per-body render record holding previous + current sim positions for interpolation. */
 interface Vis {
   /** the transform target: a StubbyCharacter's root (Player/Anchor) or an object box. */
   obj: THREE.Object3D;
-  /** procedural stubby body for Player/Anchor bodies; null for world-object boxes. */
-  char: StubbyCharacter | null;
+  /** the animated body for Player/Anchor (procedural stubby OR loaded glTF); null for boxes. */
+  char: BodyCharacter | null;
   px: number; py: number; pz: number; ppx: number; ppy: number; ppz: number;
   pf: number; cf: number;
+  /** smoothed display Y (characters) — glides short steps/hops; snaps big falls. */
+  glideY: number;
   /** view-only squash spring state (BOX path only); pops on landing, eases back. */
   squash: number;
   /** a pending landing-crush impulse (BOX path; the spring dips here, then eases to 1). */
@@ -167,11 +227,30 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
+  /** Post-processing stack (render → SMAA → bloom → ACES output). View-only. */
+  private composer!: EffectComposer;
+  private bloom!: UnrealBloomPass;
+  // --- Step 3 (opt-in): a preloaded rigged glTF body template ---
+  private useGltf = false;
+  private modelTemplate: { scene: THREE.Object3D; clips: THREE.AnimationClip[]; opts: GltfOpts } | null = null;
+  /** Per-role rigged templates (the default KayKit crew); ensureVis picks by w.role. */
+  private roleModels: Map<number, { scene: THREE.Object3D; clips: THREE.AnimationClip[]; opts: GltfOpts }> | null = null;
+  /** KayKit dungeon environment (built from the layout grid); when set, replaces the box terrain. */
+  private dungeon: Dungeon | null = null;
+  private dungeonActive = false;
+  private groundMesh: THREE.Mesh | null = null;
+  private gridHelper: THREE.GridHelper | null = null;
+  /** Active world/block style palette (set via setWorldStyle before buildTerrain). */
+  private style: WorldStyle = WORLD_STYLES.default!;
   private vis: (Vis | null)[] = [];
+  /** DEV-only: last local-player render position (set each frame; for headless framing checks). */
+  dbgLocalPos: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
   private readonly bodyGroup = new THREE.Group();
   private readonly fxGroup = new THREE.Group(); // verb-feedback overlay (rebuilt each frame)
   private camTarget = new THREE.Vector3();
   private camDist = 20;
+  /** Camera orbit heading (radians) — the player's focus direction (docs/11). View-only. */
+  private focusYaw = 0;
   private camReady = false;
   // --- USER CAMERA state (wheel zoom / middle-drag pan / recenter; view-only) ---
   /** Wheel-driven multiplier on the dolly distance (clamped; see ZOOM_*). */
@@ -179,6 +258,10 @@ export class Renderer {
   /** Middle-drag pan of the camera target on the ground plane (world u). */
   private panX = 0;
   private panZ = 0;
+  /** Smoothed framing bias (world u) sliding the camera target toward the explored room
+   *  centroid (boss #1/#2) — keeps the opening view on the lit dungeon, never the void. */
+  private frameBiasX = 0;
+  private frameBiasZ = 0;
   /** Local-player motion snapshot (set per frame by the loop) for recenter-on-move. */
   private localMoving = false;
   private localFacing = 0;
@@ -188,7 +271,14 @@ export class Renderer {
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   /** HUD elements (DOM overlay; pure readout of sim state). */
   private hud: { root: HTMLElement; height: HTMLElement; state: HTMLElement; health: HTMLElement } | null = null;
+  /** Local-player health pill (bottom-right): bar + number, mirrors the Anchor arc style. */
+  private localHud: { root: HTMLElement; bar: HTMLElement; num: HTMLElement } | null = null;
+  /** Inventory hotbar + contextual hint prompts (docs/12). Pure reader of sim state. */
+  private hotbar: Hotbar | null = null;
   private winBanner: HTMLElement | null = null;
+  /** Off-screen crew indicators: a DOM container + per-body arrow elements (pooled). */
+  private indicatorRoot: HTMLElement | null = null;
+  private readonly indicators = new Map<number, { el: HTMLElement; tri: HTMLElement }>();
   private standingsRail: HTMLElement | null = null;
   private onboard: HTMLElement | null = null;
   private railBeads: HTMLElement[] = [];
@@ -229,22 +319,48 @@ export class Renderer {
   private static readonly DUST_PER_FX = 10;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA via SMAA in the post stack
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // ACES filmic tonemap (docs/06 §7.2): r169 defaults to NoToneMapping, which hard-
+    // clips every emissive >1 (rims/beacons/Anchor) to flat white. ACES rolls highlights
+    // off so the look reads "graded" and bloom gets clean HDR to threshold against.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     this.scene.background = new THREE.Color(0x0a0a12);
     this.scene.fog = new THREE.Fog(0x0a0a12, 30, 70);
+
+    // IBL (docs/06 §1.5): bake a RoomEnvironment into a PMREM cubemap and use it as soft
+    // image-based lighting. NOT a dynamic light — folds into the standard shader, so it
+    // stays inside the "1 directional + ambient" budget while turning flat matte
+    // primitives into rounded, soft-shaded "toy" volumes.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.42;
+    pmrem.dispose();
 
     // FOV ~40 (longer lens, less edge parallax — spec 07 §1.1).
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 300);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.4);
+    // 1 key directional ("light from the resolved tower") + a hemisphere fill (cool
+    // indigo sky / warm ground) mapping onto the cold-void / warm-floor palette.
+    const key = new THREE.DirectionalLight(0xffffff, 2.1);
     key.position.set(8, 22, 10);
     this.scene.add(key);
-    this.scene.add(new THREE.AmbientLight(0x6677aa, 0.6));
+    this.scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x4a3826, 0.45));
     this.scene.add(this.bodyGroup);
     this.scene.add(this.fxGroup);
     this.scene.add(this.impactGroup);
     this.buildImpactPool();
+
+    // POST STACK (docs/06 §7.2): render → SMAA edge-AA → bloom (only emissive/rims above
+    // the threshold glow → the "emissive intent" look) → OutputPass (applies ACES + sRGB).
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new SMAAPass());
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.32, 0.9);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -257,6 +373,85 @@ export class Renderer {
    */
   setStrata(stratumBaseY: readonly number[]): void {
     this.strataBaseY = stratumBaseY.slice();
+  }
+
+  /**
+   * WORLD/BLOCK STYLE demo (opt-in `?world=NAME`): pick a palette that restyles the
+   * tower blocks, ground, accent, fog/background, exposure and bloom. View-only — must
+   * be called BEFORE buildTerrain so the terrain materials pick up the style. Unknown
+   * (or null) name falls back to the shipped 'default' look.
+   */
+  setWorldStyle(name: string | null): void {
+    this.style = WORLD_STYLES[name ?? ''] ?? WORLD_STYLES.default!;
+    (this.scene.background as THREE.Color).setHex(this.style.bg);
+    (this.scene.fog as THREE.Fog).color.setHex(this.style.bg);
+    this.renderer.toneMappingExposure = this.style.exposure;
+    if (this.bloom) this.bloom.strength = this.style.bloom;
+  }
+
+  /**
+   * STEP 3 (opt-in): preload a rigged/animated glTF body template. Once loaded, ensureVis
+   * builds skeletal `GltfCharacter`s for Player/Anchor bodies instead of the procedural
+   * stubby body. MUST be awaited BEFORE the loop starts (never load mid-match) so ensureVis
+   * stays synchronous and rollback-safe — the determinism contract is untouched (the asset
+   * is just a different view of the same sim-driven `BodyCharacter`). View-only.
+   */
+  async preloadModels(url: string, opts: GltfOpts = {}): Promise<void> {
+    const gltf = await new GLTFLoader().loadAsync(url);
+    this.modelTemplate = { scene: gltf.scene, clips: gltf.animations, opts };
+    this.useGltf = true;
+  }
+
+  /**
+   * Preload a PER-ROLE set of rigged glTF bodies (the default look — the KayKit crew):
+   * each crew Role gets its own model, picked in ensureVis by w.role. Loaded in parallel,
+   * awaited before the loop (never mid-match). View-only; the determinism contract is
+   * untouched — these are just different views of the same sim-driven BodyCharacter.
+   */
+  async preloadModelSet(entries: { role: number; url: string; opts?: GltfOpts }[]): Promise<void> {
+    const loader = new GLTFLoader();
+    const uniq = [...new Set(entries.map((e) => e.url))]; // load each model file once
+    const byUrl = new Map(await Promise.all(uniq.map(async (url) => {
+      const gltf = await loader.loadAsync(url);
+      return [url, { scene: gltf.scene, clips: gltf.animations }] as const;
+    })));
+    // share each url's template (GltfCharacter clones per body); opts (yaw) are per-role
+    this.roleModels = new Map(entries.map((e) => [e.role, { ...byUrl.get(e.url)!, opts: e.opts ?? {} }]));
+    this.useGltf = true;
+  }
+
+  /**
+   * Build the KayKit DUNGEON environment from the per-stratum layout grid and use it as
+   * the world — the abstract box terrain + coalescence wireframe are hidden in favour of
+   * real dungeon tiles (floors/walls/doorways/torches). Await before the loop. View-only:
+   * collision is still the sim's AABB terrain underneath. Call AFTER buildTerrain.
+   */
+  async buildDungeon(grids: StratumCellGrid[], stairs?: import('../game/tower.ts').StairInfo[]): Promise<void> {
+    const d = new Dungeon();
+    await d.load();
+    d.build(grids, stairs);
+    this.scene.add(d.group);
+    this.dungeon = d;
+    this.dungeonActive = true;
+    for (const band of this.bands) { band.solid.visible = false; band.wire.visible = false; }
+    if (this.groundMesh) this.groundMesh.visible = false; // the pale ground plane would break the void
+    if (this.gridHelper) this.gridHelper.visible = false;
+    // INKY VOID (issue 2): unexplored / outside the arena reads as BLACK LIQUID SHADOW.
+    // A near-pure-black background + a TIGHT black fog so anything past the explored play
+    // area dissolves into ink (you forget the far sides of walls exist), reinforcing the
+    // per-cell fog-of-war fade. Pulled in from (20,62) so the void closes around the player.
+    (this.scene.background as THREE.Color).setHex(0x02030a);
+    const fog = this.scene.fog as THREE.Fog;
+    // near keeps the immediate void inky; far is loose enough that a zoomed-out overview of
+    // the EXPLORED floor still reads (the fog-of-war hide is the real "unexplored" gate, so
+    // fog is just atmospheric depth here, not the primary void mechanism).
+    fog.color.setHex(0x02030a); fog.near = 18; fog.far = 64;
+    // DEV: expose the dungeon for headless screenshot verification / debugging (e.g.
+    // `__dungeon.revealAll()` to lift the fog). Gated to a `?debug` URL param so it never
+    // leaks a handle into a normal session. View-only; touches nothing in the sim.
+    if (new URLSearchParams(location.search).has('debug')) {
+      (globalThis as Record<string, unknown>)['__dungeon'] = d;
+    }
   }
 
   /**
@@ -275,16 +470,18 @@ export class Renderer {
     this.groundY = toFloat(fromRaw(terrain.groundY));
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(60, 60),
-      new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({ color: this.style.ground, roughness: 0.95 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = this.groundY;
     this.scene.add(ground);
+    this.groundMesh = ground;
     const grid = new THREE.GridHelper(60, 30, COLORS.grid, COLORS.grid);
     grid.position.y = this.groundY + 0.01;
     (grid.material as THREE.Material).opacity = 0.3;
     (grid.material as THREE.Material).transparent = true;
     this.scene.add(grid);
+    this.gridHelper = grid;
 
     // Group the terrain AABB solids into per-stratum BANDS so Coalescence can style
     // each band (wireframe→solid above the crew; desaturate+fog below). A box is
@@ -309,7 +506,7 @@ export class Renderer {
       for (const b of boxes) {
         const w = toFloat(fromRaw(b.maxX - b.minX)), h = toFloat(fromRaw(b.maxY - b.minY)), d = toFloat(fromRaw(b.maxZ - b.minZ));
         const cxw = toFloat(fromRaw((b.minX + b.maxX) >> 1)), cyw = toFloat(fromRaw((b.minY + b.maxY) >> 1)), czw = toFloat(fromRaw((b.minZ + b.maxZ) >> 1));
-        const mat = new THREE.MeshStandardMaterial({ color: COLORS.wall, roughness: 0.9, transparent: true, opacity: 1 });
+        const mat = new THREE.MeshStandardMaterial({ color: this.style.wall, roughness: this.style.wallRough, transparent: true, opacity: 1 });
         solidMats.push(mat);
         const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
         box.position.set(cxw, cyw, czw);
@@ -321,7 +518,7 @@ export class Renderer {
       }
       const wireGeo = new THREE.BufferGeometry();
       wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(wirePos, 3));
-      const wireMat = new THREE.LineDashedMaterial({ color: COLORS.potential, transparent: true, opacity: 0.0, dashSize: 0.22, gapSize: 0.18 });
+      const wireMat = new THREE.LineDashedMaterial({ color: this.style.potential, transparent: true, opacity: 0.0, dashSize: 0.22, gapSize: 0.18 });
       const wire = new THREE.LineSegments(wireGeo, wireMat);
       wire.computeLineDistances();
       this.scene.add(solid);
@@ -381,7 +578,7 @@ export class Renderer {
    *  - `moving/facing/speed`: the local player's live motion, consumed with dt in
    *    updateCamera for the recenter-on-move drift.
    */
-  setViewControls(wheel: number, panDX: number, panDY: number, moving: boolean, facing: number, speed: number): void {
+  setViewControls(wheel: number, panDX: number, panDY: number, moving: boolean, facing: number, speed: number, focusYaw = 0): void {
     if (wheel !== 0) {
       this.userZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.userZoom * Math.exp(wheel * ZOOM_PER_DELTA)));
     }
@@ -393,6 +590,7 @@ export class Renderer {
     this.localMoving = moving;
     this.localFacing = facing;
     this.localSpeed = speed;
+    this.focusYaw = focusYaw; // camera orbits the player at this heading (docs/11)
   }
 
   private colorFor(w: WorldState, id: number): number {
@@ -415,11 +613,16 @@ export class Renderer {
       const isBody = (w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0;
       const baseColor = isBody ? this.bodyColorFor(w, id) : this.colorFor(w, id);
       let obj: THREE.Object3D;
-      let char: StubbyCharacter | null = null;
+      let char: BodyCharacter | null = null;
       if (isBody) {
-        // a procedural STUBBY/CUTE body (docs/06 App-B Phase 1; ~1×1×1.25), crew-tinted,
-        // role-shaped for silhouette readability — replaces the old capsule.
-        char = new StubbyCharacter(w.role[id]!, baseColor, r, hh);
+        // Player/Anchor body: a loaded rigged glTF if preloaded — a PER-ROLE model from
+        // the KayKit crew set (default), or a single override model — else the procedural
+        // STUBBY/CUTE body. Same BodyCharacter contract regardless.
+        const role = w.role[id]!;
+        const tpl = this.roleModels?.get(role) ?? this.modelTemplate;
+        char = (this.useGltf && tpl)
+          ? new GltfCharacter(tpl.scene, tpl.clips, baseColor, r, hh, tpl.opts)
+          : new StubbyCharacter(role, baseColor, r, hh);
         obj = char.root;
         // gold beacon ring + ANCHOR label for the Anchor (always findable)
         if ((w.flags[id]! & BodyFlag.Anchor) !== 0) {
@@ -427,15 +630,33 @@ export class Renderer {
           ring.rotation.x = -Math.PI / 2; ring.position.y = -hh + 0.02; obj.add(ring);
           obj.add(this.makeLabel('ANCHOR', COLORS.anchor, hh + 0.9));
         }
+      } else if ((w.flags[id]! & BodyFlag.Pickup) !== 0) {
+        // ITEM DROP: a bright emissive gem (crew-neutral) — clearly readable, feeds bloom.
+        const m = new THREE.MeshStandardMaterial({ color: 0xffe27a, emissive: 0xffb52e, emissiveIntensity: 1.1, roughness: 0.2, metalness: 0.3 });
+        obj = new THREE.Mesh(new THREE.OctahedronGeometry(Math.max(0.26, r * 1.3)), m);
+      } else if ((w.flags[id]! & BodyFlag.Breakable) !== 0) {
+        // BREAKABLE crate: a chunky wooden box with a darker edge frame (reads "smash me").
+        const grp = new THREE.Group();
+        const box = new THREE.Mesh(new THREE.BoxGeometry(r * 2, hh * 2, r * 2), new THREE.MeshStandardMaterial({ color: 0x9c6b3f, roughness: 0.85 }));
+        grp.add(box);
+        grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0x4a2f18 })));
+        obj = grp;
       } else {
-        // world objects (throwables) stay simple boxes, mass-tier colored.
-        const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: 0x000000 });
-        obj = new THREE.Mesh(new THREE.BoxGeometry(r * 2, hh * 2, r * 2), mat);
+        // plain world objects (throwables): in the dungeon, render a small KayKit prop
+        // (barrel/crate/box) instead of a placeholder coloured cube so no programmer-art
+        // cubes remain. Outside the dungeon, keep the original mass-tier coloured box.
+        const prop = this.dungeon?.propFor(r, hh, id * 2654435761) ?? null;
+        if (prop) {
+          obj = prop;
+        } else {
+          const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: 0x000000 });
+          obj = new THREE.Mesh(new THREE.BoxGeometry(r * 2, hh * 2, r * 2), mat);
+        }
       }
       this.bodyGroup.add(obj);
       const x = toFloat(fromRaw(w.px[id]!)), y = toFloat(fromRaw(w.py[id]!)), z = toFloat(fromRaw(w.pz[id]!)), f = toFloat(fromRaw(w.facing[id]!));
       v = {
-        obj, char, px: x, py: y, pz: z, ppx: x, ppy: y, ppz: z, pf: f, cf: f,
+        obj, char, px: x, py: y, pz: z, ppx: x, ppy: y, ppz: z, pf: f, cf: f, glideY: y,
         squash: 1, squashImpulse: 0, baseColor, landPending: false, landStrength: 0, throwPending: false,
       };
       this.vis[id] = v;
@@ -519,6 +740,9 @@ export class Renderer {
 
     let wsum = 0, cx = 0, cy = 0, cz = 0, minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
     const anchorY = anchorId >= 0 && anchorId < w.count ? toFloat(fromRaw(w.py[anchorId]!)) : 0;
+    let localY = anchorY;
+    const localPos = { x: 0, y: anchorY, z: 0 }; // local player world pos → occlusion cutaway
+    const crew: { x: number; y: number; z: number }[] = []; // crew positions → fog-of-war reveal
     for (let id = 0; id < w.count; id++) {
       const alive = (w.flags[id]! & BodyFlag.Alive) !== 0;
       const v = this.vis[id] ?? null;
@@ -529,8 +753,17 @@ export class Renderer {
       const x = vv.ppx + (vv.px - vv.ppx) * alpha;
       const y = vv.ppy + (vv.py - vv.ppy) * alpha;
       const z = vv.ppz + (vv.pz - vv.ppz) * alpha;
-      vv.obj.position.set(x, y, z);
+      // characters GLIDE short vertical steps/hops (the smooth-step-up read); a big
+      // jump/fall (> snap) is shown instantly so the model never floats off the ground.
+      if (vv.char) {
+        const dy = y - vv.glideY;
+        vv.glideY = Math.abs(dy) > CHAR_GLIDE_SNAP ? y : vv.glideY + dy * (1 - Math.exp(-CHAR_GLIDE_RATE * (dtMs / 1000)));
+        vv.obj.position.set(x, vv.glideY, z);
+      } else {
+        vv.obj.position.set(x, y, z);
+      }
       vv.obj.rotation.y = -lerpAngle(vv.pf, vv.cf, alpha);
+      if ((w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0) crew.push({ x, y, z });
 
       // held bodies pulse an emissive aura (identity preserved); a downed Anchor pulses red.
       const emissive = w.grabbedBy[id]! !== NO_ENTITY ? 0x442266
@@ -539,26 +772,87 @@ export class Renderer {
         // STUBBY CHARACTER: all deformation + limb posing driven from sim state.
         vv.char.update(this.sampleAnim(w, id, vv, emissive), dtMs / 1000);
       } else {
-        // BOX (world object): the original speed-stretch + color/emissive path.
+        // BOX (world object): the original speed-stretch + color/emissive path. Breakable
+        // crates (Groups) and pickup gems keep their authored material — recolor only plain boxes.
         this.applySquashStretch(w, id, vv, dtMs);
-        const mat = (vv.obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        mat.color.setHex(vv.baseColor = this.colorFor(w, id));
-        mat.emissive.setHex(emissive);
+        const mesh = vv.obj as THREE.Mesh;
+        if (mesh.isMesh && (w.flags[id]! & (BodyFlag.Breakable | BodyFlag.Pickup)) === 0) {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          mat.color.setHex(vv.baseColor = this.colorFor(w, id));
+          mat.emissive.setHex(emissive);
+        }
       }
 
-      // camera weighting: anchor 3.0, local 1.5, other players 1.0, objects 0
+      // camera centers ONLY on the local player; the crew/Anchor are kept findable via
+      // off-screen edge indicators instead of pulling the frame (drawOffscreenIndicators).
       let wt = 0;
-      if (id === anchorId) wt = 3.0; else if (id === localId) wt = 1.5;
-      else if ((w.flags[id]! & BodyFlag.Player) !== 0) wt = 1.0;
+      if (id === localId) { wt = 1.0; localY = y; localPos.x = x; localPos.y = y; localPos.z = z; }
       if (wt > 0) { wsum += wt; cx += x * wt; cy += y * wt; cz += z * wt; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
     }
 
+    this.dbgLocalPos = localPos; // DEV: last local-player render pos (headless framing checks)
+    if (this.dungeon) { this.dungeon.reveal(crew, FOG_RADIUS, dtMs / 1000); this.dungeon.cull(localY); } // fog fade-in + floor-above cull
     this.updateCoalescence(anchorY);
     this.updateImpactFx(nowMs);
     this.drawVerbFx(w, alpha, localId);
+    this.updateFrameBias(localPos, dtMs / 1000); // slide the target onto the lit room (boss #1/#2)
     this.updateCamera(dtMs / 1000, wsum, cx, cy, cz, minX, maxX, minZ, maxZ);
-    this.updateHud(w, anchorId);
-    this.renderer.render(this.scene, this.camera);
+    // OCCLUSION CUTAWAY: after the camera is posed, fade walls between it and the local player.
+    if (this.dungeon) this.dungeon.occlude(this.camera, localPos, dtMs / 1000);
+    this.drawOffscreenIndicators(w, localId, anchorId);
+    this.updateHud(w, anchorId, localId);
+    if (this.hotbar && localId >= 0 && localId < w.count) this.hotbar.update(w, localId);
+    this.composer.render();
+  }
+
+  /**
+   * Edge ARROWS pointing to off-screen crew/Anchor (since the camera now centers only on
+   * the local player). Pure DOM overlay: project each important body to the camera, and if
+   * it's outside the viewport (or behind), clamp an arrow to the screen edge pointing at it.
+   * View-only — reads interpolated render positions, never the sim.
+   */
+  private drawOffscreenIndicators(w: WorldState, localId: number, anchorId: number): void {
+    if (!this.indicatorRoot) return;
+    const cw = window.innerWidth, ch = window.innerHeight, margin = 40;
+    const p = new THREE.Vector3();
+    for (let id = 0; id < w.count; id++) {
+      const important = id !== localId && (w.flags[id]! & (BodyFlag.Player | BodyFlag.Anchor)) !== 0;
+      const alive = (w.flags[id]! & BodyFlag.Alive) !== 0;
+      const v = this.vis[id] ?? null;
+      let rec = this.indicators.get(id) ?? null;
+      if (!important || !alive || !v) { if (rec) rec.el.style.display = 'none'; continue; }
+      p.copy(v.obj.position); p.y += 0.6;
+      const cam = p.clone().applyMatrix4(this.camera.matrixWorldInverse); // camera space (-z forward)
+      const behind = cam.z > -0.05;
+      const ndc = p.project(this.camera);
+      let dx = ndc.x, dy = ndc.y;
+      if (behind) { dx = -cam.x; dy = cam.y; } // behind: use camera-space direction
+      const onScreen = !behind && Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+      if (onScreen) { if (rec) rec.el.style.display = 'none'; continue; }
+      // clamp the direction to the [-1,1] NDC box edge, then to screen px with a margin
+      const k = 1 / Math.max(Math.abs(dx), Math.abs(dy), 1e-4);
+      const ex = dx * k, ey = dy * k;
+      const sx = Math.max(margin, Math.min(cw - margin, (ex * 0.5 + 0.5) * cw));
+      const sy = Math.max(margin, Math.min(ch - margin, (-ey * 0.5 + 0.5) * ch));
+      if (!rec) { rec = this.makeIndicator(); this.indicators.set(id, rec); this.indicatorRoot.appendChild(rec.el); }
+      rec.el.style.display = 'block';
+      rec.el.style.left = sx + 'px';
+      rec.el.style.top = sy + 'px';
+      const ang = Math.atan2(sy - ch / 2, sx - cw / 2); // point outward toward the body
+      rec.el.style.transform = `translate(-50%,-50%) rotate(${ang}rad)`;
+      const color = (w.flags[id]! & BodyFlag.Anchor) !== 0 ? ANCHOR_COLOR : this.bodyColorFor(w, id);
+      rec.tri.style.borderLeftColor = '#' + color.toString(16).padStart(6, '0');
+    }
+  }
+
+  /** Build one pooled edge-arrow element (a CSS triangle pointing +X, rotated per frame). */
+  private makeIndicator(): { el: HTMLElement; tri: HTMLElement } {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:absolute;width:0;height:0';
+    const tri = document.createElement('div');
+    tri.style.cssText = 'width:0;height:0;border-top:11px solid transparent;border-bottom:11px solid transparent;border-left:17px solid #fff;filter:drop-shadow(0 0 5px rgba(0,0,0,.6))';
+    el.appendChild(tri);
+    return { el, tri };
   }
 
   // ==========================================================================
@@ -726,6 +1020,7 @@ export class Renderer {
    * Reveal is purely cosmetic; collision is sim-truth regardless of look.
    */
   private updateCoalescence(anchorY: number): void {
+    if (this.dungeonActive) return; // dungeon tiles replace the abstract floor reveal
     if (this.bands.length === 0) return;
     // Spacing between strata surfaces (the "one floor up" unit). Derived from the two
     // lowest bands; falls back to 6 m (the tower's FLOOR_HEIGHT) if only one exists.
@@ -745,7 +1040,7 @@ export class Renderer {
         band.wire.visible = false;
         band.solid.visible = true;
         const depth = clamp01(-rel / 4); // 0 at your floor → 1 about 4 floors down
-        const col = lerpHex(COLORS.wall, 0x0a0a14, depth * 0.85);
+        const col = lerpHex(this.style.wall, this.style.belowDark, depth * 0.85);
         for (const m of band.solidMats) {
           m.opacity = 1;
           m.color.setHex(col);
@@ -758,14 +1053,14 @@ export class Renderer {
         (band.wire.material as THREE.LineDashedMaterial).opacity = (1 - reveal) * 0.3;
         band.wire.visible = reveal < 0.999;
         const lit = reveal * reveal;
-        const col = lerpHex(COLORS.wall, COLORS.lit, lit * 0.5);
+        const col = lerpHex(this.style.wall, this.style.lit, lit * 0.5);
         for (const m of band.solidMats) {
           // keep the floor above SEE-THROUGH: it only approaches ~0.6 opacity right as
           // you arrive (reveal→1), staying a translucent ghost most of the approach so
           // it never blocks the view of your own floor.
           m.opacity = 0.02 + 0.58 * (reveal * reveal);
           m.color.setHex(col);
-          m.emissive.setHex(lerpHex(0x000000, COLORS.lit, lit * 0.35));
+          m.emissive.setHex(lerpHex(0x000000, this.style.lit, lit * 0.35));
         }
         band.solid.visible = reveal > 0.02;
       } else {
@@ -897,9 +1192,43 @@ export class Renderer {
     return new THREE.Line(geo, new THREE.LineDashedMaterial({ color: col, dashSize: 0.25, gapSize: 0.2 })).computeLineDistances();
   }
 
+  /**
+   * FRAMING BIAS (boss #1/#2): ease a small offset that slides the camera target off the
+   * player toward the centroid of the EXPLORED dungeon cells around them, capped at
+   * FRAME_BIAS_MAX. At an EDGE spawn the player sits against the perimeter wall and the
+   * room opens to one side; a naive player-centered, +Z-looking camera then frames the
+   * void → an all-black opening. Pulling the target toward the lit centroid guarantees the
+   * revealed dungeon is on screen. View-only; reads only the reveal state. No-op without a
+   * dungeon (the abstract box tower frames fine player-centered).
+   */
+  private updateFrameBias(localPos: { x: number; y: number; z: number }, dt: number): void {
+    let tx = 0, tz = 0;
+    if (this.dungeon && FRAME_BIAS_MAX > 0) {
+      const f = this.dungeon.exploredFrameNear(localPos.x, localPos.y, localPos.z);
+      if (f) {
+        // Slide the target toward the lit-cell centroid in BOTH ground axes, capped at
+        // FRAME_BIAS_MAX so the player stays in frame.
+        const ox = f.x - localPos.x, oz = f.z - localPos.z;
+        const len = Math.hypot(ox, oz);
+        if (len > 1e-3) {
+          const m = Math.min(FRAME_BIAS_MAX, len);
+          tx = (ox / len) * m; tz = (oz / len) * m;
+        }
+      }
+    }
+    // SNAP on the very first framed frame so the OPENING view is already on the lit room
+    // (no 1-second slide); ease thereafter.
+    if (!this.camReady) { this.frameBiasX = tx; this.frameBiasZ = tz; return; }
+    const k = 1 - Math.exp(-FRAME_BIAS_RATE * dt);
+    this.frameBiasX += (tx - this.frameBiasX) * k;
+    this.frameBiasZ += (tz - this.frameBiasZ) * k;
+  }
+
   private updateCamera(dt: number, wsum: number, cx: number, cy: number, cz: number, minX: number, maxX: number, minZ: number, maxZ: number): void {
-    if (wsum <= 0) { this.renderer.render(this.scene, this.camera); return; }
-    const target = new THREE.Vector3(cx / wsum, cy / wsum, cz / wsum);
+    if (wsum <= 0) { this.composer.render(); return; }
+    // bias the target toward the explored-room centroid so the opening view frames the lit
+    // dungeon, not the perimeter void (boss #1/#2). The bias is itself eased in updateFrameBias.
+    const target = new THREE.Vector3(cx / wsum + this.frameBiasX, cy / wsum, cz / wsum + this.frameBiasZ);
     if (!this.camReady) { this.camTarget.copy(target); this.camReady = true; }
     // FRAMERATE-INDEPENDENT asymmetric smoothing: factor = 1 − e^(−rate·dt) converges
     // identically per second at any refresh (the old per-frame lerp(0.18/0.10) was
@@ -920,7 +1249,10 @@ export class Renderer {
       this.panZ += (leadZ - this.panZ) * k;
     }
 
-    // spread-driven dolly × user wheel zoom, clamped to an absolute distance range
+    // DOLLY × user wheel zoom, clamped to an absolute range. The camera centers only on the
+    // local player (extent≈0), so the opening dolly sits at CAM_D_CLOSE — a TIGHT framing that
+    // fills the screen with the player's lit room (the 30×30 dungeon is a sparse top-down map;
+    // a far dolly shrinks the room into a speck adrift in void, which read as "black on load").
     const extent = Math.max(maxX - minX, maxZ - minZ, 0);
     const baseDist = Math.min(CAM_D_FAR, CAM_D_CLOSE + extent * 0.9);
     const wantDist = Math.min(CAM_DIST_MAX, Math.max(CAM_DIST_MIN, baseDist * this.userZoom));
@@ -929,9 +1261,13 @@ export class Renderer {
     // TRUE 55° pitch: offset (0, D·sin55, D·cos55) and lookAt the (panned) target
     // EXACTLY — pitch = atan(0.819/0.574) = 54.97° ≈ 55°. The 42%-up framing is a
     // projection SHIFT via setViewOffset in resize() (see CAM_SIN55/FRAME_SHIFT docs).
+    // Orbit the player at the focus heading (docs/11): rotate the ground offset (0, D·cos55)
+    // around Y by focusYaw. focusYaw 0 = the shipped +Z view; camera-forward = (−sin,−cos)
+    // exactly matches the input's forwardDir, so "W" always goes up the screen.
     const D = this.camDist;
     const fx = this.camTarget.x + this.panX, fy = this.camTarget.y, fz = this.camTarget.z + this.panZ;
-    this.camera.position.set(fx, fy + D * CAM_SIN55, fz + D * CAM_COS55);
+    const gr = D * CAM_COS55;
+    this.camera.position.set(fx + Math.sin(this.focusYaw) * gr, fy + D * CAM_SIN55, fz + Math.cos(this.focusYaw) * gr);
     this.camera.lookAt(fx, fy, fz);
 
     // SCREEN SHAKE (docs/07 §1.7): offset = trauma² · maxOffset · cosmetic-noise.
@@ -947,8 +1283,21 @@ export class Renderer {
     }
   }
 
-  /** Top-center Anchor Status: HEIGHT (=score, COMMITTED), state word, health arc. */
-  private updateHud(w: WorldState, anchorId: number): void {
+  /** Top-center Anchor Status: HEIGHT (=score, COMMITTED), state word, health arc.
+   *  Plus the LOCAL-PLAYER health pill (bottom-right). Both pure readers of WorldState. */
+  private updateHud(w: WorldState, anchorId: number, localId = -1): void {
+    // LOCAL PLAYER HEALTH (independent of the Anchor block below — always update if alive).
+    if (this.localHud && localId >= 0 && localId < w.count && (w.flags[localId]! & BodyFlag.Alive) !== 0) {
+      const lhp = Math.max(0, Math.min(100, toFloat(fromRaw(w.health[localId]!))));
+      const col = lhp > 50 ? '#6cff8a' : lhp > 25 ? '#ffb24f' : '#ff5a6e';
+      this.localHud.bar.style.width = lhp + '%';
+      this.localHud.bar.style.background = col;
+      this.localHud.num.textContent = String(Math.round(lhp));
+      this.localHud.num.style.color = col;
+      this.localHud.root.style.display = 'block';
+    } else if (this.localHud) {
+      this.localHud.root.style.display = 'none';
+    }
     if (!this.hud) return;
     if (anchorId < 0 || anchorId >= w.count) return;
     // Prefer the COMMITTED standing (the actual score) when available; else live Y.
@@ -1021,6 +1370,12 @@ export class Renderer {
     app.appendChild(root);
     this.hud = { root, height, state, health };
 
+    // off-screen crew-indicator layer (edge arrows pointing to off-screen players/Anchor)
+    const ind = document.createElement('div');
+    ind.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5;overflow:hidden';
+    app.appendChild(ind);
+    this.indicatorRoot = ind;
+
     const banner = document.createElement('div');
     banner.style.cssText = 'position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);font-family:system-ui;font-weight:800;font-size:48px;color:#ffd23f;text-shadow:0 4px 24px #000;display:none;pointer-events:none';
     app.appendChild(banner);
@@ -1044,6 +1399,33 @@ export class Renderer {
       'hold <b>K</b> to grab &amp; <b>release</b> to throw, <b>E</b> for your role ability, <b>Q</b> to plant/recall.</span>';
     app.appendChild(onboard);
     this.onboard = onboard;
+
+    // LOCAL-PLAYER HEALTH (bottom-right): a compact "YOU" health pill in the same dark
+    // blurred-glass style as the Anchor panel — so the player can read their own HP at a
+    // glance without it crowding the Anchor score (top) or controls (bottom-left). Pure
+    // reader of w.health[localId].
+    const lh = document.createElement('div');
+    lh.style.cssText = 'position:fixed;right:16px;bottom:16px;font-family:system-ui;color:#cdd;background:rgba(10,10,22,0.72);padding:8px 12px;border-radius:12px;pointer-events:none;backdrop-filter:blur(6px);min-width:128px;text-align:left';
+    const lhLabel = document.createElement('div');
+    lhLabel.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;font-size:10px;letter-spacing:.16em;opacity:.7';
+    const lhTag = document.createElement('span'); lhTag.textContent = 'YOU · HEALTH';
+    const lhNum = document.createElement('span'); lhNum.style.cssText = 'font-size:13px;font-weight:800;letter-spacing:0;opacity:1;color:#6cff8a'; lhNum.textContent = '100';
+    lhLabel.append(lhTag, lhNum);
+    const lhBarBg = document.createElement('div'); lhBarBg.style.cssText = 'margin-top:5px;width:100%;height:7px;border-radius:4px;background:#ffffff1c;overflow:hidden';
+    const lhBar = document.createElement('div'); lhBar.style.cssText = 'height:100%;width:100%;background:#6cff8a;transition:width .15s,background .15s'; lhBarBg.appendChild(lhBar);
+    lh.append(lhLabel, lhBarBg);
+    app.appendChild(lh);
+    this.localHud = { root: lh, bar: lhBar, num: lhNum };
+  }
+
+  /**
+   * Attach the INVENTORY HOTBAR + contextual HINT overlay (docs/12). Pure reader of the
+   * sim's per-player inventory + targeting state; `localCrew` only picks the accent color.
+   * Kept as its own method (and its own file, src/render/hotbar.ts) so the renderer edit
+   * stays minimal. Call once by main after attachHud.
+   */
+  attachHotbar(app: HTMLElement, localCrew: number): void {
+    this.hotbar = new Hotbar(app, localCrew);
   }
 
   /** Crew identity colors (index = crewId). Crew 0 = the local crew (warm gold-blue). */
@@ -1054,6 +1436,7 @@ export class Renderer {
   private resize(): void {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);
+    this.composer.setSize(w, h); // resizes RenderPass/SMAA/bloom targets too
     this.camera.aspect = w / h;
     // 42%-up FRAMING (07 §1.3): render a same-size window shifted UP by 8% of the
     // image height inside a virtual larger frustum — all content moves DOWN 8%, so

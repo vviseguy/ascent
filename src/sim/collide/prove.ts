@@ -24,6 +24,13 @@
 //             no residual overlap, and two independent runs produce the identical
 //             final hash.
 //
+//   PROOF 5 — AUTO STEP-UP. A body walking into a ledge of height <= MAX_STEP_HEIGHT
+//             climbs ONTO it (feet end on the ledge top, body past the near face),
+//             a body walking into a wall TALLER than MAX_STEP_HEIGHT is BLOCKED (feet
+//             stay low, center stays outside the wall face), a body climbs a whole
+//             flight of full-height riser treads (the tower's stair model), and the
+//             whole thing is DETERMINISTIC (identical per-tick hash over two runs).
+//
 // All "physics" here is the real applyCollision; the only float is the seeded test
 // PRNG used to author scenes (never fed into the sim as runtime float).
 // ============================================================================
@@ -31,11 +38,14 @@
 import { createWorld, spawnBody, BodyFlag, MassClass, type WorldState } from '../world/state.ts';
 import { hashWorld } from '../world/hash.ts';
 import { GridIndex } from '../spatial/grid.ts';
+import { motionPhase } from '../world/step.ts';
+import { NEUTRAL_INPUT, type PlayerInput } from '../world/input.ts';
 import {
   type Fixed,
   fromInt, fromFloatConst, toRaw, fromRaw, add, mul, sub, abs, gt, lt, ZERO, ONE_RAW, idivFloor,
 } from '../fixed/fixed.ts';
 import { applyCollision, makeArena, flatGround, type Terrain } from './index.ts';
+import { makeBox, STEP_CLIMB_RATE } from './terrain.ts';
 
 // ---- seeded float PRNG (test scene authoring only; never enters the sim) -----
 function mulberry32(seed: number): () => number {
@@ -333,10 +343,163 @@ function makeCluster(seed: number, n: number): WorldState {
   if (!p4) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// PROOF 5 — auto step-up: SMOOTH multi-tick climb, blocked by tall walls,
+// deterministic. Drives the body through the REAL motion path (motionPhase:
+// gravity + the velocity controller) with a HELD STICK, exactly as the game does,
+// and starts it GROUNDED ON A SLAB — the actual "walk into a step" scenario. The
+// old harness integrated raw vx with no gravity, which hid the two real bugs:
+//   (1) a grounded body slid flush against a riser was never re-detected as a step
+//       (it wedged forever), and (2) the snap-to-top read as a teleport. This proof
+// captures the per-tick FEET trajectory and asserts a rate-limited, penetration-free
+// continuous climb.
+// ---------------------------------------------------------------------------
+{
+  const HH = fromFloatConst(0.9); // player half-height
+  const R = fromFloatConst(0.4); // player radius
+  const RISE = fromFloatConst(0.5); // tower stair rise per tread (game/tower.ts)
+  const TREAD = fromFloatConst(0.9); // tower stair tread depth
+  // a held stick toward +X — the real game input (motionPhase drives the controller)
+  const PUSH_X: PlayerInput = { ...NEUTRAL_INPUT, moveX: 1024, moveZ: 0 };
+
+  // Drive a body grounded on a starting slab, walking +X into `terrain` for `ticks`
+  // ticks via the REAL motionPhase (gravity + controller) then collision. Returns the
+  // per-tick feet-Y trajectory plus the final world. groundY is deep (like the tower)
+  // so the slab/treads — not a shallow ground plane — hold the body up.
+  function walkInto(terrain: Terrain, ticks: number): { w: WorldState; id: number; feet: number[] } {
+    const w = createWorld(8);
+    const id = spawnBody(w, {
+      px: fromInt(-2), py: HH, pz: ZERO, // feet at y=0, resting on the starting slab
+      radius: R, halfHeight: HH, massClass: MassClass.Player, flags: BodyFlag.Player,
+    });
+    const inputs: (PlayerInput | undefined)[] = [PUSH_X];
+    const feet: number[] = [];
+    for (let t = 0; t < ticks; t++) {
+      motionPhase(w, inputs, fromRaw(terrain.groundY));
+      grid.rebuild(w);
+      applyCollision(w, grid, terrain);
+      w.tick = (w.tick + 1) | 0;
+      feet.push(w.py[id]! - toRaw(HH));
+    }
+    return { w, id, feet };
+  }
+
+  // A starting slab the body rests on (top at y=0), spanning x∈[-6,0].
+  const slab = makeBox(fromInt(-6), fromInt(-2), fromInt(-5), ZERO, ZERO, fromInt(5));
+  const DEEP = toRaw(fromInt(-30)); // ground far below — only the slab/treads hold it up
+
+  // (5a) SINGLE STEP, SMOOTH: a 0.5 u ledge (the tower RISE) butted against the slab.
+  // The body must end standing on top AND climb it over MULTIPLE ticks with NO single
+  // tick rising more than STEP_CLIMB_RATE (+ a 1-raw rounding slop) — i.e. NOT a snap.
+  // The ledge top tread runs far in +X so a brisk walker stays ON it for the window
+  // (a finite tread would let the body simply walk off the far end into the void).
+  const ledge: Terrain = {
+    groundY: DEEP,
+    solids: [slab, makeBox(ZERO, fromInt(-2), fromInt(-5), fromInt(40), RISE, fromInt(5))],
+  };
+  const climb = walkInto(ledge, 60);
+  const climbFeet = climb.feet[climb.feet.length - 1]!;
+  const climbedUp = lt(abs(sub(fromRaw(climbFeet), RISE)), fromFloatConst(0.02));
+  const climbedOver = climb.w.px[climb.id]! > toRaw(fromFloatConst(0.2));
+  // smoothness: the largest single-tick UPWARD feet delta is at most one climb budget.
+  const rateRaw = toRaw(STEP_CLIMB_RATE) + 1; // +1 raw (1/65536 u) for fixed rounding
+  let maxRise = 0;
+  let climbTicks = 0; // ticks where the feet actually rose (a multi-tick ascent)
+  for (let t = 1; t < climb.feet.length; t++) {
+    const d = climb.feet[t]! - climb.feet[t - 1]!;
+    if (d > maxRise) maxRise = d;
+    if (d > 1) climbTicks++;
+  }
+  const smooth = maxRise <= rateRaw; // never jumps more than the per-tick budget
+  const multiTick = climbTicks >= 2; // a single 0.5 u step takes >=2 ticks (not a snap)
+  const p5a = climbedUp && climbedOver && smooth && multiTick && Number.isFinite(climb.w.px[climb.id]!);
+
+  // (5b) BLOCK: a 1.0 u wall (>> MAX_STEP_HEIGHT) — body stays low, outside the face,
+  // and NEVER rises even a little (no partial creep up a wall).
+  const wall: Terrain = {
+    groundY: DEEP,
+    solids: [slab, makeBox(ZERO, fromInt(-2), fromInt(-5), fromInt(40), fromInt(1), fromInt(5))],
+  };
+  const blocked = walkInto(wall, 120);
+  let wallMaxFeet = -(1 << 30);
+  for (const f of blocked.feet) if (f > wallMaxFeet) wallMaxFeet = f;
+  const stayedLow = lt(abs(fromRaw(wallMaxFeet)), fromFloatConst(0.02)); // feet never left the floor
+  const stayedOut = blocked.w.px[blocked.id]! < toRaw(sub(ZERO, sub(R, fromFloatConst(0.05)))); // center < face - R + slop
+  const p5b = stayedLow && stayedOut;
+
+  // (5c) STAIRCASE, CONTINUOUS: 6 full-height riser treads rising 0.5 u each (the
+  // tower's switchback model), butted onto the slab. The body must climb the WHOLE
+  // flight continuously: end near the top tread, NEVER descend (no fall-through), and
+  // NEVER penetrate a tread (feet never below the tread top it stands within — checked
+  // as: feet always >= the highest already-reached tread-top minus a slop).
+  const stairSolids = [slab];
+  for (let k = 0; k < 6; k++) {
+    const x0 = mul(fromInt(k), TREAD);
+    // each riser tread extends far in +X (it underlies every HIGHER tread too); the
+    // TOP tread runs to x≈+45 so the walker parks on it for the measurement window
+    // rather than striding off the far end into the void.
+    const x1 = add(x0, fromInt(45));
+    const top = mul(fromInt(k + 1), RISE);
+    stairSolids.push(makeBox(x0, fromInt(-2), fromInt(-5), x1, top, fromInt(5)));
+  }
+  const stairs: Terrain = { groundY: DEEP, solids: stairSolids };
+  const climbedStairs = walkInto(stairs, 140);
+  const stairFeet = climbedStairs.feet[climbedStairs.feet.length - 1]!;
+  const reachedTop = stairFeet > toRaw(fromFloatConst(2.9)); // near the top tread (3 u)
+  // monotone-ish: feet never drop more than a rounding slop below the running max (no
+  // fall-through / no pop-down), and each step climbs at the rate-limited rate.
+  let runMax = climbedStairs.feet[0]!;
+  let neverFell = true;
+  let stairMaxRise = 0;
+  const slopRaw = ONE_RAW >> 6; // ~0.016 u tolerance
+  for (let t = 1; t < climbedStairs.feet.length; t++) {
+    const f = climbedStairs.feet[t]!;
+    if (f < runMax - slopRaw) neverFell = false;
+    if (f > runMax) runMax = f;
+    const d = f - climbedStairs.feet[t - 1]!;
+    if (d > stairMaxRise) stairMaxRise = d;
+  }
+  const stairSmooth = stairMaxRise <= rateRaw;
+  const p5c = reachedTop && neverFell && stairSmooth;
+
+  // (5d) DETERMINISM: the staircase climb twice ⇒ identical per-tick hash sequence.
+  function stairHashes(): number[] {
+    const w = createWorld(8);
+    const id = spawnBody(w, {
+      px: fromInt(-2), py: HH, pz: ZERO,
+      radius: R, halfHeight: HH, massClass: MassClass.Player, flags: BodyFlag.Player,
+    });
+    void id;
+    const inputs: (PlayerInput | undefined)[] = [PUSH_X];
+    const hs: number[] = [hashWorld(w)];
+    for (let t = 0; t < 300; t++) {
+      motionPhase(w, inputs, fromRaw(stairs.groundY));
+      grid.rebuild(w);
+      applyCollision(w, grid, stairs);
+      w.tick = (w.tick + 1) | 0;
+      hs.push(hashWorld(w));
+    }
+    return hs;
+  }
+  const da = stairHashes();
+  const db = stairHashes();
+  let p5d = da.length === db.length;
+  if (p5d) for (let i = 0; i < da.length; i++) if (da[i] !== db[i]) { p5d = false; break; }
+
+  const p5 = p5a && p5b && p5c && p5d;
+  log(`PROOF 5 auto step-up (smooth): ${p5 ? 'PASS' : 'FAIL'}`);
+  log(`         (smoothStep=${p5a}, blocked>step=${p5b}, staircase=${p5c}, deterministic=${p5d})`);
+  log(`         [diag] singleStep climbTicks=${climbTicks} maxRise=${(maxRise / 65536).toFixed(4)}u` +
+    ` (budget=${(rateRaw / 65536).toFixed(4)}u); stairs finalFeet=${(stairFeet / 65536).toFixed(3)}u` +
+    ` maxRise=${(stairMaxRise / 65536).toFixed(4)}u`);
+  if (!p5) failures++;
+}
+
 log('----------------------------------------------------------------');
 if (failures === 0) {
   log('RESULT: PASS — collision separates bodies (heavier moves less), keeps them');
-  log('        out of terrain, settles dense clusters without NaN, and is deterministic.');
+  log('        out of terrain, settles dense clusters without NaN, climbs low ledges');
+  log('        (auto step-up) while walls still block, and is deterministic.');
   (globalThis as { process?: { exit(code: number): void } }).process?.exit(0);
 } else {
   log(`RESULT: FAIL — ${failures} property(ies) failed.`);

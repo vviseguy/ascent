@@ -87,8 +87,9 @@ describe('generator structure', () => {
   });
 
   it('openness 0 => only spines + perimeter; openness 1 => (near) complete grid', () => {
-    const tight = generateFloor(cfg({ gridSize: 8, openness: 0 }));
-    const open = generateFloor(cfg({ gridSize: 8, openness: 1 }));
+    // legacy pure-maze behaviour: rooms OFF so openness alone drives the edge count.
+    const tight = generateFloor(cfg({ gridSize: 8, openness: 0, rooms: false }));
+    const open = generateFloor(cfg({ gridSize: 8, openness: 1, rooms: false }));
     // complete 4-neighbour grid edge count = w*(h-1) + h*(w-1)
     const complete = 8 * 7 + 8 * 7;
     expect(open.edges.length).toBe(complete);
@@ -101,6 +102,96 @@ describe('generator structure', () => {
       expect(c.chunkType).toBeGreaterThanOrEqual(0);
       expect(c.chunkType).toBeLessThan(3);
     }
+  });
+});
+
+describe('rooms-and-corridors layout (rooms default ON)', () => {
+  it('carves non-overlapping rectangular rooms within the interior band', () => {
+    const f = generateFloor(cfg({ gridSize: 12, seed: 0xabcn }));
+    expect(f.rooms).toBeDefined();
+    expect(f.rooms!.length).toBeGreaterThan(0);
+    for (const r of f.rooms!) {
+      // rooms stay inside the interior band (perimeter row/col left as corridor)
+      expect(r.x0).toBeGreaterThanOrEqual(1);
+      expect(r.y0).toBeGreaterThanOrEqual(1);
+      expect(r.x1).toBeLessThanOrEqual(f.width - 2);
+      expect(r.y1).toBeLessThanOrEqual(f.height - 2);
+      expect(r.x1).toBeGreaterThanOrEqual(r.x0);
+      expect(r.y1).toBeGreaterThanOrEqual(r.y0);
+    }
+    // rooms do not overlap each other
+    for (let i = 0; i < f.rooms!.length; i++) {
+      for (let j = i + 1; j < f.rooms!.length; j++) {
+        const a = f.rooms![i]!;
+        const b = f.rooms![j]!;
+        const disjoint = a.x1 < b.x0 || b.x1 < a.x0 || a.y1 < b.y0 || b.y1 < a.y0;
+        expect(disjoint).toBe(true);
+      }
+    }
+  });
+
+  it('classifies every cell with a CellType and back-references its room', () => {
+    const f = generateFloor(cfg({ gridSize: 12, seed: 0xabcn }));
+    const valid = new Set(['ROOM', 'CORRIDOR', 'DOORWAY', 'WALL', 'VOID']);
+    for (const c of f.cells) {
+      expect(valid.has(c.cellType!)).toBe(true);
+      if (c.roomId !== undefined && c.roomId >= 0) {
+        // a cell with a roomId must lie within that room's bounds
+        const r = f.rooms![c.roomId]!;
+        expect(c.x).toBeGreaterThanOrEqual(r.x0);
+        expect(c.x).toBeLessThanOrEqual(r.x1);
+        expect(c.y).toBeGreaterThanOrEqual(r.y0);
+        expect(c.y).toBeLessThanOrEqual(r.y1);
+        expect(['ROOM', 'DOORWAY']).toContain(c.cellType);
+      }
+    }
+    // at least some cells read as ROOM and some as CORRIDOR (it's a dungeon, not a blob)
+    const types = f.cells.map((c) => c.cellType);
+    expect(types.filter((t) => t === 'ROOM').length).toBeGreaterThan(0);
+    expect(types.filter((t) => t === 'CORRIDOR').length).toBeGreaterThan(0);
+  });
+
+  it('rooms=false restores the legacy maze (no rooms field, no cellType)', () => {
+    const f = generateFloor(cfg({ gridSize: 12, rooms: false }));
+    expect(f.rooms).toBeUndefined();
+    for (const c of f.cells) expect(c.cellType).toBeUndefined();
+  });
+
+  it('room interiors are connected: every interior adjacency has a traversal edge', () => {
+    // openRoomInteriors adds WALK edges; if a spine already gated an interior seam the
+    // gate is kept (still passable via the fallback layer) — so we assert CONNECTED,
+    // and that the vast majority of interior seams are clean WALK (rooms read as open).
+    const f = generateFloor(cfg({ gridSize: 14, seed: 0x99n }));
+    const all = new Set(f.edges.map((e) => `${e.a}-${e.b}`));
+    const walk = new Set(f.edges.filter((e) => e.kind === 'WALK').map((e) => `${e.a}-${e.b}`));
+    let total = 0;
+    let walkCount = 0;
+    for (const r of f.rooms!) {
+      for (let y = r.y0; y <= r.y1; y++) {
+        for (let x = r.x0; x <= r.x1; x++) {
+          const a = y * f.width + x;
+          const check = (b: number) => {
+            const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+            expect(all.has(key)).toBe(true); // connected
+            total++;
+            if (walk.has(key)) walkCount++;
+          };
+          if (x + 1 <= r.x1) check(a + 1);
+          if (y + 1 <= r.y1) check(a + f.width);
+        }
+      }
+    }
+    // rooms should be overwhelmingly open WALK (gated interior seams are rare spine hits)
+    if (total > 0) expect(walkCount / total).toBeGreaterThan(0.8);
+  });
+
+  it('DETERMINISM+VARIETY: same seed identical, different seeds differ in layout', () => {
+    const base = (seed: bigint) => generateFloor(cfg({ gridSize: 12, seed }));
+    expect(JSON.stringify(base(7n))).toEqual(JSON.stringify(base(7n))); // reproducible
+    // different seeds produce different ROOM layouts (not just edge churn)
+    const roomsOf = (seed: bigint) => JSON.stringify(base(seed).rooms);
+    const layouts = new Set([roomsOf(1n), roomsOf(2n), roomsOf(3n), roomsOf(4n), roomsOf(5n)]);
+    expect(layouts.size).toBeGreaterThan(1);
   });
 });
 

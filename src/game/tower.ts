@@ -14,16 +14,18 @@
 //     above the stratum-below's stair are omitted, leaving a hole you ascend
 //     through (and a designed interior drop back down onto the stair).
 //   - EXIT + STAIRS: each stratum (except the top) gets an Anchor-climbable
-//     SWITCHBACK STAIR on two adjacent exit-row cells (floor.exits — the top row).
-//     Two 1.6 u-wide lanes: an outer flight (vs the perimeter wall) of
-//     STEPS_PER_FLIGHT treads rising RISE each, a full-width turn landing, then an
-//     inner flight back, topping out FLUSH with the next stratum's surface. Every
-//     rise is 0.5 u so the Anchor (jump apex ≈ 0.71 u) can hop each step solo —
-//     the climb verb exists without ever needing a carry (carries become the FAST
-//     route once real chasms land, H2). Guard rails (RAIL_H lips, full-height
-//     boxes) wall the open sides so a mid-climb shove isn't a trivial ring-out.
-//     Strata alternate stair side (west/east end of the exit row) so consecutive
-//     stairs/holes never overlap (needs grid width >= 4; the game uses 5).
+//     STRAIGHT STAIRCASE on two adjacent exit-row cells (floor.exits — the top row),
+//     shaped to drop the KayKit `stairs` tile onto it. STEPS_TOTAL full-height riser
+//     treads (each a solid box from the floor up to its top — no floating geometry)
+//     march along +Z (toward the exit edge), rising RISE each, topping out FLUSH with
+//     the next stratum's surface directly under the ascent hole. Every rise is 0.5 u
+//     (<= the auto step-up window) so the Anchor (jump apex ≈ 0.71 u) walks straight
+//     up with the existing smooth step-up — no jump needed, no carry needed (carries
+//     become the FAST route once real chasms land, H2). Low guard-rail lips wall the
+//     two open run sides so a mid-climb shove isn't a trivial ring-out. Strata
+//     alternate stair side (west/east end of the exit row) so consecutive stairs/holes
+//     never overlap (needs grid width >= 4; the game uses GAME_GRID_SIZE).
+//     The straight run replaced an older switchback (matched no off-the-shelf tile).
 //   - A WALK edge between two adjacent cells = flush tiles (walk across). A GAP
 //     edge = flush for now (real chasms are a separate backlog item, H2).
 //     BREAK/BUTTON/WEIGHT and MISSING edges become a low lip wall between tiles
@@ -45,6 +47,13 @@
 // shell around your current airspace in the see-through next-floor style: a
 // deliberate visibility win, not a bug.
 //
+// KAYKIT STAIR PLACEMENT (view-only): CompiledTower.stairs[i] exposes the straight
+// staircase's geometry so the renderer can scale+drop the KayKit `stairs.glb`
+// (native 5.0w × 5.1h × 4.0d, ascending its local +Z): originX/Y/Z (raw Q16.16) is
+// the run's BASE corner-ish anchor, dirX/dirZ the unit ascent direction in plan,
+// width/run/rise (raw) the box to fit the model to, and treadCount/treadRise the
+// step cadence. See StairInfo for the exact contract.
+//
 // GEOMETRY-LEVEL SOLVABILITY: src/game/route-check.ts independently re-proves on
 // the compiled AABBs that an Anchor probe can path entry → top (GAPS.md H3);
 // src/game/prove.ts runs it across many seeds plus a real input-driven climb.
@@ -55,10 +64,55 @@
 
 import { type Fixed, fromInt, fromFloatConst, toRaw, add, mul, sub } from '../sim/fixed/fixed.ts';
 import { type AABB, type Terrain, makeBox } from '../sim/collide/terrain.ts';
-import { type Floor, cellXY, cellId, edgeKey } from '../floor/types.ts';
+import { type Floor, type CellType, cellXY, cellId, edgeKey } from '../floor/types.ts';
 
-/** World size of one floor cell (meters). */
-export const CELL_SIZE: Fixed = fromInt(3);
+/**
+ * World size of one floor cell (meters). Tuned 3 -> 4 -> 4.5 to enlarge every stratum's
+ * playable footprint. At the game's 5x5 grid the floor spans 5*CELL_SIZE across:
+ *   - original 3.0  -> 15.0 u  (225 u^2)
+ *   - prior    4.0  -> 20.0 u  (400 u^2, 1.78x)
+ *   - now      4.5  -> 22.5 u  (506 u^2, ~2.25x the original)
+ * giving crews ~2.25x the original area to move and route around (the user's "make it
+ * clearly bigger" ask). A larger grid (renderer-driven later) scales linearly from here.
+ *
+ * INVARIANT this must preserve: the STRAIGHT stair's run length along Z
+ * (STEPS_TOTAL*TREAD = 12*0.9 = 10.8 u) must fit inside the stair's Z footprint. The
+ * run climbs from the interior toward the +Z exit edge across ceil(10.8/4.5) ≈ 3 cell
+ * rows; at GAME_GRID_SIZE (height 8) there is ample depth, and its VERTICAL math is
+ * untouched (RISE, FLOOR_HEIGHT, STEPS_TOTAL all unchanged) — the Anchor route-check
+ * stays valid. Kept on a 0.5 grid (fromFloatConst, exact in Q16.16) so no float
+ * divergence leaks into the sim.
+ */
+export const CELL_SIZE: Fixed = fromFloatConst(4.5);
+/**
+ * The square grid size (cells per side) the game compiles every stratum at. The ONE
+ * source of truth for the floor footprint — scene.ts (buildTower) and the proofs
+ * (game/prove.ts, tower.test.ts) all read this so the whole game stays consistent.
+ *
+ * Tuned 5 -> 8 -> 30 (docs/14 §1: "scale toward ~30×30 cells/stratum"). 30 cells across
+ * spans 30*CELL_SIZE = 135 u (~900 cells/stratum, ~14x the box count of the 8×8 floor),
+ * giving crews a real dungeon to explore with large open halls + locked-door puzzles.
+ *
+ * PERF CEILING (measured, Node 22, 5 strata, ~4 bodies — see the build report):
+ *  - per-tick sim.advance ≈ 0.94 ms at 30×30 (8.7k terrain boxes) vs 0.17 ms at 8×8.
+ *    The collision broadphase is O(bodies × solids); a real crew (~4–8 bodies, AoI-
+ *    bounded) stays well under the 16.7 ms/60fps budget. This is the binding runtime cost.
+ *  - one-time scene build at 30×30: generate ≈53 ms, verify ≈7 ms, compile ≈135→~30 ms
+ *    (after the O(1) edge-map fix), geometry route-check ≈400 ms (O(n²) in box count;
+ *    PROOF-time only, never on the hot path). 30×30 is the honest performant ceiling:
+ *    the per-tick budget is fine far beyond it, but the O(n²) build-time route-check is
+ *    what gets heavy, so we cap the game grid here and keep the prove sweep lean.
+ *
+ * INVARIANTS preserved at this size (all independently re-proven by game/prove.ts):
+ *  - Solvability: the floor generator + independent verifier pass for every gridSize
+ *    >= 2 (src/floor/prove.ts fuzzes 2..30), so a wider grid is still guaranteed-
+ *    solvable; the compiled-tower Anchor route (PROOF 7/8) re-confirms it on the AABBs.
+ *  - Stairs: stairPairCols needs width >= 4 for the two stair pairs to stay disjoint;
+ *    at width 30 they are [0,1] and [28,29]. The straight stair's Z run (STEPS_TOTAL*
+ *    TREAD = 10.8 u) climbs toward the +Z exit edge across ~3 of the 30 rows, and the
+ *    VERTICAL stair math (RISE 0.5, FLOOR_HEIGHT 6) is untouched — per-tread step valid.
+ */
+export const GAME_GRID_SIZE = 30;
 /** Vertical spacing between strata floors (meters). */
 export const FLOOR_HEIGHT: Fixed = fromInt(6);
 /** Thickness of a platform slab (meters). */
@@ -69,29 +123,27 @@ const LIP: Fixed = fromFloatConst(0.6);
 const WALL_T: Fixed = fromFloatConst(0.4);
 
 // ---- stair tuning (authoring constants) -------------------------------------
-// RISE <= 0.5 so the Anchor's 0.71 u jump apex clears each step with margin;
-// TREAD >= 0.9 so a body can stand on every step; LANE_W >= 1.6 so two bodies /
-// a carry pair fit a lane. The 6+6 switchback fits a 2-cell (6 u) footprint:
-// 6 treads * 0.9 + 0.6 landing = 6.0 u exactly. If FLOOR_HEIGHT / CELL_SIZE /
-// RISE change, the route-check proof (prove.ts PROOF 7) fails loudly.
-/** Step tread depth along the run (meters). */
+// A STRAIGHT staircase: STEPS_TOTAL full-height riser treads marching along +Z,
+// each rising RISE and TREAD deep. RISE <= MAX_STEP_HEIGHT (0.55) so the auto
+// step-up climbs every tread without a jump (the Anchor's 0.71 u jump apex clears
+// it too); TREAD >= the route-check's minSide (0.8) so EVERY exposed tread top reads
+// as a standable node (the BFS chains base→top through them) AND a body can stand on
+// each step. STEPS_TOTAL*TREAD = the run length. If FLOOR_HEIGHT / RISE / TREAD
+// change, the route-check proof (prove.ts PROOF 7) + the end-to-end climb (PROOF 8)
+// fail loudly. All on a 0.5/0.1 grid → exact in Q16.16, no float divergence.
+/** Step tread depth along the run (meters) — >= route-check minSide so each reads standable. */
 const TREAD: Fixed = fromFloatConst(0.9);
-/** Step rise per tread (meters) — must stay under the Anchor's jump apex. */
+/** Step rise per tread (meters) — must stay <= MAX_STEP_HEIGHT (auto step-up window). */
 const RISE: Fixed = fromFloatConst(0.5);
-/** Clear stair lane width (meters) — two bodies / a carry fit. */
-const LANE_W: Fixed = fromFloatConst(1.6);
+/** Clear stair width across the run (meters) — spans the 2-cell footprint, two bodies fit. */
+const STAIR_W: Fixed = fromFloatConst(3.6);
 /** Guard-rail thickness (meters). */
 const RAIL_T: Fixed = fromFloatConst(0.15);
 /** Guard-rail height above the local tread (meters) — a "low lip". */
 const RAIL_H: Fixed = fromFloatConst(0.6);
-/** Turn-landing depth along the run (meters). */
-const LANDING: Fixed = fromFloatConst(0.6);
 
 /** Total steps to climb one stratum (FLOOR_HEIGHT / RISE — exact: 6 / 0.5 = 12). */
 const STEPS_TOTAL: number = Math.round(toRaw(FLOOR_HEIGHT) / toRaw(RISE));
-/** Steps in the outer (first) flight; the inner flight takes the rest. */
-const STEPS_A: number = STEPS_TOTAL >> 1;
-const STEPS_B: number = STEPS_TOTAL - STEPS_A;
 
 export interface TowerParams {
   /** World Y of the bottom of stratum 0's floor slab (raw Fixed). */
@@ -101,29 +153,109 @@ export interface TowerParams {
 }
 
 /**
- * Proof/view metadata for one emitted stair (raw Fixed coordinates). NOT sim
- * state — the sim only sees the AABBs; this lets proofs drive a body up the
- * stair and lets a future renderer highlight the route.
+ * Proof/view metadata for one emitted STRAIGHT staircase (raw Fixed coordinates,
+ * Q16.16 — the project convention; convert with fromRaw/toFloat on the render side).
+ * NOT sim state — the sim only sees the AABBs; this lets proofs drive a body up the
+ * stair and lets the renderer scale+drop the KayKit `stairs.glb` aligned to it.
+ *
+ * RENDER CONTRACT — to place the model, scale the native KayKit stairs (5.0w × 5.1h
+ * × 4.0d, ascending its local +Z from the origin corner) by (width/5.0, rise/5.1,
+ * run/4.0), rotate so its local +Z maps to (dirX,dirZ) in plan, and anchor its base
+ * corner at (originX, originY, originZ). The run climbs from originZ toward the exit
+ * edge; the body emerges through the ascent hole carved in the stratum above.
  */
 export interface StairInfo {
   /** Stratum the stair rises FROM (absolute index). */
   stratum: number;
-  /** The two exit-row columns the stair occupies (run start col, far col). */
+  /** The two exit-row columns the stair occupies (low-Z col, high-Z col are the same row). */
   cols: [number, number];
-  /** Run direction along X: +1 = ascending toward +X, -1 = toward -X. */
-  dirX: 1 | -1;
-  /** X of the stair's OPEN end (where you enter flight A / step off flight B). */
-  openX: number;
-  /** Z center of the outer lane (flight A, against the perimeter wall). */
-  laneAZ: number;
-  /** Z center of the inner lane (flight B). */
-  laneBZ: number;
-  /** X center of the turn landing (the closed end). */
-  landingX: number;
-  /** Walkable surface Y of the source stratum. */
+  /** Plan ascent direction X component (unit; straight stairs run purely in Z so this is 0). */
+  dirX: 0;
+  /** Plan ascent direction Z component (unit): +1 = ascends toward +Z (the exit edge). */
+  dirZ: 1;
+  /** World X of the run CENTER (raw) — the stair is symmetric about this across its width. */
+  centerX: number;
+  /** World Z of the run's LOW (entry) end (raw) — where the climber steps onto tread 0. */
+  entryZ: number;
+  /** World Z the run TOPS OUT at (raw) — flush under the next stratum's ascent hole. */
+  topZ: number;
+  /** Stair full width across the run (raw) — the X extent of the tread boxes. */
+  width: number;
+  /** Run length along Z (raw) = treadCount * treadRise's tread depth = STEPS_TOTAL*TREAD. */
+  run: number;
+  /** Total rise (raw) = FLOOR_HEIGHT (topY - baseY). */
+  rise: number;
+  /** Number of treads (= STEPS_TOTAL). */
+  treadCount: number;
+  /** Rise per tread (raw) = RISE. */
+  treadRise: number;
+  /** Base corner anchor X (raw) — min X of the tread boxes (centerX - width/2). */
+  originX: number;
+  /** Base corner anchor Y (raw) — the source stratum's walkable surface (baseY). */
+  originY: number;
+  /** Base corner anchor Z (raw) — the run's low end (= entryZ). */
+  originZ: number;
+  /** Walkable surface Y of the source stratum (raw). */
   baseY: number;
-  /** Walkable surface Y the stair tops out at (next stratum's base). */
+  /** Walkable surface Y the stair tops out at — next stratum's base (raw). */
   topY: number;
+}
+
+/**
+ * One cell of the per-stratum LAYOUT grid the renderer consumes to place tiles (e.g.
+ * a KayKit dungeon set). Read-only, deterministic, derived purely from the Floor graph
+ * + the same CELL_SIZE the collision boxes use, so a tile dropped at (x,z) lines up
+ * exactly with the walkable slab under it. All coords are raw Q16.16 world units (the
+ * project convention; convert with fromRaw/toFloat on the render side).
+ */
+export interface CellTile {
+  /** Cell column [0,width) and row [0,height) on the stratum grid. */
+  col: number;
+  row: number;
+  /**
+   * Layout role for tile selection: ROOM (open floor) / CORRIDOR (narrow floor) /
+   * DOORWAY (opening in a room wall) / WALL (solid block) / VOID (no tile). Mirrors the
+   * Floor cell's CellType (defaults to ROOM if the floor predates classification).
+   */
+  type: CellType;
+  /** Room index this cell belongs to (into the stratum's floor.rooms), or -1. */
+  roomId: number;
+  /** True if this cell's slab tile is OMITTED in collision (the ascent hole). */
+  hole: boolean;
+  /** True if this cell is part of this stratum's switchback stair footprint. */
+  stair: boolean;
+  /** World center X of the cell (raw Q16.16). */
+  cx: number;
+  /** World center Z of the cell (raw Q16.16). */
+  cz: number;
+  /**
+   * Which of the cell's four sides face a non-floor neighbour (a VOID/WALL cell, the
+   * grid edge, or a no-edge seam) and therefore want a WALL piece; a DOORWAY/open seam
+   * clears the bit. Bit order: 1=+X(east) 2=-X(west) 4=+Z(north) 8=-Z(south). The
+   * renderer places a wall segment on each set side and a doorway/arch where it's clear
+   * but the cell type is DOORWAY.
+   */
+  wallMask: number;
+}
+
+/**
+ * The full layout grid for ONE stratum — everything the renderer needs to lay tiles:
+ * the grid dimensions, the cell world size, the world Y of the walkable surface, and a
+ * dense row-major array of per-cell tiles (index = row*width + col, matching the
+ * Floor's cellId). Read-only/deterministic.
+ */
+export interface StratumCellGrid {
+  /** Absolute stratum index this grid describes. */
+  stratum: number;
+  /** Grid columns (x) and rows (z). */
+  width: number;
+  height: number;
+  /** Edge length of one cell in world units (raw Q16.16) — equals CELL_SIZE. */
+  cellSize: number;
+  /** World Y of this stratum's walkable surface (raw Q16.16) — the slab top. */
+  surfaceY: number;
+  /** Dense row-major tiles, length width*height, index = row*width + col. */
+  cells: CellTile[];
 }
 
 export interface CompiledTower {
@@ -134,6 +266,40 @@ export interface CompiledTower {
   entryXZ: { x: number; z: number }[];
   /** One stair per non-top stratum (proof/view metadata, raw Fixed coords). */
   stairs: StairInfo[];
+  /**
+   * OPTIONAL per-stratum LAYOUT GRID for the renderer to place dungeon tiles. Indexed
+   * by absolute stratum index (cellGrid[idx]). Additive: existing consumers that only
+   * read terrain/stratumBaseY/entryXZ/stairs are unaffected. Always populated by
+   * compileTower (so it is effectively always present), but typed optional so older
+   * call sites / serialized towers without it still type-check.
+   */
+  cellGrid?: StratumCellGrid[];
+  /**
+   * OPTIONAL puzzle-body spawn list (docs/14 §2): the world positions + ids for every
+   * locked DOOR, KEY, and RUG the floor generator placed, across all strata. scene.ts
+   * spawns a sim body per entry (a solid Door plug / a Key Pickup / a movable Rug). The
+   * doorId binds keys to their doors. Additive: a puzzle-free tower has an empty list.
+   */
+  puzzleSpawns?: PuzzleSpawn[];
+}
+
+/**
+ * One puzzle body to spawn in the compiled tower (docs/14 §2). World coords are raw
+ * Q16.16. The kind selects the body shape/flags scene.ts gives it:
+ *  - 'door' : a solid locked-door plug filling a doorway seam (doorId = its lock id).
+ *  - 'key'  : a loose Key Pickup body (doorId = the door it opens).
+ *  - 'rug'  : a movable Rug body whose hidden key opens `doorId` when revealed.
+ */
+export interface PuzzleSpawn {
+  kind: 'door' | 'key' | 'rug';
+  /** Absolute stratum index this body lives on. */
+  stratum: number;
+  /** World X / Y / Z (raw Q16.16). Y is the body CENTER (rests on / sits in the slab). */
+  x: number;
+  y: number;
+  z: number;
+  /** The lock id: a Door requires it, a Key/Rug provides it. */
+  doorId: number;
 }
 
 /** Center world (x,z) of a floor cell (raw Fixed). Floors are centered on origin. */
@@ -146,13 +312,22 @@ function cellCenter(floor: Floor, cell: number): { x: Fixed; z: Fixed } {
   return { x: ox, z: oz };
 }
 
-/** Does an edge between two adjacent cells exist with a WALK (open) connection? */
-function edgeKindBetween(floor: Floor, a: number, b: number): string | null {
-  const key = edgeKey(a, b);
-  for (const e of floor.edges) {
-    if (edgeKey(e.a, e.b) === key) return e.kind;
-  }
-  return null;
+/**
+ * Build a fast edge-kind lookup for one floor: numeric edgeKey → EdgeKind string.
+ * The old per-seam linear scan of floor.edges was O(edges) per query, making compile
+ * quadratic in cell count (≈135ms at 30×30). This map makes each seam query O(1), so
+ * compile scales ~linearly with the grid. Map is used for LOOKUP ONLY (never iterated
+ * for output), so it introduces no Map-iteration-order determinism hazard.
+ */
+function buildEdgeKindMap(floor: Floor): Map<number, string> {
+  const m = new Map<number, string>();
+  for (const e of floor.edges) m.set(edgeKey(e.a, e.b), e.kind);
+  return m;
+}
+
+/** Does an edge between two adjacent cells exist? Returns its kind, or null. O(1) via map. */
+function edgeKindBetween(edgeKinds: ReadonlyMap<number, string>, a: number, b: number): string | null {
+  return edgeKinds.get(edgeKey(a, b)) ?? null;
 }
 
 /**
@@ -166,6 +341,57 @@ function edgeKindBetween(floor: Floor, a: number, b: number): string | null {
 export function stairPairCols(stratumIndex: number, width: number): [number, number] {
   if (width < 2) return [0, 0];
   return stratumIndex % 2 === 0 ? [0, 1] : [width - 2, width - 1];
+}
+
+/**
+ * The straight stair tops out ONE row IN from the exit (top) row, NOT at the +Z
+ * perimeter edge. WHY: a stair that topped out flush against the perimeter wall would
+ * emerge into a dead corner — the only stratum-above floor a climber could step onto is
+ * the next-stratum slab over the EXIT row (+Z of the top tread), so we reserve that row
+ * as the EMERGENCE landing (kept solid in the stratum above) and run the treads through
+ * the rows just inside it. The ascent hole (carved in the stratum above) is exactly the
+ * run footprint, so the upper treads have headroom; the reserved exit-row slab beyond
+ * the top tread is the flush floor the climber strides onto. Deterministic constant.
+ */
+const STAIR_TOP_ROW_INSET = 1;
+
+/**
+ * How many GRID ROWS the straight staircase's Z run occupies. The run is
+ * STEPS_TOTAL*TREAD long and ascends in +Z, so it covers ceil(run / CELL_SIZE) rows.
+ * Pure integer math on raw Q16.16 (no float) → deterministic & engine-stable.
+ */
+export function stairRunRows(): number {
+  const runRaw = STEPS_TOTAL * toRaw(TREAD);
+  const cellRaw = toRaw(CELL_SIZE);
+  return Math.max(1, Math.ceil(runRaw / cellRaw));
+}
+
+/** The grid row the stair's TOP tread sits in (one in from the exit row). */
+function stairTopRow(height: number): number {
+  return Math.max(0, height - 1 - STAIR_TOP_ROW_INSET);
+}
+
+/**
+ * The cell ids the straight staircase's run sits on: its two columns (stairPairCols)
+ * across `stairRunRows()` rows ending at stairTopRow (one in from the exit row), going
+ * toward -Z. These cells get their seam-lips skipped (so the climb is never obstructed),
+ * are flagged `stair` in the renderer's cellGrid, and define the ascent HOLE carved in
+ * the stratum above (so the upper treads have headroom). The EXIT row beyond the top
+ * tread stays solid as the emergence landing. Membership-test only set (never iterated
+ * for output) — determinism-safe.
+ */
+function stairFootprintCells(stratumIndex: number, width: number, height: number): Set<number> {
+  const [c0, c1] = stairPairCols(stratumIndex, width);
+  const topRow = stairTopRow(height);
+  const rows = Math.min(height, stairRunRows());
+  const out = new Set<number>();
+  for (let r = 0; r < rows; r++) {
+    const row = topRow - r;
+    if (row < 0) break;
+    out.add(cellId(width, c0, row));
+    out.add(cellId(width, c1, row));
+  }
+  return out;
 }
 
 /**
@@ -183,6 +409,8 @@ export function compileTower(
   const stratumBaseY: number[] = [];
   const entryXZ: { x: number; z: number }[] = [];
   const stairs: StairInfo[] = [];
+  const cellGrid: StratumCellGrid[] = [];
+  const puzzleSpawns: PuzzleSpawn[] = [];
   const half = mul(CELL_SIZE, fromFloatConst(0.5));
 
   for (let s = 0; s < floors.length; s++) {
@@ -192,25 +420,26 @@ export function compileTower(
     stratumBaseY[idx] = toRaw(baseY);
 
     // --- exit-opening + stair bookkeeping for THIS stratum ---
-    // holeCells: exit cells of the stratum BELOW (its stair tops out here) — omit
-    // their slab tiles. stairCells: this stratum's own stair footprint. Sets are
-    // used for membership tests only (never iterated) — determinism-safe.
-    const topRow = floor.height - 1;
-    const skipLipCells = new Set<number>();
-    const holeCells = new Set<number>();
-    if (s >= 1) {
-      const [h0, h1] = stairPairCols(idx - 1, floor.width);
-      holeCells.add(cellId(floor.width, h0, topRow));
-      holeCells.add(cellId(floor.width, h1, topRow));
-      skipLipCells.add(cellId(floor.width, h0, topRow));
-      skipLipCells.add(cellId(floor.width, h1, topRow));
-    }
+    // holeCells: the FULL run footprint of the stratum BELOW's straight stair — omit
+    // those slab tiles so the climber ascends an OPEN stairwell shaft (the lower treads
+    // would otherwise be pinched under this stratum's slab ceiling) and there is a
+    // designed drop back down. stairCells: THIS stratum's own straight-stair run
+    // footprint (2 cols × stairRunRows). skipLipCells: the union, so seam-lips never
+    // obstruct the climb. Strata alternate stair columns, so a hole over the stratum-
+    // below stair never overlaps THIS stratum's stair (width >= 4). Sets are
+    // membership-test only (never iterated for output) — determinism-safe.
+    const holeCells = s >= 1
+      ? stairFootprintCells(idx - 1, floor.width, floor.height)
+      : new Set<number>();
     const hasStair = s < floors.length - 1;
-    if (hasStair) {
-      const [c0, c1] = stairPairCols(idx, floor.width);
-      skipLipCells.add(cellId(floor.width, c0, topRow));
-      skipLipCells.add(cellId(floor.width, c1, topRow));
-    }
+    const stairCells = hasStair
+      ? stairFootprintCells(idx, floor.width, floor.height)
+      : new Set<number>();
+    const skipLipCells = new Set<number>([...holeCells, ...stairCells]);
+
+    // O(1) edge-kind lookup for this floor (built once; replaces a per-seam linear
+    // scan that made compile quadratic in cell count — see buildEdgeKindMap).
+    const edgeKinds = buildEdgeKindMap(floor);
 
     // a solid slab tile under every cell (the walkable floor of this stratum),
     // EXCEPT the exit opening above the stratum-below's stair.
@@ -234,7 +463,7 @@ export function compileTower(
         if (nx >= floor.width || ny >= floor.height) continue;
         const nb = ny * floor.width + nx;
         if (skipLipCells.has(c) || skipLipCells.has(nb)) continue;
-        const kind = edgeKindBetween(floor, c, nb);
+        const kind = edgeKindBetween(edgeKinds, c, nb);
         if (kind === 'WALK' || kind === 'GAP') continue; // flush or open chasm
         // no edge OR a break/button/weight gate → a low lip wall on the seam
         const a = cellCenter(floor, c);
@@ -257,26 +486,120 @@ export function compileTower(
 
     const ec = cellCenter(floor, floor.entry);
     entryXZ[idx] = { x: toRaw(ec.x), z: toRaw(ec.z) };
+
+    // --- read-only LAYOUT grid for the renderer (KayKit tile placement) ---
+    cellGrid[idx] = buildCellGrid(floor, idx, baseY, holeCells, stairCells, edgeKinds);
+
+    // --- puzzle bodies (locked doors / keys / rugs) for scene.ts to spawn ---
+    emitPuzzleSpawns(puzzleSpawns, floor, idx, baseY);
   }
 
-  // deep ground slab far below (universal floor) — wide enough to span the tower.
-  const span = fromInt(60);
+  // deep ground slab far below (universal floor) — wide enough to span the tower. Scale
+  // with the grid footprint (grid*CELL_SIZE) so a wide stratum still sits fully over it;
+  // the old fixed ±60u no longer covered the 30×30 floor (135u across).
+  const gridW = floors[0]?.width ?? GAME_GRID_SIZE;
+  const span = add(mul(CELL_SIZE, fromInt(gridW)), fromInt(20)); // floor span + margin
   const deep = sub(params.killPlaneY, fromInt(4));
   solids.push(makeBox(sub(fromInt(0), span), sub(deep, fromInt(2)), sub(fromInt(0), span), span, deep, span));
 
   // groundY for the Terrain is the DEEP floor (so motion's ground clamp matches it
   // and bodies in a seam fall past the kill-plane). Strata slabs are solids above it.
-  return { terrain: { groundY: toRaw(deep), solids }, stratumBaseY, entryXZ, stairs };
+  return { terrain: { groundY: toRaw(deep), solids }, stratumBaseY, entryXZ, stairs, cellGrid, puzzleSpawns };
 }
 
 /**
- * Emit one switchback stair on stratum `idx`'s exit-row pair, rising from `baseY`
- * to baseY+FLOOR_HEIGHT. ~20 boxes: STEPS_A outer treads, a turn landing, STEPS_B
- * inner treads (all full-height from the floor — sturdy, no floating geometry),
- * plus guard rails. The outer lane runs against the perimeter wall (one side
- * guarded for free); the inner flight gets rails on both open sides EXCEPT the
- * two treads nearest the landing on the lane boundary — that opening is the
- * turn itself (see the rail comment below).
+ * Build the read-only LAYOUT grid for one stratum: classify each cell and compute its
+ * world center + a `wallMask` (which sides face a non-floor neighbour and want a wall
+ * piece). Pure function of the Floor graph + the same CELL_SIZE the collision uses, so
+ * a tile placed at (cx,cz) sits exactly on the slab the sim collides against.
+ *
+ * Wall-side logic mirrors the compiler's seam treatment so the visual walls match the
+ * physical lips/perimeter:
+ *   - a side faces a WALL if the neighbour is off-grid, a VOID/WALL cell, or the seam
+ *     has NO open (WALK/GAP) edge between the two cells AND it is not a doorway.
+ *   - a DOORWAY cell clears the wall bit on the side that connects out of its room.
+ *   - hole/stair cells never wall their shared seams (the climb must stay open).
+ */
+function buildCellGrid(
+  floor: Floor,
+  idx: number,
+  baseY: Fixed,
+  holeCells: ReadonlySet<number>,
+  stairCells: ReadonlySet<number>,
+  edgeKinds: ReadonlyMap<number, string>,
+): StratumCellGrid {
+  const surfaceY = toRaw(baseY);
+  const cells: CellTile[] = [];
+  // side bit order: 1=+X(east) 2=-X(west) 4=+Z(north) 8=-Z(south)
+  const SIDES: ReadonlyArray<readonly [number, number, number]> = [
+    [1, 0, 1], // east
+    [-1, 0, 2], // west
+    [0, 1, 4], // north
+    [0, -1, 8], // south
+  ];
+  for (let c = 0; c < floor.cells.length; c++) {
+    const fc = floor.cells[c]!;
+    const { x: cx, z: cz } = cellCenter(floor, c);
+    const type: CellType = fc.cellType ?? 'ROOM';
+    const isFloorCell = type !== 'VOID' && type !== 'WALL';
+    let wallMask = 0;
+    if (isFloorCell && !holeCells.has(c) && !stairCells.has(c)) {
+      const { x: col, y: row } = cellXY(floor.width, c);
+      for (const [dx, dy, bit] of SIDES) {
+        const nx = col + dx;
+        const ny = row + dy;
+        if (nx < 0 || nx >= floor.width || ny < 0 || ny >= floor.height) {
+          wallMask |= bit; // grid edge → outer wall (the perimeter ring)
+          continue;
+        }
+        const nb = ny * floor.width + nx;
+        const nType: CellType = floor.cells[nb]!.cellType ?? 'ROOM';
+        const neighbourIsFloor = nType !== 'VOID' && nType !== 'WALL';
+        const kind = edgeKindBetween(edgeKinds, c, nb);
+        const open = kind === 'WALK' || kind === 'GAP';
+        // open seam to another floor cell, or a doorway link → no wall on this side.
+        if (neighbourIsFloor && (open || holeCells.has(nb) || stairCells.has(nb))) continue;
+        wallMask |= bit;
+      }
+    }
+    cells.push({
+      col: fc.x,
+      row: fc.y,
+      type,
+      roomId: fc.roomId ?? -1,
+      hole: holeCells.has(c),
+      stair: stairCells.has(c),
+      cx: toRaw(cx),
+      cz: toRaw(cz),
+      wallMask,
+    });
+  }
+  return {
+    stratum: idx,
+    width: floor.width,
+    height: floor.height,
+    cellSize: toRaw(CELL_SIZE),
+    surfaceY,
+    cells,
+  };
+}
+
+/**
+ * Emit one STRAIGHT staircase on stratum `idx`'s exit-row pair, rising from `baseY`
+ * to baseY+FLOOR_HEIGHT along +Z. STEPS_TOTAL full-height RISER treads (each a solid
+ * box from the floor up to its top — sturdy, no floating geometry) march from the
+ * interior toward the +Z exit edge, topping out FLUSH under the 2-cell ascent hole.
+ * Plus two low guard-rail lips on the run's open X sides (a mid-climb shove is not a
+ * trivial ring-out, but the lip is short enough to hop back over).
+ *
+ * GEOMETRY (mirrors the proven climb in collide/prove.ts PROOF 5c, oriented in +Z):
+ * tread k (k = 0..STEPS_TOTAL-1) is a box spanning the run from its riser at
+ * entryZ + k*TREAD all the way to the top edge (topZ), at height baseY → riseAt(k+1).
+ * Each higher tread is taller and overlays the lower ones, so tread k's EXPOSED top is
+ * the strip [entryZ + k*TREAD, entryZ + (k+1)*TREAD] (depth TREAD = 0.9 >= the
+ * route-check minSide, so every tread reads as a standable node) at height riseAt(k+1).
+ * The auto step-up (MAX_STEP_HEIGHT 0.55 >= RISE 0.5) walks a body straight up — the
+ * Anchor never needs to jump. The top tread is flush with the next stratum's surface.
  */
 function emitStair(
   solids: AABB[],
@@ -286,73 +609,64 @@ function emitStair(
   half: Fixed,
 ): StairInfo {
   const [c0, c1] = stairPairCols(idx, floor.width);
-  const topRow = floor.height - 1;
-  const westPair = c0 === 0; // run toward the west wall, open end on the east side
-  const dir: 1 | -1 = westPair ? -1 : 1;
-  // open end = the pair's inboard-column edge facing the grid center
-  const openCol = westPair ? c1 : c0;
-  const openCenter = cellCenter(floor, cellId(floor.width, openCol, topRow));
-  const openX = westPair ? add(openCenter.x, half) : sub(openCenter.x, half);
-  // x at distance u (>= 0) from the open end, along the run
-  const uX = (u: Fixed): Fixed => (dir > 0 ? add(openX, u) : sub(openX, u));
+  const topRow = stairTopRow(floor.height); // tops out one row IN from the exit edge
+  // the stair is centered in X on the 2-cell column pair, running purely in +Z.
+  const cellC0 = cellCenter(floor, cellId(floor.width, c0, topRow));
+  const cellC1 = cellCenter(floor, cellId(floor.width, c1, topRow));
+  const centerX = mul(add(cellC0.x, cellC1.x), fromFloatConst(0.5));
+  const halfW = mul(STAIR_W, fromFloatConst(0.5));
+  const minX = sub(centerX, halfW);
+  const maxX = add(centerX, halfW);
 
-  // lanes hang off the exit row's OUTER boundary (max z — the perimeter side)
-  const zOuter = add(openCenter.z, half);
-  const zA0 = sub(zOuter, LANE_W); // outer lane: [zA0, zOuter]
-  const zM0 = sub(zA0, RAIL_T); // mid rail: [zM0, zA0]
-  const zB0 = sub(zM0, LANE_W); // inner lane: [zB0, zM0]
-  const zR0 = sub(zB0, RAIL_T); // inboard rail: [zR0, zB0]
+  // run along +Z: tops out flush at the top tread row's +Z edge (under the hole, with
+  // the reserved EXIT-row slab just beyond as the emergence landing); extends RUN =
+  // STEPS_TOTAL*TREAD toward -Z (into the floor) from there.
+  const topZ = add(cellC0.z, half); // the top-tread row's outer (+Z) boundary
+  const runLen = mul(fromInt(STEPS_TOTAL), TREAD);
+  const entryZ = sub(topZ, runLen); // the run's low (entry) end
 
-  // rise k steps above the base; the FINAL step lands exactly on FLOOR_HEIGHT
+  // height of tread k's TOP above the world (the FINAL tread lands exactly on FLOOR_HEIGHT)
   const riseAt = (k: number): Fixed =>
     k >= STEPS_TOTAL ? add(baseY, FLOOR_HEIGHT) : add(baseY, mul(fromInt(k), RISE));
-  const uAt = (steps: number): Fixed => mul(fromInt(steps), TREAD);
+  // z of the riser face for tread k (k treads' worth of depth up from the entry end)
+  const zAt = (k: number): Fixed => add(entryZ, mul(fromInt(k), TREAD));
 
-  // flight A (outer lane): treads i = 0..STEPS_A-1, ascending away from the open end
-  for (let i = 0; i < STEPS_A; i++) {
-    solids.push(makeBox(uX(uAt(i)), baseY, zA0, uX(uAt(i + 1)), riseAt(i + 1), zOuter));
-  }
-  // turn landing (both lanes wide, at flight A's top height)
-  const landU0 = uAt(STEPS_A);
-  const landU1 = add(landU0, LANDING);
-  solids.push(makeBox(uX(landU0), baseY, zB0, uX(landU1), riseAt(STEPS_A), zOuter));
-  // flight B (inner lane): treads j = 0..STEPS_B-1, ascending back toward the open end
-  for (let j = 0; j < STEPS_B; j++) {
-    solids.push(makeBox(
-      uX(sub(landU0, uAt(j + 1))), baseY, zB0,
-      uX(sub(landU0, uAt(j))), riseAt(STEPS_A + 1 + j), zM0,
-    ));
+  // STEPS_TOTAL riser treads: tread k spans [zAt(k), topZ] across the full width, at
+  // height baseY → riseAt(k+1). Higher (taller) treads overlay lower ones; tread k's
+  // exposed top is the [zAt(k), zAt(k+1)] strip — TREAD deep, standable.
+  for (let k = 0; k < STEPS_TOTAL; k++) {
+    solids.push(makeBox(minX, baseY, zAt(k), maxX, riseAt(k + 1), topZ));
   }
 
-  // guard rails: full-height boxes 0.6 above the covered treads, in 2-step
-  // segments. (Flight A needs none: perimeter wall outside, flight B's solid
-  // mass inside.) The INBOARD side of flight B + the landing is railed along its
-  // whole length; the BETWEEN-LANES side skips the two treads nearest the
-  // landing — that gap IS the turn: you hop from flight A's top tread (or the
-  // landing) sideways onto flight B's first tread (a 0.5 u rise). A rail there
-  // would pinch the turn corridor below a body diameter (radius 0.55 + rail/wall
-  // inflation), which the end-to-end climb proof caught on the first cut.
-  for (let k0 = 0; k0 < STEPS_B; k0 += 2) {
-    const jHi = Math.min(k0 + 1, STEPS_B - 1);
-    const u0 = uX(sub(landU0, uAt(jHi + 1)));
-    const u1 = uX(sub(landU0, uAt(k0)));
-    const railTop = add(riseAt(STEPS_A + 1 + jHi), RAIL_H);
-    if (k0 >= 2) solids.push(makeBox(u0, baseY, zM0, u1, railTop, zA0)); // between lanes
-    solids.push(makeBox(u0, baseY, zR0, u1, railTop, zB0)); // inboard side
+  // two low guard-rail lips along the run's open X sides (RAIL_H above the local
+  // tread). They follow the stair's rising profile in 2-step segments so the lip
+  // top stays ~RAIL_H over the tread beside it. Short enough to hop, tall enough to
+  // catch a slide. The +Z (top) end is open to the next floor through the hole.
+  for (let k0 = 0; k0 < STEPS_TOTAL; k0 += 2) {
+    const kHi = Math.min(k0 + 1, STEPS_TOTAL - 1);
+    const z0 = zAt(k0);
+    const z1 = zAt(kHi + 1);
+    const railTop = add(riseAt(kHi + 1), RAIL_H);
+    solids.push(makeBox(sub(minX, RAIL_T), baseY, z0, minX, railTop, z1)); // -X rail
+    solids.push(makeBox(maxX, baseY, z0, add(maxX, RAIL_T), railTop, z1)); // +X rail
   }
-  // landing inboard rail
-  solids.push(makeBox(uX(landU0), baseY, zR0, uX(landU1), add(riseAt(STEPS_A), RAIL_H), zB0));
 
-  const c08 = fromFloatConst(0.8);
-  const c03 = fromFloatConst(0.3);
   return {
     stratum: idx,
-    cols: westPair ? [c1, c0] : [c0, c1], // [open-end col, far col]
-    dirX: dir,
-    openX: toRaw(openX),
-    laneAZ: toRaw(sub(zOuter, c08)),
-    laneBZ: toRaw(sub(zM0, c08)),
-    landingX: toRaw(uX(add(landU0, c03))),
+    cols: [c0, c1],
+    dirX: 0,
+    dirZ: 1,
+    centerX: toRaw(centerX),
+    entryZ: toRaw(entryZ),
+    topZ: toRaw(topZ),
+    width: toRaw(STAIR_W),
+    run: toRaw(runLen),
+    rise: toRaw(FLOOR_HEIGHT),
+    treadCount: STEPS_TOTAL,
+    treadRise: toRaw(RISE),
+    originX: toRaw(minX),
+    originY: toRaw(baseY),
+    originZ: toRaw(entryZ),
     baseY: toRaw(baseY),
     topY: toRaw(add(baseY, FLOOR_HEIGHT)),
   };
@@ -379,4 +693,42 @@ function emitWallRing(solids: AABB[], floor: Floor, baseY: Fixed, half: Fixed): 
   solids.push(makeBox(maxX, baseY, oMinZ, oMaxX, top, oMaxZ)); // east
   solids.push(makeBox(minX, baseY, oMinZ, maxX, top, minZ)); // south
   solids.push(makeBox(minX, baseY, maxZ, maxX, top, oMaxZ)); // north
+}
+
+/**
+ * Convert a stratum's placed PUZZLE data (floor.lockedDoors / floor.keys) into world
+ * spawn entries for scene.ts (docs/14 §2). Pure + deterministic — reads the floor graph
+ * and the same CELL_SIZE the slabs use, so a spawned body lines up with its cell.
+ *  - DOOR: at the MIDPOINT of its edge's two cell centers (the seam it gates), centered
+ *    just above the slab so the body plugs the doorway.
+ *  - KEY : at its cell center, resting a little above the slab (a pickup the player grabs).
+ *  - RUG : at its cell center, on the slab (a movable prop hiding the key).
+ * Y is the body CENTER; scene.ts uses the body's halfHeight to seat it. Iterates the
+ * stable lockedDoors/keys arrays in order (no Map/Set iteration) → deterministic.
+ */
+function emitPuzzleSpawns(out: PuzzleSpawn[], floor: Floor, idx: number, baseY: Fixed): void {
+  const doors = floor.lockedDoors ?? [];
+  const keys = floor.keys ?? [];
+  // door body half-height (a low plug filling the doorway gap) + key/rug seat offsets.
+  const DOOR_HALF = fromFloatConst(1.0); // ~waist-high plug; tall enough to block, hashed via the body
+  const ITEM_SEAT = fromFloatConst(0.4); // key/rug rest a touch above the slab
+  for (const d of doors) {
+    const ca = cellCenter(floor, d.a);
+    const cb = cellCenter(floor, d.b);
+    const mx = mul(add(ca.x, cb.x), fromFloatConst(0.5));
+    const mz = mul(add(ca.z, cb.z), fromFloatConst(0.5));
+    out.push({
+      kind: 'door', stratum: idx,
+      x: toRaw(mx), y: toRaw(add(baseY, DOOR_HALF)), z: toRaw(mz),
+      doorId: d.doorId,
+    });
+  }
+  for (const key of keys) {
+    const c = cellCenter(floor, key.cell);
+    out.push({
+      kind: key.source === 'RUG' ? 'rug' : 'key', stratum: idx,
+      x: toRaw(c.x), y: toRaw(add(baseY, ITEM_SEAT)), z: toRaw(c.z),
+      doorId: key.doorId,
+    });
+  }
 }

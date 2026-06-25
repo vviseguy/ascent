@@ -80,13 +80,24 @@ function stamp(f: Float32Array, cx: number, cy: number, rad: number, amp: number
   }
 }
 
+/** Mark a small disc in the plate-boundary mask (used by the flood fill). */
+function markBound(bound: Uint8Array, cx: number, cy: number, rad: number): void {
+  const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(SIZE - 1, Math.ceil(cx + rad));
+  const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(SIZE - 1, Math.ceil(cy + rad));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (Math.hypot(x - cx, y - cy) <= rad) bound[y * SIZE + x] = 1;
+    }
+  }
+}
+
 /**
  * PRIMARY fractures: few, long, mostly-straight cracks with sharp angular kinks
  * that cross the whole slab — wide dark grooves with a soft dark halo. These are
  * the feature that must read from the game camera (~20u).
  */
 function carvePrimaryCracks(
-  h: Float32Array, crack: Float32Array, rnd: () => number, count: number,
+  h: Float32Array, crack: Float32Array, bound: Uint8Array, rnd: () => number, count: number,
 ): void {
   for (let i = 0; i < count; i++) {
     // enter from a random edge, head roughly across
@@ -95,7 +106,7 @@ function carvePrimaryCracks(
     let y = side === 2 ? 2 : side === 3 ? SIZE - 3 : rnd() * SIZE;
     const heading = side === 0 ? 0 : side === 1 ? Math.PI : side === 2 ? Math.PI / 2 : -Math.PI / 2;
     let ang = heading + (rnd() - 0.5) * 0.9;
-    let width = 2.2 + rnd() * 1.2;
+    let width = 2.6 + rnd() * 1.6;
     let sinceKink = 0;
     for (let s = 0; s < 300; s++) {
       ang += (rnd() - 0.5) * 0.05; // near-straight between kinks — fracture, not vine
@@ -110,9 +121,11 @@ function carvePrimaryCracks(
       x += Math.cos(ang) * 3;
       y += Math.sin(ang) * 3;
       if (x < -8 || x > SIZE + 8 || y < -8 || y > SIZE + 8) break;
-      width = Math.max(1.4, Math.min(3.4, width + (rnd() - 0.5) * 0.4));
-      stamp(h, x, y, width * 1.3, -0.30);            // the groove itself
-      stamp(crack, x, y, width * 2.0, 0.10);         // tight darkening halo
+      width = Math.max(1.8, Math.min(4.2, width + (rnd() - 0.5) * 0.4));
+      stamp(h, x, y, width * 1.4, -0.32);            // the groove itself
+      stamp(crack, x, y, width * 2.4, 0.13);         // tight darkening halo
+      stamp(crack, x, y, width * 5.5, 0.022);        // wide soot/grime zone (distance read)
+      markBound(bound, x, y, width * 1.5);           // splits the slab into plates
       // rare branch — thinner, dies out
       if (rnd() < 0.012) {
         let bx = x, by = y, ba = ang + (rnd() < 0.5 ? 1 : -1) * (0.7 + rnd() * 0.5);
@@ -145,6 +158,50 @@ function carveHairlines(h: Float32Array, crack: Float32Array, rnd: () => number,
   }
 }
 
+/**
+ * Flood-fill the regions BETWEEN primary cracks into labeled plates and give
+ * each plate its own tone offset (value + subtle hue drift via the tone field).
+ * This is what makes the fracture network read as "broken plates" at 20u
+ * instead of "scribbles on flat gray". Boundary pixels then adopt the tone of
+ * their nearest plate so no pale seam shows beyond the dark groove.
+ */
+function tonePlates(tone: Float32Array, bound: Uint8Array, rnd: () => number): void {
+  const label = new Float32Array(SIZE * SIZE).fill(NaN); // stores the plate's tone offset
+  const stack: number[] = [];
+  for (let s = 0; s < SIZE * SIZE; s++) {
+    if (bound[s] === 1 || !Number.isNaN(label[s]!)) continue;
+    // per-plate tone: modest drift, with the occasional clearly darker plate
+    let off = (rnd() - 0.5) * 0.13;
+    if (rnd() < 0.22) off -= 0.07;
+    stack.push(s);
+    label[s] = off;
+    while (stack.length > 0) {
+      const i = stack.pop()!;
+      tone[i]! += off;
+      const x = i % SIZE;
+      if (x > 0 && bound[i - 1] === 0 && Number.isNaN(label[i - 1]!)) { label[i - 1] = off; stack.push(i - 1); }
+      if (x < SIZE - 1 && bound[i + 1] === 0 && Number.isNaN(label[i + 1]!)) { label[i + 1] = off; stack.push(i + 1); }
+      if (i >= SIZE && bound[i - SIZE] === 0 && Number.isNaN(label[i - SIZE]!)) { label[i - SIZE] = off; stack.push(i - SIZE); }
+      if (i < SIZE * (SIZE - 1) && bound[i + SIZE] === 0 && Number.isNaN(label[i + SIZE]!)) { label[i + SIZE] = off; stack.push(i + SIZE); }
+    }
+  }
+  // dilate plate tones across the boundary band (≤ ~8px wide → a few sweeps)
+  for (let pass = 0; pass < 10; pass++) {
+    let changed = false;
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      if (!Number.isNaN(label[i]!)) continue;
+      const x = i % SIZE;
+      const n =
+        x > 0 && !Number.isNaN(label[i - 1]!) ? label[i - 1]! :
+        x < SIZE - 1 && !Number.isNaN(label[i + 1]!) ? label[i + 1]! :
+        i >= SIZE && !Number.isNaN(label[i - SIZE]!) ? label[i - SIZE]! :
+        i < SIZE * (SIZE - 1) && !Number.isNaN(label[i + SIZE]!) ? label[i + SIZE]! : NaN;
+      if (!Number.isNaN(n)) { label[i] = n; tone[i]! += n; changed = true; }
+    }
+    if (!changed) break;
+  }
+}
+
 /** Warm amber mineral veins — the RARE accent. Thin, slightly proud, low-roughness. */
 function paintVeins(h: Float32Array, vein: Float32Array, rnd: () => number, count: number): void {
   for (let i = 0; i < count; i++) {
@@ -154,35 +211,34 @@ function paintVeins(h: Float32Array, vein: Float32Array, rnd: () => number, coun
       x += Math.cos(ang) * 2.0; y += Math.sin(ang) * 2.0;
       if (x < 1 || x > SIZE - 2 || y < 1 || y > SIZE - 2) break;
       stamp(h, x, y, 1.5, 0.04);     // slightly proud of the surface
-      stamp(vein, x, y, 1.6, 0.55);  // tight warm core
-      stamp(vein, x, y, 3.0, 0.08);  // faint warm bloom
+      stamp(vein, x, y, 1.7, 0.62);  // tight warm core
+      stamp(vein, x, y, 3.2, 0.09);  // faint warm bloom
     }
   }
 }
 
 /** Worn border band + chips bitten out of the slab edge (canvas border = slab edge). */
 function wearEdges(h: Float32Array, crack: Float32Array, rnd: () => number): void {
-  const E = 12; // tight border band so the top doesn't read "pillowed"
+  const E = 19; // worn border band — wide enough to actually READ as wear
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       const d = Math.min(x, y, SIZE - 1 - x, SIZE - 1 - y);
       if (d < E) {
         const e = 1 - d / E;
-        h[y * SIZE + x]! -= e * e * 0.09;
-        crack[y * SIZE + x]! += e * e * 0.22;
+        h[y * SIZE + x]! -= e * e * 0.13;
+        crack[y * SIZE + x]! += e * e * 0.34;
       }
     }
   }
   // chips: half-discs centred on the border so they bite into the edge
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 10; i++) {
     const side = Math.floor(rnd() * 4);
     const t = rnd() * SIZE;
     const cx = side === 0 ? 0 : side === 1 ? SIZE - 1 : t;
     const cy = side === 2 ? 0 : side === 3 ? SIZE - 1 : t;
-    const rad = 8 + rnd() * 11;
-    stamp(h, cx, cy, rad, -0.34);
-    stamp(crack, cx, cy, rad * 1.2, 0.1); // mostly relief — chips aren't soot
-
+    const rad = 9 + rnd() * 14;
+    stamp(h, cx, cy, rad, -0.36);
+    stamp(crack, cx, cy, rad * 1.25, 0.13); // mostly relief — chips aren't soot
   }
 }
 
@@ -212,19 +268,20 @@ function bakeTextures(
       const vv = Math.min(0.85, vein[i]!);
       const tn = tone[i]!;
 
-      // value: indigo-night mid-gray. Hollows drop hard, highs stay restrained.
-      const lum = cl(0.355 + h[i]! * 0.62 + grain) * (1 - cv * 0.62);
-      // cool indigo cast; tone zones drift it subtly warm/cool
-      let r = lum * (0.82 + tn * 0.5);
-      let g = lum * (0.88 + tn * 0.25);
-      let b = lum * (1.16 - tn * 0.15);
+      // value: indigo-night mid-gray, kept LOW — the slab must sit into a
+      // 0x0a0a12 world. tn carries tone zones + per-plate offsets into value.
+      const lum = cl(0.235 + h[i]! * 0.5 + tn * 0.55 + grain) * (1 - cv * 0.7);
+      // cool indigo cast; tone drifts it subtly warm/cool on top of the value shift
+      let r = lum * (0.78 + tn * 0.45);
+      let g = lum * (0.86 + tn * 0.22);
+      let b = lum * (1.22 - tn * 0.15);
       // amber mineral vein accent: shift HUE at near-constant value so it reads
       // as warm mineral in the stone, not a pale painted line
-      const warmR = cl(lum * 1.5 + 0.08), warmG = cl(lum * 1.05 + 0.03), warmB = lum * 0.42;
+      const warmR = cl(lum * 1.6 + 0.07), warmG = cl(lum * 1.1 + 0.025), warmB = lum * 0.42;
       r += (warmR - r) * vv;
       g += (warmG - g) * vv;
       b += (warmB - b) * vv;
-      aImg.data[o] = cl(r) * 150; aImg.data[o + 1] = cl(g) * 150; aImg.data[o + 2] = cl(b) * 158; aImg.data[o + 3] = 255;
+      aImg.data[o] = cl(r) * 124; aImg.data[o + 1] = cl(g) * 124; aImg.data[o + 2] = cl(b) * 132; aImg.data[o + 3] = 255;
 
       // normal from height (Sobel), z-up tangent space
       const xl = h[y * SIZE + Math.max(0, x - 1)]!, xr = h[y * SIZE + Math.min(SIZE - 1, x + 1)]!;
@@ -236,8 +293,9 @@ function bakeTextures(
       nImg.data[o] = (nx * 0.5 + 0.5) * 255; nImg.data[o + 1] = (ny * 0.5 + 0.5) * 255;
       nImg.data[o + 2] = (nz * 0.5 + 0.5) * 255; nImg.data[o + 3] = 255;
 
-      // rough everywhere, roughest in cracks, a faint sheen on veins + high spots
-      const rg = cl(0.92 - h[i]! * 0.25 + cv * 0.05 - vv * 0.30);
+      // rough everywhere (pinned high — grazing-angle sheen otherwise washes the
+      // top face out at low camera angles), faint polish on veins only
+      const rg = cl(0.975 - h[i]! * 0.12 + cv * 0.025 - vv * 0.30);
       rImg.data[o] = rg * 255; rImg.data[o + 1] = rg * 255; rImg.data[o + 2] = rg * 255; rImg.data[o + 3] = 255;
     }
   }
@@ -314,13 +372,15 @@ const stoneSlab: LabElement = {
     const crack = new Float32Array(SIZE * SIZE);
     const vein = new Float32Array(SIZE * SIZE);
     const tone = new Float32Array(SIZE * SIZE);
+    const bound = new Uint8Array(SIZE * SIZE);
 
     paintBlotches(h, rnd);
     // per-pixel micro-relief so the normal map has tooth (kills the plastic look)
     for (let i = 0; i < h.length; i++) h[i]! += (rnd() - 0.5) * 0.022;
     paintToneZones(tone, rnd);
-    carvePrimaryCracks(h, crack, rnd, 2 + Math.floor(rnd() * 2));
-    carveHairlines(h, crack, rnd, 4);
+    carvePrimaryCracks(h, crack, bound, rnd, 3 + Math.floor(rnd() * 2));
+    tonePlates(tone, bound, rnd);
+    carveHairlines(h, crack, rnd, 3);
     paintVeins(h, vein, rnd, 1 + (rnd() < 0.5 ? 1 : 0));
     wearEdges(h, crack, rnd);
 

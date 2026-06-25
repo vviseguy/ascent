@@ -35,10 +35,11 @@
  * dense arrays in id order. Same config + seed => byte-identical floor.
  */
 
-import type { Cell, Edge, EdgeKind, Floor, FloorMeta } from './types.ts';
+import type { Cell, CellType, Edge, EdgeKind, Floor, FloorMeta, Room } from './types.ts';
 import { cellId, edgeKey } from './types.ts';
 import type { Rng } from './rng.ts';
 import { chance, makeFloorRng, nextInt, nextRange, shuffleInPlace, subStream } from './rng.ts';
+import { placePuzzles, type PuzzleParams } from './puzzles.ts';
 
 /* ------------------------------- configuration ------------------------------- */
 
@@ -78,6 +79,62 @@ export interface FloorConfig {
   gateDensity?: number;
   /** How many distinct chunk-type ids to tag cells with (>=1, default 4). */
   chunkTypeCount?: number;
+  /**
+   * Lay the floor out as RECTANGULAR ROOMS joined by corridors/doorways (default
+   * true) instead of a uniform cell maze. When on, a rooms-and-corridors pass runs
+   * BEFORE openness: it carves non-overlapping rooms, fully connects each room's
+   * interior (WALK edges), classifies every cell (ROOM/CORRIDOR/DOORWAY/WALL/VOID),
+   * and the openness pass is biased to favour edges inside/between rooms — so the
+   * layout reads as a dungeon of rooms. It only ADDS edges over the spines+perimeter,
+   * so solvability (proven on the edge graph) is untouched. Set false for the legacy
+   * pure-maze behaviour (used by some determinism tests).
+   */
+  rooms?: boolean;
+  /**
+   * Target rooms-and-corridors knobs (only used when `rooms` is on). All optional;
+   * sensible defaults derive from gridSize. Sizes are in CELLS (inclusive bounds).
+   */
+  roomParams?: RoomParams;
+  /**
+   * Place LOCKED-DOOR + KEY + RUG puzzles (docs/14 §2). Default true. When on, a seeded,
+   * verifier-certified keyed chain is placed AFTER the layout/openness passes (so it sees
+   * the final edge graph). Only chains the independent lock-and-key verifier proves
+   * solvable are emitted; otherwise the floor ships puzzle-free (still solvable). Set
+   * false for the plain-maze behaviour (some determinism tests).
+   */
+  puzzles?: boolean;
+  /** Puzzle placement knobs (only used when `puzzles` is on). All optional. */
+  puzzleParams?: PuzzleParams;
+}
+
+/** Tuning for the rooms-and-corridors layout pass (all in grid CELLS). */
+export interface RoomParams {
+  /** Smallest room side (>=1). Default 2. */
+  minRoomSide?: number;
+  /** Largest room side. Default ~ floor(gridSize/2), min minRoomSide. */
+  maxRoomSide?: number;
+  /**
+   * How many placement ATTEMPTS to make. More attempts → denser room packing. Default
+   * scales with area (gridSize^2 / 2). Each attempt may fail (overlap) → deterministic.
+   */
+  attempts?: number;
+  /** 1-cell gap kept between rooms so walls read as distinct. Default 1. */
+  roomGap?: number;
+  /**
+   * Probability that a given placement attempt aims for a LARGE OPEN HALL instead of a
+   * normal-sized room (docs/14 §1 "large open areas"). When it rolls big, the candidate
+   * side is drawn from [bigRoomMin, bigRoomMax] rather than [minRoomSide, maxRoomSide],
+   * so the floor gets a few sparse-walled halls mixed in with small chambers. Clamped to
+   * [0,1]. Default ~0.22 (a couple of big halls per floor at game scale). Set 0 for the
+   * old uniform distribution. Big halls are still ADDITIVE WALK edges → solvability is
+   * untouched (proven on the edge graph), and they still get a perimeter + doorways via
+   * the existing classifyCells pass.
+   */
+  bigRoomChance?: number;
+  /** Smallest side of a big hall (cells). Default ~ floor(gridSize*0.45), min maxRoomSide. */
+  bigRoomMin?: number;
+  /** Largest side of a big hall (cells). Default ~ floor(gridSize*0.7). */
+  bigRoomMax?: number;
 }
 
 /* ------------------------------ stream tag ids ------------------------------- */
@@ -86,6 +143,8 @@ const S_LAYOUT = 1; // entry/exit selection
 const S_SPINES = 2; // spine carving (path order + gate rolls)
 const S_OPENNESS = 3; // extra-edge pass
 const S_DRESS = 4; // chunk tagging
+const S_ROOMS = 5; // rooms-and-corridors layout (new; high tag so it never shifts 1-4)
+const S_PUZZLES = 6; // locked-door/key/rug placement (high tag so it never shifts 1-5)
 
 /* ------------------------------ small utilities ------------------------------ */
 
@@ -186,6 +245,7 @@ export function generateFloor(config: FloorConfig): Floor {
   const gateWeights = config.gateWeights ?? DEFAULT_GATE_WEIGHTS;
   const stratumIndex = config.stratumIndex ?? 0;
   const chunkTypeCount = Math.max(1, Math.floor(config.chunkTypeCount ?? 4));
+  const useRooms = config.rooms ?? true;
 
   // Clamp k to what the structure can support; record whether we clamped.
   const requested = Math.max(1, Math.floor(config.guaranteedRoutes));
@@ -219,9 +279,28 @@ export function generateFloor(config: FloorConfig): Floor {
   const spineRng = subStream(root, S_SPINES);
   carveSpines(edges, spineRng, width, height, entry, k, gateDensity, gateWeights);
 
-  // ---- 3. openness: add extra edges ----
+  // ---- 2.5 rooms-and-corridors layout (opt-in, default on) ----
+  // Carve rectangular rooms, open their interiors (WALK edges only — adds, never
+  // removes, so solvability survives), and classify every cell. The classification
+  // also BIASES the openness pass (next) so it favours intra-/inter-room edges,
+  // making the floor read as a dungeon of rooms rather than a uniform maze.
+  let rooms: Room[] | undefined;
+  let roomIdOf: Int32Array | undefined; // cell id -> room index (-1 = none)
+  if (useRooms) {
+    const roomRng = subStream(root, S_ROOMS);
+    const laid = layoutRooms(roomRng, width, height, config.roomParams);
+    rooms = laid.rooms;
+    roomIdOf = laid.roomIdOf;
+    // open each room's interior: every interior 4-adjacency becomes a WALK edge.
+    openRoomInteriors(edges, width, rooms);
+  }
+
+  // ---- 3. openness: add extra edges (biased toward rooms when rooms are on) ----
   const opennessRng = subStream(root, S_OPENNESS);
-  addOpenness(edges, opennessRng, width, height, openness, gateDensity, gateWeights);
+  addOpenness(edges, opennessRng, width, height, openness, gateDensity, gateWeights, roomIdOf);
+
+  // ---- 3.5 classify every cell's layout ROLE from the final edge graph ----
+  if (useRooms && roomIdOf) classifyCells(cells, edges, width, height, roomIdOf);
 
   // ---- 4. dressing hook: tag each cell with a chunk-type id ----
   const dressRng = subStream(root, S_DRESS);
@@ -235,7 +314,17 @@ export function generateFloor(config: FloorConfig): Floor {
     clamped,
   };
 
-  return { width, height, cells, edges: edges.toList(), entry, exits, guaranteedRoutes: k, meta };
+  const floor: Floor = { width, height, cells, edges: edges.toList(), entry, exits, guaranteedRoutes: k, meta };
+  if (rooms) floor.rooms = rooms;
+
+  // ---- 5. puzzles: place a verifier-certified locked-door/key/rug chain (opt-in,
+  // default on). Runs LAST so it sees the final edge graph; only emits chains the
+  // independent lock-and-key verifier proves solvable (else the floor ships puzzle-free).
+  if (config.puzzles ?? true) {
+    const puzzleRng = subStream(root, S_PUZZLES);
+    placePuzzles(floor, puzzleRng, config.puzzleParams);
+  }
+  return floor;
 }
 
 /* ------------------------------ stage: perimeter ----------------------------- */
@@ -387,6 +476,18 @@ function bfsAvoidingUsedEdges(
  * (open arena). Extra edges roll a gate kind at gateDensity, so an open arena still
  * has interesting gates while the fallback guarantee keeps it solvable.
  *
+ * ROOM BIAS (when `roomIdOf` is provided): the goal is a dungeon of distinct rooms,
+ * not one open blob. So we MODULATE the per-edge open probability by which cells the
+ * edge touches:
+ *   - both endpoints in the SAME room → already opened by openRoomInteriors (skipped
+ *     here since the edge already exists).
+ *   - endpoints in DIFFERENT rooms → keep them mostly SEPARATE (low probability), so
+ *     room walls survive and rooms connect through corridors/doorways, not by merging.
+ *   - at least one endpoint OUTSIDE any room (corridor/void space) → FULL openness, so
+ *     the inter-room "negative space" forms corridor loops the layout reads as halls.
+ * This keeps rooms legible while still honouring the openness knob for the corridors.
+ * Pure book-keeping over dense indices → order-stable & deterministic.
+ *
  * Iteration is over dense indices (not a Set), so output is order-stable.
  */
 function addOpenness(
@@ -397,28 +498,219 @@ function addOpenness(
   openness: number,
   gateDensity: number,
   gateWeights: GateWeights,
+  roomIdOf?: Int32Array,
 ): void {
   if (openness <= 0) return;
+  // probability damping for edges that would MERGE two distinct rooms.
+  const MERGE_DAMP = 0.15;
+  const tryEdge = (a: number, b: number): void => {
+    if (edges.has(a, b)) return;
+    let p = openness;
+    if (roomIdOf) {
+      const ra = roomIdOf[a] as number;
+      const rb = roomIdOf[b] as number;
+      // two DIFFERENT rooms → damp hard (preserve the wall between them).
+      if (ra >= 0 && rb >= 0 && ra !== rb) p = openness * MERGE_DAMP;
+      // (same-room edges already exist; corridor/void edges keep full openness.)
+    }
+    if (!chance(rng, p)) return;
+    const kind: EdgeKind = chance(rng, gateDensity) ? pickGateKind(rng, gateWeights) : 'WALK';
+    edges.add(a, b, kind, kindIsBreakable(kind), false, -1);
+  };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const a = cellId(width, x, y);
-      if (x + 1 < width) {
-        const b = cellId(width, x + 1, y);
-        if (!edges.has(a, b) && chance(rng, openness)) {
-          const kind: EdgeKind = chance(rng, gateDensity) ? pickGateKind(rng, gateWeights) : 'WALK';
-          edges.add(a, b, kind, kindIsBreakable(kind), false, -1);
+      if (x + 1 < width) tryEdge(a, cellId(width, x + 1, y));
+      if (y + 1 < height) tryEdge(a, cellId(width, x, y + 1));
+    }
+  }
+}
+
+/* ------------------------- stage: rooms-and-corridors ------------------------ */
+
+/**
+ * Result of the rooms layout pass: the placed rooms (stable id order) and a dense
+ * cell→roomIndex map (-1 = not in any room).
+ */
+interface RoomLayout {
+  rooms: Room[];
+  roomIdOf: Int32Array; // length width*height
+}
+
+/**
+ * Lay out non-overlapping rectangular ROOMS on the grid. Deterministic dart-throwing:
+ * for a fixed number of attempts we roll a candidate rectangle (random origin + size
+ * within bounds), and accept it iff it (plus a `roomGap` margin) overlaps no prior
+ * room and stays in bounds. Accepted rooms get a stable id in acceptance order.
+ *
+ * WHY dart-throwing (not BSP): it's tiny, obviously deterministic (every roll comes
+ * from `rng` in a fixed loop order), and degrades gracefully on small grids (you just
+ * get fewer rooms). Rooms never touch the very outer ring so the perimeter fallback
+ * walkway always survives as corridor space around them.
+ *
+ * Determinism: all randomness via `rng` in a fixed attempt loop; acceptance test is a
+ * pure integer overlap check over the dense `rooms` array in id order. No Map/Set.
+ */
+function layoutRooms(rng: Rng, width: number, height: number, params?: RoomParams): RoomLayout {
+  const roomIdOf = new Int32Array(width * height).fill(-1);
+  const rooms: Room[] = [];
+
+  // Defaults derived from grid size. Keep at least a 1-cell perimeter band free.
+  const minSide = Math.max(1, Math.floor(params?.minRoomSide ?? 2));
+  const maxSideDefault = Math.max(minSide, Math.floor(width / 2));
+  const maxSide = Math.max(minSide, Math.floor(params?.maxRoomSide ?? maxSideDefault));
+  const gap = Math.max(0, Math.floor(params?.roomGap ?? 1));
+  const attempts = Math.max(0, Math.floor(params?.attempts ?? Math.ceil((width * height) / 2)));
+  // Large open halls (docs/14 §1): some attempts aim for a big footprint so the floor
+  // has sparse-walled halls, not just small chambers. Defaults scale with grid size.
+  const bigChance = clamp01(params?.bigRoomChance ?? 0.22);
+  const bigMin = Math.max(maxSide, Math.floor(params?.bigRoomMin ?? Math.floor(width * 0.45)));
+  const bigMax = Math.max(bigMin, Math.floor(params?.bigRoomMax ?? Math.floor(width * 0.7)));
+
+  // Usable interior band: leave row/col 0 and the last row/col as perimeter corridor.
+  const lo = 1;
+  const hiX = width - 2; // inclusive max x for a room's right edge
+  const hiY = height - 2; // inclusive max y for a room's top edge
+  if (hiX < lo || hiY < lo) return { rooms, roomIdOf }; // grid too small for any room
+
+  const overlaps = (x0: number, y0: number, x1: number, y1: number): boolean => {
+    // expand by gap so distinct rooms keep a wall between them.
+    for (const r of rooms) {
+      if (x0 - gap <= r.x1 && x1 + gap >= r.x0 && y0 - gap <= r.y1 && y1 + gap >= r.y0) return true;
+    }
+    return false;
+  };
+
+  // Place a candidate room of (w,h); returns true if accepted. Shared by both passes so
+  // big halls and normal rooms use identical overlap/acceptance rules (deterministic).
+  const tryPlace = (w: number, h: number): boolean => {
+    const maxX0 = hiX - w + 1;
+    const maxY0 = hiY - h + 1;
+    if (maxX0 < lo || maxY0 < lo) return false; // candidate can't fit in the band
+    const x0 = lo + nextInt(rng, maxX0 - lo + 1);
+    const y0 = lo + nextInt(rng, maxY0 - lo + 1);
+    const x1 = x0 + w - 1;
+    const y1 = y0 + h - 1;
+    if (overlaps(x0, y0, x1, y1)) return false;
+    const id = rooms.length;
+    rooms.push({ id, x0, y0, x1, y1 });
+    for (let yy = y0; yy <= y1; yy++) {
+      for (let xx = x0; xx <= x1; xx++) roomIdOf[cellId(width, xx, yy)] = id;
+    }
+    return true;
+  };
+
+  for (let a = 0; a < attempts; a++) {
+    // Per-attempt: roll whether this is a BIG HALL or a normal room, then draw its size
+    // from the matching range. We always draw the big/normal roll AND both sides from the
+    // stream (in a fixed order) so the sequence stays stable regardless of acceptance.
+    const big = chance(rng, bigChance);
+    const sMin = big ? bigMin : minSide;
+    const sMax = big ? bigMax : maxSide;
+    const w = sMin + nextInt(rng, sMax - sMin + 1);
+    const h = sMin + nextInt(rng, sMax - sMin + 1);
+    tryPlace(w, h);
+  }
+
+  return { rooms, roomIdOf };
+}
+
+/**
+ * Open every room's INTERIOR: add a WALK edge across each 4-adjacency where both cells
+ * belong to the SAME room. Adds edges only (never downgrades a spine), so a room is a
+ * fully-connected open rectangle. Deterministic: iterate cells/rooms in id order.
+ */
+function openRoomInteriors(edges: EdgeSet, width: number, rooms: readonly Room[]): void {
+  for (const r of rooms) {
+    for (let y = r.y0; y <= r.y1; y++) {
+      for (let x = r.x0; x <= r.x1; x++) {
+        const a = cellId(width, x, y);
+        if (x + 1 <= r.x1) edges.add(a, cellId(width, x + 1, y), 'WALK', false, false, -1);
+        if (y + 1 <= r.y1) edges.add(a, cellId(width, x, y + 1), 'WALK', false, false, -1);
+      }
+    }
+  }
+}
+
+/**
+ * Classify every cell's layout ROLE from the FINAL edge graph + room map, so a tileset
+ * can dress the floor (GENERATION-SOLVABILITY §"Dressing"). Pure function of the graph:
+ *   - in a room                                  → ROOM, unless it sits on the room's
+ *                                                  boundary AND has a connecting edge to a
+ *                                                  non-room cell, in which case → DOORWAY.
+ *   - not in a room, but has >=1 traversal edge  → CORRIDOR (connector / perimeter hall).
+ *   - not in a room, no traversal edge at all    → VOID (pure negative space) — but if it
+ *     is wedged between solid neighbours we leave it VOID; the renderer fills VOID with
+ *     nothing and WALL where it wants a block. We mark cells with NO edges and at least
+ *     one ROOM neighbour as WALL (they read as the room's outer wall blocks).
+ *
+ * Determinism: builds a per-cell degree/edge-target set from floor.edges in insertion
+ * order, then a single pass over cells in id order. Integer only.
+ */
+function classifyCells(
+  cells: Cell[],
+  edges: EdgeSet,
+  width: number,
+  height: number,
+  roomIdOf: Int32Array,
+): void {
+  const n = width * height;
+  const edgeList = edges.toList();
+  // adjacency-target presence (we only need "does cell c connect to a non-room cell")
+  const deg = new Int32Array(n);
+  const connectsOutsideRoom: Uint8Array = new Uint8Array(n);
+  for (const e of edgeList) {
+    deg[e.a] = (deg[e.a] as number) + 1;
+    deg[e.b] = (deg[e.b] as number) + 1;
+    const ra = roomIdOf[e.a] as number;
+    const rb = roomIdOf[e.b] as number;
+    // a doorway edge crosses a room boundary: one endpoint in a room, the other not in
+    // THAT room (different room or no room).
+    if (ra >= 0 && ra !== rb) connectsOutsideRoom[e.a] = 1;
+    if (rb >= 0 && rb !== ra) connectsOutsideRoom[e.b] = 1;
+  }
+
+  const onRoomBoundary = (c: Cell, rid: number): boolean => {
+    // boundary cell = a room cell with at least one 4-neighbour NOT in the same room.
+    const { x, y } = c;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) return true; // grid edge
+      if ((roomIdOf[cellId(width, nx, ny)] as number) !== rid) return true;
+    }
+    return false;
+  };
+
+  for (const c of cells) {
+    const rid = roomIdOf[c.id] as number;
+    if (rid >= 0) {
+      c.roomId = rid;
+      // a room cell that sits on the boundary AND has a door-edge to outside = DOORWAY;
+      // otherwise plain ROOM (interior or solid-walled boundary).
+      c.cellType = connectsOutsideRoom[c.id] && onRoomBoundary(c, rid) ? 'DOORWAY' : 'ROOM';
+      continue;
+    }
+    c.roomId = -1;
+    if ((deg[c.id] as number) > 0) {
+      c.cellType = 'CORRIDOR';
+    } else {
+      // no edges: WALL if it abuts a room (reads as the room's wall block), else VOID.
+      let abutsRoom = false;
+      for (const [dx, dy] of DIRS) {
+        const nx = c.x + dx;
+        const ny = c.y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        if ((roomIdOf[cellId(width, nx, ny)] as number) >= 0) {
+          abutsRoom = true;
+          break;
         }
       }
-      if (y + 1 < height) {
-        const b = cellId(width, x, y + 1);
-        if (!edges.has(a, b) && chance(rng, openness)) {
-          const kind: EdgeKind = chance(rng, gateDensity) ? pickGateKind(rng, gateWeights) : 'WALK';
-          edges.add(a, b, kind, kindIsBreakable(kind), false, -1);
-        }
-      }
+      c.cellType = abutsRoom ? 'WALL' : 'VOID';
     }
   }
 }
 
 /* ----- re-exports used by tests that assert determinism via this module surface ----- */
 export { shuffleInPlace, nextRange };
+export type { Room, CellType };

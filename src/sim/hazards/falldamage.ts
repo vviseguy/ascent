@@ -23,10 +23,11 @@ import {
   type Fixed, fromFloatConst, fromRaw, toRaw, sub, mul, lte,
 } from '../fixed/fixed.ts';
 
-/** Downward speed (positive magnitude) below which landing is harmless (u/s). */
-export const FALL_SAFE_SPEED: Fixed = fromFloatConst(8.0);
-/** Damage per (u/s) of impact speed past the safe threshold. */
-export const FALL_DAMAGE_PER_SPEED: Fixed = fromFloatConst(9.0);
+/** Downward speed (positive magnitude) below which landing is harmless (u/s).
+ *  Raised 8→10.5 to make falls more forgiving (per request: "fall damage a little less"). */
+export const FALL_SAFE_SPEED: Fixed = fromFloatConst(10.5);
+/** Damage per (u/s) of impact speed past the safe threshold. Softened 9→5.5. */
+export const FALL_DAMAGE_PER_SPEED: Fixed = fromFloatConst(5.5);
 /** Anchor takes this fraction of the computed damage (fall-durable). */
 export const ANCHOR_FALL_FACTOR: Fixed = fromFloatConst(0.25);
 /** Ticks of Downed applied to the Anchor on a hard landing. */

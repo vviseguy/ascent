@@ -94,8 +94,51 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
   const solids = tower.terrain.solids;
   const baseTop = F(tower.stratumBaseY[tower.stratumBaseY.length - 1]!);
 
+  // --- spatial bucket over (x,z) so the headroom test + BFS adjacency scan only NEARBY
+  // boxes instead of all of them. This makes the proof near-linear in box count (the
+  // 30×30 tower has ~8.7k boxes; the old O(n^2) scan was ~400 ms/tower). It is a pure
+  // SUPERSET filter — every box that could matter shares or neighbours a bucket — so the
+  // result is byte-identical to the exhaustive scan; only the candidate set shrinks.
+  // Deterministic: buckets hold ascending box/node indices; we iterate them in order.
+  const CELL = 4.0; // bucket size in meters (~one floor cell); a couple cells of reach span
+  const keyOf = (gx: number, gz: number): number => gx * 73856093 ^ gz * 19349663;
+  // box-index buckets (for the headroom query against ALL solids).
+  const boxBuckets = new Map<number, number[]>();
+  const addToBuckets = (m: Map<number, number[]>, idx: number, minX: number, maxX: number, minZ: number, maxZ: number): void => {
+    const gx0 = Math.floor(minX / CELL), gx1 = Math.floor(maxX / CELL);
+    const gz0 = Math.floor(minZ / CELL), gz1 = Math.floor(maxZ / CELL);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const k = keyOf(gx, gz);
+        let list = m.get(k);
+        if (!list) { list = []; m.set(k, list); }
+        list.push(idx);
+      }
+    }
+  };
+  for (let i = 0; i < solids.length; i++) {
+    const b = solids[i]!;
+    addToBuckets(boxBuckets, i, F(b.minX), F(b.maxX), F(b.minZ), F(b.maxZ));
+  }
+  // gather UNIQUE candidate box indices overlapping a query rect (ascending order).
+  const gatherBoxes = (minX: number, maxX: number, minZ: number, maxZ: number, seen: Set<number>, out: number[]): void => {
+    seen.clear(); out.length = 0;
+    const gx0 = Math.floor(minX / CELL), gx1 = Math.floor(maxX / CELL);
+    const gz0 = Math.floor(minZ / CELL), gz1 = Math.floor(maxZ / CELL);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const list = boxBuckets.get(keyOf(gx, gz));
+        if (!list) continue;
+        for (const idx of list) if (!seen.has(idx)) { seen.add(idx); out.push(idx); }
+      }
+    }
+    out.sort((p, q) => p - q);
+  };
+
   // --- collect standable nodes (ascending box order — deterministic) ---
   const nodes: StandNode[] = [];
+  const qSeen = new Set<number>();
+  const qOut: number[] = [];
   for (let i = 0; i < solids.length; i++) {
     const b = solids[i]!;
     const n: StandNode = { top: F(b.maxY), minX: F(b.minX), maxX: F(b.maxX), minZ: F(b.minZ), maxZ: F(b.maxZ) };
@@ -107,7 +150,8 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
     const cMinZ = n.minZ + probe.shrink;
     const cMaxZ = n.maxZ - probe.shrink;
     let blocked = false;
-    for (let o = 0; o < solids.length; o++) {
+    gatherBoxes(cMinX, cMaxX, cMinZ, cMaxZ, qSeen, qOut);
+    for (const o of qOut) {
       if (o === i) continue;
       const ob = solids[o]!;
       const oMinY = F(ob.minY);
@@ -119,6 +163,26 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
     }
     if (!blocked) nodes.push(n);
   }
+
+  // bucket the STANDABLE nodes too, for the BFS adjacency query (reach-expanded rect).
+  const nodeBuckets = new Map<number, number[]>();
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    addToBuckets(nodeBuckets, i, n.minX, n.maxX, n.minZ, n.maxZ);
+  }
+  const gatherNodes = (minX: number, maxX: number, minZ: number, maxZ: number, seen: Set<number>, out: number[]): void => {
+    seen.clear(); out.length = 0;
+    const gx0 = Math.floor(minX / CELL), gx1 = Math.floor(maxX / CELL);
+    const gz0 = Math.floor(minZ / CELL), gz1 = Math.floor(maxZ / CELL);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const list = nodeBuckets.get(keyOf(gx, gz));
+        if (!list) continue;
+        for (const idx of list) if (!seen.has(idx)) { seen.add(idx); out.push(idx); }
+      }
+    }
+    out.sort((p, q) => p - q);
+  };
 
   // --- start: the standable top under the stratum-0 entry point ---
   const e0 = tower.entryXZ[0];
@@ -141,16 +205,21 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
   const isGoal = (n: StandNode): boolean =>
     Math.abs(n.top - baseTop) <= 0.02 && (n.maxX - n.minX) * (n.maxZ - n.minZ) >= 2.0;
 
-  // --- BFS; adjacency computed on the fly (O(n^2) worst case — proof-time only) ---
+  // --- BFS over node adjacency; candidates from the spatial bucket (reach-expanded
+  // rect), so each step scans only nearby nodes instead of all of them. Same edges as
+  // the exhaustive scan (the rect is the exact adjacency test's bounding box). ---
   const visited = new Array<boolean>(nodes.length).fill(false);
   const queue: number[] = [start];
   visited[start] = true;
   let head = 0;
   let reached = 1;
+  const aSeen = new Set<number>();
+  const aOut: number[] = [];
   while (head < queue.length) {
     const a = nodes[queue[head++]!]!;
     if (isGoal(a)) return { ok: true, nodes: nodes.length, reached, reason: '' };
-    for (let j = 0; j < nodes.length; j++) {
+    gatherNodes(a.minX - probe.reach, a.maxX + probe.reach, a.minZ - probe.reach, a.maxZ + probe.reach, aSeen, aOut);
+    for (const j of aOut) {
       if (visited[j]) continue;
       const b = nodes[j]!;
       if (b.top - a.top > probe.maxStep) continue; // too high to hop (drops are free)

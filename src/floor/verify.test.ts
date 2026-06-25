@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { generateFloor, type FloorConfig } from './generate.ts';
-import { reachability, countRoutes, verifyFloor } from './verify.ts';
+import { reachability, countRoutes, verifyFloor, lockKeyReachable } from './verify.ts';
 import { cellId, type Floor, type Edge } from './types.ts';
 
 /* ---- tiny hand-built floor helpers (verifier must work on ANY Floor data) ---- */
@@ -147,5 +147,76 @@ describe('SMOKE/FUZZ: verifier finds all generated floors solvable & routed', ()
       throw new Error(`${failures.length}/${total} floors failed:\n${failures.slice(0, 10).join('\n')}`);
     }
     expect(total).toBeGreaterThan(1000);
+  });
+});
+
+// ============================================================================
+// LOCK-AND-KEY reachability (docs/14 §3) — the puzzle-solvability proof, with the
+// NEGATIVE CONTROLS that prove it is not vacuous (mirrors src/floor/prove.ts).
+// ============================================================================
+
+/** A 1×n corridor: cells 0..n-1, WALK edges between neighbours, entry 0, exit n-1. */
+function corridor(n: number): Floor {
+  const cells = [];
+  for (let x = 0; x < n; x++) cells.push({ id: x, x, y: 0, chunkType: 0 });
+  const edges: Edge[] = [];
+  for (let x = 0; x + 1 < n; x++) edges.push(walk(x, x + 1));
+  return {
+    width: n, height: 1, cells, edges, entry: 0, exits: [n - 1], guaranteedRoutes: 1,
+    meta: { runSeed: '0', stratumIndex: 0, openness: 0, requestedRoutes: 1, clamped: false },
+  };
+}
+
+describe('lock-and-key reachability', () => {
+  it('a puzzle-free floor is solvable iff the exit is plainly reachable', () => {
+    expect(lockKeyReachable(corridor(4)).solvable).toBe(true);
+    const sealed = corridor(4);
+    sealed.edges = sealed.edges.filter((e) => !(e.a === 2 && e.b === 3));
+    expect(lockKeyReachable(sealed).solvable).toBe(false);
+  });
+
+  it('SOLVABLE: an ordered key→door→exit chain', () => {
+    const f = corridor(5);
+    f.lockedDoors = [{ a: 2, b: 3, doorId: 0 }];
+    f.keys = [{ cell: 1, doorId: 0, source: 'LOOSE' }]; // key BEFORE its door
+    const r = lockKeyReachable(f);
+    expect(r.solvable).toBe(true);
+    expect(r.keysAcquired).toEqual([0]);
+  });
+
+  it('SOLVABLE: a two-step distributed chain (key behind an earlier door)', () => {
+    const f = corridor(7);
+    // door 0 at edge 1-2, door 1 at edge 4-5; key0 before door0, key1 between the doors.
+    f.lockedDoors = [{ a: 1, b: 2, doorId: 0 }, { a: 4, b: 5, doorId: 1 }];
+    f.keys = [
+      { cell: 0, doorId: 0, source: 'LOOSE' },
+      { cell: 3, doorId: 1, source: 'RUG' }, // only reachable AFTER door 0 opens
+    ];
+    expect(lockKeyReachable(f).solvable).toBe(true);
+  });
+
+  it('NEGATIVE: a key sealed behind its own door is UNSOLVABLE', () => {
+    const f = corridor(5);
+    f.lockedDoors = [{ a: 0, b: 1, doorId: 0 }];
+    f.keys = [{ cell: 3, doorId: 0, source: 'LOOSE' }]; // key is PAST its own door
+    expect(lockKeyReachable(f).solvable).toBe(false);
+    expect(verifyFloor(f).ok).toBe(false);
+  });
+
+  it('NEGATIVE: a circular key dependency deadlocks (UNSOLVABLE)', () => {
+    const f = corridor(5);
+    f.lockedDoors = [{ a: 1, b: 2, doorId: 0 }, { a: 2, b: 3, doorId: 1 }];
+    f.keys = [
+      { cell: 3, doorId: 0, source: 'LOOSE' }, // key0 past door1
+      { cell: 2, doorId: 1, source: 'RUG' }, // key1 past door0
+    ];
+    expect(lockKeyReachable(f).solvable).toBe(false);
+  });
+
+  it('NEGATIVE: a locked door with no key anywhere is UNSOLVABLE', () => {
+    const f = corridor(5);
+    f.lockedDoors = [{ a: 2, b: 3, doorId: 0 }];
+    f.keys = [];
+    expect(lockKeyReachable(f).solvable).toBe(false);
   });
 });

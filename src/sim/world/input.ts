@@ -29,8 +29,29 @@ export const Button = {
   /** RIGHT button held (mouse-first scheme): the SIM resolves a short TAP → Ability,
    *  a sustained HOLD → Rush, using a held-tick counter (deterministic, rollback-safe). */
   RightHold: 1 << 7,
+  /**
+   * PRIMARY interact (docs/12 §1): the contextual left-TAP action — pick up a loose
+   * item, place/use the held item, grab a body, or open a container. The SIM's interact
+   * system (src/sim/interact) resolves WHAT it does from the per-tick target + inventory.
+   */
+  Primary: 1 << 8,
+  /**
+   * SECONDARY interact (docs/12 §1): the contextual RIGHT action — throw the held body
+   * or held item (hold to charge), or open a container. Resolved by the interact system.
+   */
+  Secondary: 1 << 9,
 } as const;
 export type Button = (typeof Button)[keyof typeof Button];
+
+/**
+ * "No slot selected this tick" sentinel for PlayerInput.slot. A LEVEL field: the IO layer
+ * sets slot to 0..4 only on the tick the player actually changes the hotbar selection; a
+ * neutral/dropped frame carries NO_SLOT so the sim leaves the current selection untouched
+ * (a slot change is sticky in WorldState, not re-asserted every tick).
+ */
+export const NO_SLOT = -1;
+/** Number of hotbar slots (docs/12 §4). */
+export const NUM_SLOTS = 5;
 
 /** Quantization scale for movement components: move ∈ [-MOVE_Q, MOVE_Q] integer. */
 export const MOVE_Q = 1024;
@@ -40,9 +61,11 @@ export const MOVE_Q = 1024;
  *  - moveX / moveZ : intended move direction, each in [-MOVE_Q, MOVE_Q]. The pair
  *    encodes a stick vector; magnitude > MOVE_Q is clamped by the consumer.
  *  - aim           : facing/aim angle as a raw Fixed (radians).
- *  - buttons       : Button bitfield.
+ *  - buttons       : Button bitfield (now up to bit 9 → carried on the wire as a uint16).
  *  - grabTarget    : entity id the GRAB verb targets this tick, or -1 (resolved by
  *    the verb layer; included so grab intent is part of the deterministic input).
+ *  - slot          : hotbar slot the player selected THIS tick (0..NUM_SLOTS-1), or
+ *    NO_SLOT (-1) for "unchanged". A level field, not an edge (docs/12 §9.1).
  */
 export interface PlayerInput {
   moveX: number;
@@ -50,6 +73,7 @@ export interface PlayerInput {
   aim: number; // raw Fixed
   buttons: number;
   grabTarget: number;
+  slot: number;
 }
 
 /** The neutral input (no movement, no buttons). Used as the rollback prediction base. */
@@ -59,6 +83,7 @@ export const NEUTRAL_INPUT: PlayerInput = {
   aim: 0,
   buttons: 0,
   grabTarget: -1,
+  slot: NO_SLOT,
 };
 
 /** True if a button bit is held this tick. */

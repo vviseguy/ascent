@@ -40,7 +40,8 @@
  * and edges in id/insertion order (never Map/Set iteration) so results are stable.
  */
 
-import type { Edge, Floor } from './types.ts';
+import type { Edge, Floor, KeyItem, LockedDoor } from './types.ts';
+import { edgeKey } from './types.ts';
 
 /* ------------------------------- adjacency build ----------------------------- */
 
@@ -261,19 +262,25 @@ export interface VerifyResult {
   ok: boolean;
   reachability: ReachabilityResult;
   routeCount: RouteCountResult;
+  /** Lock-and-key solvability (always present; trivial when the floor has no puzzles). */
+  lockKey: LockKeyResult;
   /** Human-readable failure reasons (empty when ok). */
   failures: string[];
 }
 
 /**
  * Full independent verification of a floor:
- *   1. reachability: ≥1 exit reachable from entry via the fallback layer.
+ *   1. reachability: ≥1 exit reachable from entry via the fallback layer (ignores locks).
  *   2. countRoutes: edge-disjoint route count ≥ the generator's claimed k.
- * Returns a structured result; `ok` is true only if both hold.
+ *   3. lock-and-key: with locked doors as HARD gates, the keys can be acquired in
+ *      dependency order to reach an exit (docs/14 §3). For a puzzle-free floor this is
+ *      equivalent to (1); for a keyed floor it is the binding solvability proof.
+ * Returns a structured result; `ok` is true only if all hold.
  */
 export function verifyFloor(floor: Floor): VerifyResult {
   const reach = reachability(floor, false);
   const routes = countRoutes(floor);
+  const lockKey = lockKeyReachable(floor);
   const failures: string[] = [];
   if (!reach.reachable) {
     failures.push(
@@ -285,5 +292,141 @@ export function verifyFloor(floor: Floor): VerifyResult {
       `INSUFFICIENT_ROUTES: found ${routes.routes} edge-disjoint routes, generator claimed ${routes.claimed}`,
     );
   }
-  return { ok: failures.length === 0, reachability: reach, routeCount: routes, failures };
+  if (!lockKey.solvable) {
+    failures.push(
+      `LOCKED_OUT: lock-and-key fixpoint cannot reach an exit (reached ${lockKey.reachedCount} cells, acquired keys [${lockKey.keysAcquired.join(',')}])`,
+    );
+  }
+  return { ok: failures.length === 0, reachability: reach, routeCount: routes, lockKey, failures };
+}
+
+/* ----------------------- lock-and-key reachability (docs/14 §3) --------------- */
+//
+// THE PUZZLE-SOLVABILITY PROOF. The base verifier above proves connectivity ignoring
+// puzzle gates. This one adds STATE: locked doors are HARD gates (not bypassable by the
+// fallback layer — a designed lock is not a breakable block), so the floor is solvable
+// only if the player can ACQUIRE the keys in dependency order. We model the floor as a
+// state machine and run a fixpoint:
+//
+//   state = (reachable-cell-set, keys-held)
+//   1. from entry, flood every edge that is OPEN (not gated by a still-locked door),
+//      growing the reachable set.
+//   2. collect every key whose cell is now reachable → add its doorId to keys-held.
+//   3. unlocking those doors opens new edges → GOTO 1.
+//   repeat until a full pass adds nothing. SOLVABLE iff an exit is reachable at the
+//   fixpoint; UNSOLVABLE otherwise (no progress and no exit).
+//
+// This is BFS-over-reachability-with-keys. It is INDEPENDENT of the placer: it re-derives
+// everything from the compiled edges + the placed doors/keys, sharing no "trust me" state.
+// Pure integer/graph; no floats, no Map iteration on output paths (we key door lookups by
+// the numeric edgeKey, used for membership only, and iterate cells/keys/doors in id order).
+
+/** Result of the lock-and-key solvability proof. */
+export interface LockKeyResult {
+  /** True iff an exit is reachable once keys are acquired in dependency order. */
+  solvable: boolean;
+  /** Exit cell ids reachable at the fixpoint (sorted asc). */
+  reachedExits: number[];
+  /** doorIds the player can acquire keys for + open (sorted asc) — diagnostic. */
+  keysAcquired: number[];
+  /** Total reachable cells at the fixpoint (diagnostic). */
+  reachedCount: number;
+  /** Number of fixpoint iterations run (diagnostic). */
+  iterations: number;
+}
+
+/**
+ * Build the per-edge door map: numeric edgeKey → doorId for every locked door. Used for
+ * O(1) "is this edge gated, and by which door?" lookups. Membership/lookup only (never
+ * iterated for output), so it introduces no determinism hazard.
+ */
+function buildDoorMap(doors: readonly LockedDoor[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const d of doors) m.set(edgeKey(d.a, d.b), d.doorId);
+  return m;
+}
+
+/**
+ * Lock-and-key solvability of a floor (docs/14 §3). Floors with no doors/keys are judged
+ * solvable iff an exit is plainly reachable (degenerates to base reachability over all
+ * traversal edges). With doors, a locked edge is impassable until its key is held; keys
+ * are acquired when their cell is reached; the fixpoint repeats until the exit is reached
+ * or no progress is made.
+ *
+ * NOTE on the traversal graph: like the base fallback layer, every NON-locked traversal
+ * edge is treated as passable (WALK/BREAK/GAP/etc. are all eventually crossable). LOCKED
+ * edges are the only hard gates — that is the whole point of the puzzle layer.
+ */
+export function lockKeyReachable(floor: Floor): LockKeyResult {
+  const n = floor.width * floor.height;
+  const doors = floor.lockedDoors ?? [];
+  const keys: readonly KeyItem[] = floor.keys ?? [];
+  const doorOfEdge = buildDoorMap(doors);
+
+  // adjacency with each neighbour tagged by the door gating that seam (-1 = ungated).
+  // neighbour lists sorted ascending (deterministic traversal order).
+  const adj: { to: number; door: number }[][] = Array.from({ length: n }, () => []);
+  for (const e of floor.edges as Edge[]) {
+    if (e.a < 0 || e.a >= n || e.b < 0 || e.b >= n) continue;
+    const door = doorOfEdge.get(edgeKey(e.a, e.b)) ?? -1;
+    (adj[e.a] as { to: number; door: number }[]).push({ to: e.b, door });
+    (adj[e.b] as { to: number; door: number }[]).push({ to: e.a, door });
+  }
+  for (const list of adj) list.sort((p, q) => p.to - q.to);
+
+  // keys grouped by cell (a cell may hide multiple keys), iterated in floor.keys order.
+  const heldKeys = new Set<number>(); // doorIds whose key is acquired
+  const reached = new Uint8Array(n); // 1 = cell reached
+  const start = floor.entry;
+
+  let iterations = 0;
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    iterations++;
+
+    // 1. flood reachability from entry over currently-passable edges (BFS).
+    //    Recompute from scratch each pass so newly-unlocked doors are honoured.
+    reached.fill(0);
+    if (start >= 0 && start < n) {
+      reached[start] = 1;
+      const queue: number[] = [start];
+      let head = 0;
+      while (head < queue.length) {
+        const cur = queue[head++] as number;
+        for (const nb of adj[cur] as { to: number; door: number }[]) {
+          if (reached[nb.to]) continue;
+          // gated edge: only passable if we hold the door's key.
+          if (nb.door >= 0 && !heldKeys.has(nb.door)) continue;
+          reached[nb.to] = 1;
+          queue.push(nb.to);
+        }
+      }
+    }
+
+    // 2. collect every key whose cell is now reachable (iterate keys in stable order).
+    for (const key of keys) {
+      if (key.cell >= 0 && key.cell < n && reached[key.cell] && !heldKeys.has(key.doorId)) {
+        heldKeys.add(key.doorId);
+        progressed = true; // a new key may unlock more next pass
+      }
+    }
+    // loop again if we acquired a new key (it may open a door → more reachability).
+  }
+
+  const reachedExits: number[] = [];
+  for (const ex of floor.exits) if (ex >= 0 && ex < n && reached[ex]) reachedExits.push(ex);
+  reachedExits.sort((p, q) => p - q);
+
+  const keysAcquired = Array.from(heldKeys).sort((p, q) => p - q);
+  let reachedCount = 0;
+  for (let i = 0; i < n; i++) if (reached[i]) reachedCount++;
+
+  return {
+    solvable: reachedExits.length > 0,
+    reachedExits,
+    keysAcquired,
+    reachedCount,
+    iterations,
+  };
 }

@@ -20,12 +20,16 @@ import { type LabElement, mulberry32 } from '../element.ts';
 /**
  * Displace vertices by a hash of their (quantized) position so coincident
  * vertices move together — irregular silhouettes without cracking the mesh.
+ * NB: quantize via Math.round (+0 to kill -0), NOT toFixed — near-zero seam
+ * vertices can differ by ~1e-16 and toFixed(3) renders them as "0.000" vs
+ * "-0.000" → different keys → the seam tears open into a slit.
  */
+const q3 = (v: number): number => Math.round(v * 1000) + 0;
 function jitterWelded(geo: THREE.BufferGeometry, rnd: () => number, amp: number): void {
   const pos = geo.attributes.position!;
   const seen = new Map<string, [number, number, number]>();
   for (let i = 0; i < pos.count; i++) {
-    const k = `${pos.getX(i).toFixed(3)}|${pos.getY(i).toFixed(3)}|${pos.getZ(i).toFixed(3)}`;
+    const k = `${q3(pos.getX(i))}|${q3(pos.getY(i))}|${q3(pos.getZ(i))}`;
     let d = seen.get(k);
     if (!d) {
       d = [(rnd() - 0.5) * amp, (rnd() - 0.5) * amp, (rnd() - 0.5) * amp];
@@ -96,46 +100,66 @@ const rubblePile: LabElement = {
     };
 
     // ---- core: a tight, settled drift — size strictly falls off outward -----
-    const coreN = 10 + Math.floor(rnd() * 4);
+    const coreN = 11 + Math.floor(rnd() * 4);
     for (let i = 0; i < coreN; i++) {
-      const x = gauss(rnd) * 0.52;
-      const z = gauss(rnd) * 0.26;
-      const closeness = 1 - Math.min(1, Math.hypot(x / 0.62, z / 0.34)); // 1 at center
+      const x = gauss(rnd) * 0.46;
+      const z = gauss(rnd) * 0.24;
+      const closeness = 1 - Math.min(1, Math.hypot(x / 0.58, z / 0.32)); // 1 at center
       const s = 0.06 + closeness * (0.1 + rnd() * 0.04);
-      // mostly sunk; central chunks ride up the mound a little
-      const y = s * (0.04 + rnd() * 0.14) + closeness * 0.05;
+      // SUNK into the ground (lowest third buried) so the drift reads settled
+      const y = s * (rnd() * 0.1 - 0.06) + closeness * 0.045;
       chunk(rnd() < 0.55 ? 'block' : 'rubble', s, x, z, y, 0.72 + rnd() * 0.24);
     }
     // ---- 2–3 perched chunks give the core actual pile height ----------------
     const perchN = 2 + Math.floor(rnd() * 2);
     for (let i = 0; i < perchN; i++) {
       const s = 0.08 + rnd() * 0.04;
-      chunk(rnd() < 0.6 ? 'block' : 'rubble', s, gauss(rnd) * 0.16, gauss(rnd) * 0.1, 0.1 + rnd() * 0.05, 0.85);
+      chunk(rnd() < 0.6 ? 'block' : 'rubble', s, gauss(rnd) * 0.16, gauss(rnd) * 0.1, 0.09 + rnd() * 0.05, 0.85);
     }
-    // ---- fines: small gravel feathering the silhouette outward --------------
-    const fineN = 12 + Math.floor(rnd() * 6);
+    // ---- fines: small gravel feathering the edge — KEPT ON the drift apron.
+    //      Outliers are FOLDED back inside (clamping to the rim just piles
+    //      them on the rim with a gap → reads as floating litter) -------------
+    const fineN = 10 + Math.floor(rnd() * 5);
     for (let i = 0; i < fineN; i++) {
-      const x = Math.max(-0.95, Math.min(0.95, gauss(rnd) * 0.78));
-      const z = Math.max(-0.5, Math.min(0.5, gauss(rnd) * 0.4));
+      let x = gauss(rnd) * 0.56;
+      let z = gauss(rnd) * 0.28;
+      const d = Math.hypot(x / 0.64, z / 0.34);
+      if (d > 0.85) {
+        const f = (0.45 + 0.35 * rnd()) / d; // redistribute into the apron body
+        x *= f;
+        z *= f;
+      }
       const s = 0.03 + rnd() * 0.04;
-      chunk(rnd() < 0.3 ? 'block' : 'rubble', s, x, z, s * 0.05, 0.7 + rnd() * 0.3);
+      chunk(rnd() < 0.3 ? 'block' : 'rubble', s, x, z, s * 0.02, 0.7 + rnd() * 0.3);
     }
     // ---- one leaning slab fragment gives the pile a readable silhouette -----
+    // (battered, dark, tipped well past 30° and half-buried so it reads as a
+    //  fallen fragment, never a clean bright paving tile)
     {
-      const s = 0.16 + rnd() * 0.05;
-      const g = new THREE.BoxGeometry(s * 1.7, s * 0.32, s * 1.25).toNonIndexed();
-      jitterWelded(g, rnd, s * 0.16);
-      col.setHSL(0.63, 0.09, 0.13 + rnd() * 0.03);
+      const s = 0.15 + rnd() * 0.04;
+      const g = new THREE.BoxGeometry(s * 1.5, s * 0.28, s * 1.1).toNonIndexed();
+      jitterWelded(g, rnd, s * 0.24);
+      col.setHSL(0.63, 0.08, 0.105 + rnd() * 0.025);
       tint(g, col);
       const side = rnd() < 0.5 ? 1 : -1;
-      e.set(0.38 + rnd() * 0.3, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.2);
+      e.set(0.55 + rnd() * 0.35, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.25);
       q.setFromEuler(e);
-      m.compose(new THREE.Vector3(side * (0.2 + rnd() * 0.15), s * 0.3, (rnd() - 0.5) * 0.24), q, new THREE.Vector3(1, 1, 1));
+      m.compose(new THREE.Vector3(side * (0.18 + rnd() * 0.14), s * 0.16, (rnd() - 0.5) * 0.22), q, new THREE.Vector3(1, 1, 1));
       g.applyMatrix4(m);
       geos.push(g);
     }
 
     const merged = mergeGeometries(geos)!;
+    // contact-AO bake: darken vertices near the ground plane so the drift sits
+    // INTO the floor (fake occlusion — the single biggest "grounded" cue)
+    {
+      const pos = merged.attributes.position!;
+      const colors = merged.attributes.color!;
+      for (let i = 0; i < pos.count; i++) {
+        const k = 0.5 + 0.5 * Math.max(0, Math.min(1, pos.getY(i) / 0.14));
+        colors.setXYZ(i, colors.getX(i) * k, colors.getY(i) * k, colors.getZ(i) * k);
+      }
+    }
     for (const g of geos) g.dispose();
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,

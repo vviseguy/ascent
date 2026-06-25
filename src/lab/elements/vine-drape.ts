@@ -21,8 +21,8 @@ import { type LabElement, mulberry32 } from '../element.ts';
 
 const BAR_Y = 3.0; // lintel height (u)
 const BAR_W = 2.5; // lintel width (u)
-const PUSH_R = 1.1; // horizontal reach of an actor's push (u)
-const PUSH_S = 1.55; // max horizontal push offset at the actor's center (u)
+const PUSH_R = 1.3; // horizontal reach of an actor's push (u)
+const PUSH_S = 1.9; // max horizontal push offset at the actor's center (u)
 const SPRING_K = 26; // underdamped spring → pendulum swing-back…
 const SPRING_C = 3.4; // …with gentle damping so it settles in ~2s
 
@@ -41,7 +41,8 @@ interface Strand {
 
 interface LeafRef { strand: number; node: number; qRest: THREE.Quaternion; size: number }
 interface StemRef { strand: number; node: number; thick: number } // segment node→node+1
-interface BudRef { strand: number; node: number }
+/** One tiny berry in an amber bud cluster (dx/dy/dz = offset from its node). */
+interface BudRef { strand: number; node: number; dx: number; dy: number; dz: number; s: number }
 
 /** Paint one stylized pointed ivy leaf (alpha-cut card, neutral light green so
  *  per-instance colors drive the final hue). */
@@ -63,11 +64,19 @@ function makeLeafTexture(): THREE.CanvasTexture {
   body.bezierCurveTo(52, 28, 62, 32, 58, 42); // right lobe
   body.bezierCurveTo(54, 52, 44, 56, 32, 61); // back to base
   const g = ctx.createLinearGradient(0, 61, 0, 3);
-  g.addColorStop(0, 'rgb(152,170,132)');
-  g.addColorStop(0.55, 'rgb(198,212,176)');
-  g.addColorStop(1, 'rgb(174,192,156)');
+  g.addColorStop(0, 'rgb(132,150,116)');
+  g.addColorStop(0.55, 'rgb(176,190,158)');
+  g.addColorStop(1, 'rgb(152,170,138)');
   ctx.fillStyle = g;
   ctx.fill(body);
+
+  // shade one half along the center vein → a subtle FOLD so cards read as
+  // leaves with body, not flat stickers
+  ctx.save();
+  ctx.clip(body);
+  ctx.fillStyle = 'rgba(52,68,48,0.22)';
+  ctx.fillRect(0, 0, 32, S);
+  ctx.restore();
 
   // soft darker rim so cards read as individual leaves when overlapping
   ctx.strokeStyle = 'rgba(74,92,62,0.6)';
@@ -107,13 +116,28 @@ const vineDrape: LabElement = {
       const qRest = new THREE.Quaternion().setFromEuler(new THREE.Euler(-droop, yaw, roll, 'YXZ'));
       leaves.push({ strand: s, node, qRest, size });
     };
+    // an amber bud = a cluster of 3 tiny berries hugging the node (a lone box
+    // reads as a cardboard tag; a cluster reads organic)
+    const addBudCluster = (s: number, node: number): void => {
+      for (let k = 0; k < 3; k++) {
+        buds.push({
+          strand: s, node,
+          dx: (rnd() - 0.5) * 0.07, dy: -0.02 - rnd() * 0.05, dz: (rnd() - 0.5) * 0.07,
+          s: 0.028 + rnd() * 0.016,
+        });
+      }
+    };
 
     // ---- hanging strands: random-walk droop from anchors spread along the bar
     const nStrands = 9 + (rnd() < 0.5 ? 1 : 0);
+    const hemPhase = rnd() * Math.PI * 2;
     for (let i = 0; i < nStrands; i++) {
       const ax = -1.12 + (2.24 * i) / (nStrands - 1) + (rnd() - 0.5) * 0.1;
-      const az = (i % 2 === 0 ? -0.07 : 0.07) + (rnd() - 0.5) * 0.06;
-      const len = i % 2 === 0 ? 1.9 + rnd() * 0.8 : 1.35 + rnd() * 0.7;
+      const az = (i % 2 === 0 ? -0.09 : 0.09) + (rnd() - 0.5) * 0.07;
+      // smooth hem: neighbor strands have related lengths → a designed ragged
+      // curtain edge instead of alternating long/short stripes
+      const hem = 0.5 + 0.5 * Math.sin(i * 1.45 + hemPhase);
+      const len = 1.3 + hem * 1.25 + (rnd() - 0.5) * 0.25;
       const n = Math.max(7, Math.round(len / 0.15));
 
       const rest: THREE.Vector3[] = [new THREE.Vector3(ax, BAR_Y, az)];
@@ -139,11 +163,22 @@ const vineDrape: LabElement = {
         const size = (0.19 + rnd() * 0.09) * (0.85 + 0.45 * Math.sin(Math.PI * Math.min(1, f * 1.15)));
         addLeaf(sIdx, j, j * 2.4 + rnd() * 0.7, 1.7 + rnd() * 0.6, (rnd() - 0.5) * 0.6, size);
         addLeaf(sIdx, j, j * 2.4 + Math.PI * (0.8 + rnd() * 0.4), 1.5 + rnd() * 0.7, (rnd() - 0.5) * 0.6, size * (0.7 + rnd() * 0.25));
+        // third leaf on the lower half → tails stay full, never stringy
+        if (f > 0.45 && rnd() < 0.4 + f * 0.4) {
+          addLeaf(sIdx, j, rnd() * Math.PI * 2, 1.6 + rnd() * 0.8, (rnd() - 0.5) * 0.6, size * (0.75 + rnd() * 0.2));
+        }
       }
-      // small leaf pair at the very tip
-      addLeaf(sIdx, n, rnd() * Math.PI * 2, 2.3 + rnd() * 0.4, (rnd() - 0.5) * 0.5, 0.14);
+      // leaf PAIR at the very tip so strands end in a flourish, not a thread
+      const tipYaw = rnd() * Math.PI * 2;
+      addLeaf(sIdx, n, tipYaw, 2.2 + rnd() * 0.4, (rnd() - 0.5) * 0.5, 0.19);
+      addLeaf(sIdx, n, tipYaw + Math.PI * 0.9, 2.4 + rnd() * 0.4, (rnd() - 0.5) * 0.5, 0.16);
       // rare amber bud near the tip (the lone warm accent)
-      if (rnd() < 0.45) buds.push({ strand: sIdx, node: n - 1 - Math.floor(rnd() * 2) });
+      if (rnd() < 0.3) addBudCluster(sIdx, n - 1 - Math.floor(rnd() * 2));
+    }
+    // guarantee ~2 clusters total so the warm accent is rare but never absent
+    while (buds.length < 6) {
+      const s = Math.floor(rnd() * nStrands);
+      addBudCluster(s, strands[s]!.rest.length - 2);
     }
 
     // ---- leafy collar: short dense fringe along the bar so the drape has mass
@@ -197,7 +232,7 @@ const vineDrape: LabElement = {
         addLeaf(sIdx, j, rnd() * Math.PI * 2, 2.2 + rnd() * 0.7, (rnd() - 0.5) * 0.5, 0.17 + rnd() * 0.08);
         if (rnd() < 0.6) addLeaf(sIdx, j, rnd() * Math.PI * 2, 1.9 + rnd() * 0.7, (rnd() - 0.5) * 0.5, 0.14 + rnd() * 0.07);
       }
-      if (rnd() < 0.5) buds.push({ strand: sIdx, node: Math.floor(n / 2) });
+      if (rnd() < 0.5) addBudCluster(sIdx, Math.floor(n / 2));
     }
 
     // ------------------------------------------------------------------ boxes
@@ -232,9 +267,9 @@ const vineDrape: LabElement = {
       color.setHSL(0.21 + rnd() * 0.12, 0.3, 0.14 + rnd() * 0.07);
       boxMesh.setColorAt(FIXED + i, color);
     }
-    // bud colors: the rare warm amber accent
+    // bud colors: the rare warm amber accent (berries vary warm-deep to bright)
     for (let i = 0; i < buds.length; i++) {
-      boxMesh.setColorAt(FIXED + stems.length + i, color.set(0xffb24f));
+      boxMesh.setColorAt(FIXED + stems.length + i, color.set(rnd() < 0.5 ? 0xffb24f : 0xe2913a));
     }
     if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
 
@@ -244,9 +279,9 @@ const vineDrape: LabElement = {
     const leafTex = makeLeafTexture();
     const leafMat = new THREE.MeshStandardMaterial({
       map: leafTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.8,
-      // slight emissive lift so back-lit/shadowed leaves go dark mossy green,
-      // never dead black (foliage cheat; keeps the curtain readable at night)
-      emissive: 0x121a12, emissiveIntensity: 1,
+      // emissive lift so back-lit/shadowed leaves go dark mossy green, never
+      // dead black (foliage cheat; keeps the curtain readable at night)
+      emissive: 0x1a2419, emissiveIntensity: 1,
     });
     const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, leaves.length);
     leafMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -260,11 +295,13 @@ const vineDrape: LabElement = {
     for (let i = 0; i < leaves.length; i++) {
       const lf = leaves[i]!;
       const st = strands[lf.strand]!;
-      const f = (BAR_Y - st.rest[lf.node]!.y) / 2.6; // 0 at bar → 1 near floor
+      const f = Math.min(1, (BAR_Y - st.rest[lf.node]!.y) / 2.6); // 0 at bar → 1 near floor
+      // hue drifts green→teal-indigo down the strand, but lightness RISES a
+      // touch toward the tips — cool, not crushed-to-black (night readability)
       color.setHSL(
-        0.3 + f * 0.26 + (rnd() - 0.5) * 0.04,
-        0.38 - f * 0.08 + rnd() * 0.08,
-        0.26 + rnd() * 0.09 + (1 - f) * 0.04,
+        0.3 + f * 0.17 + (rnd() - 0.5) * 0.04,
+        0.4 - f * 0.1 + rnd() * 0.08,
+        0.29 + f * 0.07 + rnd() * 0.07,
       );
       leafMesh.setColorAt(i, color);
     }
@@ -287,7 +324,7 @@ const vineDrape: LabElement = {
             let tx = 0, tz = 0;
             for (const a of actors) {
               const ddx = p.x - a.x, ddz = p.z - a.z;
-              const vert = 1 - Math.max(0, Math.min(1, (Math.abs(p.y - a.y) - 1.0) / 0.9));
+              const vert = 1 - Math.max(0, Math.min(1, (Math.abs(p.y - a.y) - 1.2) / 0.8));
               if (vert <= 0) continue;
               const d = Math.hypot(ddx, ddz);
               if (d < PUSH_R) {
@@ -298,8 +335,8 @@ const vineDrape: LabElement = {
             // immediate attack (visible even in single frozen frames)
             const tMag = Math.hypot(tx, tz);
             if (tMag > Math.hypot(st.ox[j]!, st.oz[j]!)) {
-              st.ox[j] = st.ox[j]! + (tx - st.ox[j]!) * 0.5;
-              st.oz[j] = st.oz[j]! + (tz - st.oz[j]!) * 0.5;
+              st.ox[j] = st.ox[j]! + (tx - st.ox[j]!) * 0.8;
+              st.oz[j] = st.oz[j]! + (tz - st.oz[j]!) * 0.8;
             }
             // underdamped spring toward target (target=0 once actor leaves →
             // swings back past rest, oscillates, settles = pendulum feel)
@@ -341,12 +378,12 @@ const vineDrape: LabElement = {
         m.compose(v2.copy(a).add(b).multiplyScalar(0.5), q, scl.set(sg.thick, len, sg.thick));
         boxMesh.setMatrixAt(FIXED + i, m);
       }
-      // write bud instances (tiny diamonds at their node)
+      // write bud instances (tiny berry boxes clustered at their node)
       for (let i = 0; i < buds.length; i++) {
         const bd = buds[i]!;
         const p = strands[bd.strand]!.cur[bd.node]!;
         q.setFromEuler(new THREE.Euler(0.6, i * 1.3, 0.5));
-        m.compose(v.copy(p), q, scl.set(0.055, 0.075, 0.055));
+        m.compose(v.set(p.x + bd.dx, p.y + bd.dy, p.z + bd.dz), q, scl.set(bd.s, bd.s * 1.3, bd.s));
         boxMesh.setMatrixAt(FIXED + stems.length + i, m);
       }
       boxMesh.instanceMatrix.needsUpdate = true;
@@ -369,7 +406,7 @@ const vineDrape: LabElement = {
     root.add(leafMesh);
 
     update(0, []);
-    return { root, update, radius: 3.2 };
+    return { root, update, radius: 2.9 };
   },
 };
 

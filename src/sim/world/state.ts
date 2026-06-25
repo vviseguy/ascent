@@ -66,6 +66,38 @@ export const BodyFlag = {
   Throwable: 1 << 4, // a world object that can be grabbed/thrown
   Downed: 1 << 5, // in the downed/vulnerable beat (Anchor after a big throw)
   NoGravity: 1 << 6, // carried bodies ignore gravity (carrier owns transform)
+  /**
+   * A destructible prop (crate / pot / barrel). Sits in the world as a solid
+   * obstacle; its `health` field is its INTEGRITY. When integrity reaches 0 the
+   * breakable system (src/sim/breakable) kills it and deterministically spawns
+   * Pickup drops. Damaged by the Breaker AoE shove, RUSH impacts, and thrown-body
+   * impacts above a threshold. The render layer draws Breakable bodies as props.
+   */
+  Breakable: 1 << 7,
+  /**
+   * A small item DROP spawned when a Breakable is destroyed. Also a Throwable
+   * Light body (so it falls / can be grabbed via existing physics & verbs), but
+   * the distinct flag lets the render/HUD layer draw it as a pickup. Carries no
+   * extra sim behavior beyond a normal Light throwable.
+   */
+  Pickup: 1 << 8,
+  /**
+   * A LOCKED DOOR body (terrain-puzzles, docs/14 §2). Sits in a doorway cell as a
+   * solid blocker while locked; carries its lock identity in `doorId` and its
+   * locked/open state in `lockState`. Opened by the interaction system when a player
+   * holds the matching KEY (ItemKind.Key whose slotDoor == this body's doorId),
+   * which CONSUMES the key and clears the body's solid collision (lockState→0). The
+   * verifier models it as an edge gated on `doorId`. Render dresses it as a door.
+   */
+  Door: 1 << 9,
+  /**
+   * A movable RUG body (terrain-puzzles, docs/14 §2 "rug → mat → key reveal"). An
+   * interactable prop that, when first interacted with (Open) or shoved off its tile,
+   * REVEALS a hidden KEY: it deterministically spawns a Key Pickup body for the door
+   * named in its `doorId`, then sets `rugRevealed` so the reveal is one-shot. Models
+   * the "search the room" beat. Hashed + rollback-safe (no Math.random).
+   */
+  Rug: 1 << 10,
 } as const;
 export type BodyFlag = (typeof BodyFlag)[keyof typeof BodyFlag];
 
@@ -276,6 +308,87 @@ export interface WorldState {
    * rollback. Keyboard inputs that set Rush/Ability directly bypass this.
    */
   rightHoldStart: Int32Array;
+
+  // --- INTERACTION + INVENTORY tick-state (src/sim/interact) ----------------
+  // The docs/12 contextual-interaction + 5-slot hotbar scheme. All per-body Int32
+  // channels (item kinds, the selected slot index, the targeting result), appended to
+  // INT32_FIELDS so they are hashed / cloned / restored / compared automatically —
+  // that is what makes pickup/use/throw + slot-select rollback-safe. Never floats.
+  // Five flat slot fields (inv0..inv4) rather than a packed sub-array so they fold
+  // into the existing per-field hash sweep with zero special-casing.
+
+  /** Hotbar slot 0 — an ItemKind id (0 = empty). Player bodies only; objects keep 0. */
+  inv0: Int32Array;
+  /** Hotbar slot 1 — an ItemKind id (0 = empty). */
+  inv1: Int32Array;
+  /** Hotbar slot 2 — an ItemKind id (0 = empty). */
+  inv2: Int32Array;
+  /** Hotbar slot 3 — an ItemKind id (0 = empty). */
+  inv3: Int32Array;
+  /** Hotbar slot 4 — an ItemKind id (0 = empty). */
+  inv4: Int32Array;
+  /** Selected hotbar slot index (0..NUM_SLOTS-1). The "in hand" slot. Defaults 0. */
+  selSlot: Int32Array;
+  /**
+   * The interactable entity this player's contextual focus targets THIS tick, or
+   * NO_ENTITY. Recomputed every tick by the interact targeting system (a pure function
+   * of state), then hashed — so the HUD is a pure reader and a check-frame catches any
+   * divergence. Non-player bodies hold NO_ENTITY.
+   */
+  targetEntity: Int32Array;
+  /**
+   * Bitfield of the InteractAction(s) the current target offers this tick (Pickup /
+   * Grab / Open / PlaceUse / ThrowItem / DropBody / ThrowBody). The HUD reads this to
+   * draw the PRIMARY + SECONDARY hint glyphs. Recomputed each tick alongside
+   * targetEntity; hashed. 0 = no action available.
+   */
+  targetActions: Int32Array;
+
+  // --- TERRAIN-PUZZLE tick-state (src/sim/interact door hook, docs/14 §2) ---------
+  // Locked doors, keys, and rug reveals are SIM ENTITIES in WorldState (hashed,
+  // rollback-safe). All per-body Int32 channels, appended to INT32_FIELDS so they are
+  // hashed / cloned / restored / compared automatically. Never floats; sentinels are
+  // integers. Non-puzzle bodies keep the defaults (doorId -1, lockState/rugRevealed 0).
+
+  /**
+   * Puzzle identity datum (docs/14 §2):
+   *  - Door body (BodyFlag.Door): the lock id this door requires (>= 0).
+   *  - Key Pickup body (ItemKind.Key drop): the door id this key opens (>= 0).
+   *  - Rug body (BodyFlag.Rug): the door id the hidden key it reveals opens (>= 0).
+   * -1 = none (every non-puzzle body). A small non-negative int per distinct lock on
+   * the floor; folded into the hash so peers agree on which key fits which door.
+   */
+  doorId: Int32Array;
+  /**
+   * Lock state of a Door body: 1 = LOCKED (solid, blocks passage), 0 = OPEN (passable).
+   * Toggled to 0 by resolveOpen when a player uses the matching key. Ignored (0) for
+   * non-door bodies. Hashed → the open/closed state is part of rollback consensus.
+   */
+  lockState: Int32Array;
+  /**
+   * One-shot reveal latch for a Rug body: 0 = key not yet revealed, 1 = already
+   * revealed (so the rug spawns its hidden key at most once). Ignored (0) for
+   * non-rug bodies. Hashed.
+   */
+  rugRevealed: Int32Array;
+
+  // --- KEY-SLOT aux data (the doorId a Key in each hotbar slot opens) -------------
+  // A Key in the hotbar must remember WHICH door it opens after the key body is
+  // consumed into a slot. These five parallel Int32 fields mirror inv0..inv4: when
+  // slotN holds ItemKind.Key, slotDoorN is the door id it opens; otherwise -1. Picking
+  // up a Key transfers the key body's doorId into the slot's door field; using it on
+  // the matching door clears both. Appended to INT32_FIELDS (hashed/cloned/restored).
+
+  /** Door id a Key in hotbar slot 0 opens (-1 if slot 0 isn't a key). */
+  slotDoor0: Int32Array;
+  /** Door id a Key in hotbar slot 1 opens (-1 if not a key). */
+  slotDoor1: Int32Array;
+  /** Door id a Key in hotbar slot 2 opens (-1 if not a key). */
+  slotDoor2: Int32Array;
+  /** Door id a Key in hotbar slot 3 opens (-1 if not a key). */
+  slotDoor3: Int32Array;
+  /** Door id a Key in hotbar slot 4 opens (-1 if not a key). */
+  slotDoor4: Int32Array;
 }
 
 /** Allocate an empty world state of the given capacity. All bodies start dead. */
@@ -334,6 +447,26 @@ export function createWorld(capacity: number = MAX_ENTITIES): WorldState {
     // struggle mash-ramp burst counter — 0 = idle.
     struggleBurst: new Int32Array(capacity),
     rightHoldStart: new Int32Array(capacity).fill(-1),
+    // interaction + inventory — slots default to ItemKind.Empty (0), selected slot 0,
+    // no target (NO_ENTITY) + no available action (0).
+    inv0: new Int32Array(capacity),
+    inv1: new Int32Array(capacity),
+    inv2: new Int32Array(capacity),
+    inv3: new Int32Array(capacity),
+    inv4: new Int32Array(capacity),
+    selSlot: new Int32Array(capacity),
+    targetEntity: new Int32Array(capacity).fill(NO_ENTITY),
+    targetActions: new Int32Array(capacity),
+    // terrain-puzzle entities — doorId defaults to -1 (no puzzle), lock/rug flags 0.
+    doorId: new Int32Array(capacity).fill(-1),
+    lockState: new Int32Array(capacity),
+    rugRevealed: new Int32Array(capacity),
+    // key-slot aux — each slot's key-door defaults to -1 (slot holds no key).
+    slotDoor0: new Int32Array(capacity).fill(-1),
+    slotDoor1: new Int32Array(capacity).fill(-1),
+    slotDoor2: new Int32Array(capacity).fill(-1),
+    slotDoor3: new Int32Array(capacity).fill(-1),
+    slotDoor4: new Int32Array(capacity).fill(-1),
   };
 }
 
@@ -350,6 +483,14 @@ export interface BodySpec {
   facing?: Fixed;
   crewId?: number; // defaults to NO_CREW (objects)
   role?: Role; // defaults to Role.None
+  /**
+   * Terrain-puzzle id (docs/14 §2): for a Door body the lock id it requires, for a
+   * Key Pickup the door it opens, for a Rug the door its hidden key opens. Defaults
+   * to -1 (no puzzle). Folded into the hashed `doorId` field.
+   */
+  doorId?: number;
+  /** Initial lock state for a Door body: 1 = locked (default for doors), 0 = open. Defaults 0. */
+  lockState?: number;
 }
 
 /**
@@ -417,6 +558,25 @@ export function spawnBody(w: WorldState, spec: BodySpec): number {
   w.breakerShoveUntil[id] = -1;
   w.struggleBurst[id] = 0;
   w.rightHoldStart[id] = -1;
+  // interaction + inventory — reset so a reused slot carries no stale items/target.
+  w.inv0[id] = 0;
+  w.inv1[id] = 0;
+  w.inv2[id] = 0;
+  w.inv3[id] = 0;
+  w.inv4[id] = 0;
+  w.selSlot[id] = 0;
+  w.targetEntity[id] = NO_ENTITY;
+  w.targetActions[id] = 0;
+  // terrain-puzzle entity fields — from the spec (default -1/0 for non-puzzle bodies).
+  w.doorId[id] = spec.doorId ?? -1;
+  w.lockState[id] = spec.lockState ?? 0;
+  w.rugRevealed[id] = 0;
+  // key-slot aux — reset so a reused slot carries no stale key-door bindings.
+  w.slotDoor0[id] = -1;
+  w.slotDoor1[id] = -1;
+  w.slotDoor2[id] = -1;
+  w.slotDoor3[id] = -1;
+  w.slotDoor4[id] = -1;
   return id;
 }
 
@@ -461,6 +621,11 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'struggleBurst',
   // --- mouse-first right-button tap/hold resolver (appended) ---
   'rightHoldStart',
+  // --- interaction + inventory (docs/12; appended; see WorldState above) ---
+  'inv0', 'inv1', 'inv2', 'inv3', 'inv4', 'selSlot', 'targetEntity', 'targetActions',
+  // --- terrain puzzles: locked doors / keys / rugs (docs/14 §2; appended) ---
+  'doorId', 'lockState', 'rugRevealed',
+  'slotDoor0', 'slotDoor1', 'slotDoor2', 'slotDoor3', 'slotDoor4',
 ];
 
 /**

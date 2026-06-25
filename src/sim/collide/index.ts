@@ -68,5 +68,5 @@ export function applyCollision(w: WorldState, index: SpatialIndex, terrain: Terr
 
 // re-exports so consumers import the whole layer from one place
 export { resolveTerrain, circleResolve };
-export { type Terrain, type AABB, makeBox, makeArena, flatGround } from './terrain.ts';
+export { type Terrain, type AABB, makeBox, makeArena, flatGround, MAX_STEP_HEIGHT, STEP_CLIMB_RATE } from './terrain.ts';
 export { ITERATIONS } from './circle.ts';

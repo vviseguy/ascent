@@ -22,19 +22,22 @@
 //   2    1     playerId     (uint8, dense 0..N-1)
 //   3    1     count        (number of frames in this packet, 1..MAX_REDUNDANT)
 //   4    4     baseTick     (uint32 LE = tick of the FIRST/newest frame)
-//   8    n*6   frames[]     newest→oldest, each 6 bytes:
-//                 0: buttons  (uint8)
-//                 1: moveX    (int8, quantized stick X)
-//                 2: moveZ    (int8, quantized stick Z)
-//                 3-4: aim    (uint16 LE, 65536-step angle)
-//                 5: grabTgt  (uint8: grabTarget+1, 0 = none/-1; ids 0..254)
+//   8    n*8   frames[]     newest→oldest, each 8 bytes:
+//                 0-1: buttons (uint16 LE — widened for Primary/Secondary, docs/12 §9.1)
+//                 2: moveX    (int8, quantized stick X)
+//                 3: moveZ    (int8, quantized stick Z)
+//                 4-5: aim    (uint16 LE, 65536-step angle)
+//                 6: grabTgt  (uint8: grabTarget+1, 0 = none/-1; ids 0..254)
+//                 7: slot     (uint8: slot+1, 0 = NO_SLOT/unchanged; slots 0..4)
 // ============================================================================
 
 import type { PlayerInput } from '../sim/world/input.ts';
-import { MOVE_Q } from '../sim/world/input.ts';
+import { MOVE_Q, NO_SLOT, NUM_SLOTS } from '../sim/world/input.ts';
 import { TWO_PI, toRaw, fromRaw, toFloat } from '../sim/fixed/fixed.ts';
 
-export const PROTO_VERSION = 1;
+// PROTO_VERSION bumped to 2: the input frame grew (uint16 buttons + a slot byte) for the
+// docs/12 interaction scheme. Peers on different protos reject each other's packets.
+export const PROTO_VERSION = 2;
 
 /** Packet kinds (versioned-envelope discipline reused from Frequency). */
 export const PacketKind = {
@@ -50,11 +53,15 @@ export type PacketKind = (typeof PacketKind)[keyof typeof PacketKind];
 
 /** Max redundant frames per packet (drop/reorder self-heal window). */
 export const MAX_REDUNDANT = 12;
-const FRAME_BYTES = 6;
+const FRAME_BYTES = 8;
 const HEADER_BYTES = 8;
 
 /** Clamp helper for int8 fields. */
 const i8 = (n: number): number => (n < -127 ? -127 : n > 127 ? 127 : n | 0);
+
+/** Hotbar slot → wire byte (slot+1, 0 = NO_SLOT) and back; clamps to a valid slot. */
+const slotToWire = (s: number): number => (s < 0 || s >= NUM_SLOTS ? 0 : (s + 1) & 0xff);
+const slotFromWire = (b: number): number => (b === 0 ? NO_SLOT : Math.min(NUM_SLOTS - 1, b - 1));
 
 /** Requantize move [-MOVE_Q,MOVE_Q] → int8 [-127,127] (wire) and back. */
 const moveToWire = (m: number): number => i8(Math.round((m / MOVE_Q) * 127));
@@ -92,11 +99,12 @@ export function encodeInput(
   for (let i = 0; i < n; i++) {
     const f = frames[i]!;
     const o = HEADER_BYTES + i * FRAME_BYTES;
-    dv.setUint8(o, f.buttons & 0xff);
-    dv.setInt8(o + 1, moveToWire(f.moveX));
-    dv.setInt8(o + 2, moveToWire(f.moveZ));
-    dv.setUint16(o + 3, aimToWire(f.aim), true);
-    dv.setUint8(o + 5, (f.grabTarget < 0 ? 0 : (f.grabTarget + 1)) & 0xff);
+    dv.setUint16(o, f.buttons & 0xffff, true);
+    dv.setInt8(o + 2, moveToWire(f.moveX));
+    dv.setInt8(o + 3, moveToWire(f.moveZ));
+    dv.setUint16(o + 4, aimToWire(f.aim), true);
+    dv.setUint8(o + 6, (f.grabTarget < 0 ? 0 : (f.grabTarget + 1)) & 0xff);
+    dv.setUint8(o + 7, slotToWire(f.slot));
   }
   return buf;
 }
@@ -121,15 +129,16 @@ export function decodeInput(buf: ArrayBuffer): DecodedInput | null {
   const frames: { tick: number; frame: PlayerInput }[] = [];
   for (let i = 0; i < n; i++) {
     const o = HEADER_BYTES + i * FRAME_BYTES;
-    const tgt = dv.getUint8(o + 5);
+    const tgt = dv.getUint8(o + 6);
     frames.push({
       tick: baseTick - i,
       frame: {
-        buttons: dv.getUint8(o),
-        moveX: moveFromWire(dv.getInt8(o + 1)),
-        moveZ: moveFromWire(dv.getInt8(o + 2)),
-        aim: aimFromWire(dv.getUint16(o + 3, true)),
+        buttons: dv.getUint16(o, true),
+        moveX: moveFromWire(dv.getInt8(o + 2)),
+        moveZ: moveFromWire(dv.getInt8(o + 3)),
+        aim: aimFromWire(dv.getUint16(o + 4, true)),
         grabTarget: tgt === 0 ? -1 : tgt - 1,
+        slot: slotFromWire(dv.getUint8(o + 7)),
       },
     });
   }
@@ -144,11 +153,12 @@ export function decodeInput(buf: ArrayBuffer): DecodedInput | null {
  */
 export function canonicalizeInput(f: PlayerInput): PlayerInput {
   return {
-    buttons: f.buttons & 0xff,
+    buttons: f.buttons & 0xffff,
     moveX: moveFromWire(moveToWire(f.moveX)),
     moveZ: moveFromWire(moveToWire(f.moveZ)),
     aim: aimFromWire(aimToWire(f.aim)),
     grabTarget: f.grabTarget < 0 || f.grabTarget > 254 ? -1 : f.grabTarget,
+    slot: slotFromWire(slotToWire(f.slot)),
   };
 }
 

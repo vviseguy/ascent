@@ -101,7 +101,7 @@ function makeScene(): { sim: Sim; playerIds: number[] } {
 /** Deterministic per-tick inputs incl. occasional grab/throw/rush. */
 function makeStream(seed: number, players: number[], ticks: number, cap: number): PlayerInput[][] {
   const rnd = mulberry32(seed);
-  const cur: PlayerInput[] = players.map(() => ({ moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1 }));
+  const cur: PlayerInput[] = players.map(() => ({ moveX: 0, moveZ: 0, aim: 0, buttons: 0, grabTarget: -1, slot: -1 }));
   const stream: PlayerInput[][] = [];
   for (let t = 0; t < ticks; t++) {
     const frame: PlayerInput[] = new Array(cap);
@@ -119,6 +119,7 @@ function makeStream(seed: number, players: number[], ticks: number, cap: number)
           aim: Math.floor((rnd() * 2 - 1) * 205887),
           buttons,
           grabTarget: -1,
+          slot: -1,
         };
       }
       frame[players[pi]!] = cur[pi]!;
