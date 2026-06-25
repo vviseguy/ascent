@@ -310,7 +310,7 @@ export interface WorldState {
   rightHoldStart: Int32Array;
 
   // --- INTERACTION + INVENTORY tick-state (src/sim/interact) ----------------
-  // The docs/12 contextual-interaction + 5-slot hotbar scheme. All per-body Int32
+  // The docs/11 contextual-interaction + 5-slot hotbar scheme. All per-body Int32
   // channels (item kinds, the selected slot index, the targeting result), appended to
   // INT32_FIELDS so they are hashed / cloned / restored / compared automatically —
   // that is what makes pickup/use/throw + slot-select rollback-safe. Never floats.
@@ -621,7 +621,7 @@ export const INT32_FIELDS: readonly (keyof WorldState)[] = [
   'struggleBurst',
   // --- mouse-first right-button tap/hold resolver (appended) ---
   'rightHoldStart',
-  // --- interaction + inventory (docs/12; appended; see WorldState above) ---
+  // --- interaction + inventory (docs/11; appended; see WorldState above) ---
   'inv0', 'inv1', 'inv2', 'inv3', 'inv4', 'selSlot', 'targetEntity', 'targetActions',
   // --- terrain puzzles: locked doors / keys / rugs (docs/14 §2; appended) ---
   'doorId', 'lockState', 'rugRevealed',

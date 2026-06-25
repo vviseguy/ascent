@@ -82,7 +82,7 @@ Why this layer earns its keep — it makes the things you keep hitting **first-c
 - **Half-walls per side**: a `HALF` slot renders a half-wall on each adjoining room's interior
   side; a `SOLID` between room↔void renders one. No stacking, no back-faces — it's per-slot.
 - **Doors**: a `DOORWAY` slot with an `openable` flag; at runtime it carries a **hinge angle**
-  (sim state) → the drag-open mechanic (docs/12 §3.4). The leaf hinges on the post.
+  (sim state) → the drag-open mechanic (docs/11 §3.4). The leaf hinges on the post.
 - **Corners**: posts decide pillars (see above).
 - **Fog/occlusion**: walls + doors are addressable entities, so "hide the wall between camera and
   player" and "a closed door keeps the next room fogged" operate on slots, cleanly.

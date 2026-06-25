@@ -251,6 +251,9 @@ export class Renderer {
   private camDist = 20;
   /** Camera orbit heading (radians) — the player's focus direction (docs/11). View-only. */
   private focusYaw = 0;
+  /** Camera INCLINATION / pitch (radians) — left-drag vertical tilts it (docs/11 §2).
+   *  Default ≈72° = atan2(CAM_SIN55, CAM_COS55), the shipped fixed pitch. View-only. */
+  private focusPitch = Math.atan2(CAM_SIN55, CAM_COS55);
   private camReady = false;
   // --- USER CAMERA state (wheel zoom / middle-drag pan / recenter; view-only) ---
   /** Wheel-driven multiplier on the dolly distance (clamped; see ZOOM_*). */
@@ -273,7 +276,7 @@ export class Renderer {
   private hud: { root: HTMLElement; height: HTMLElement; state: HTMLElement; health: HTMLElement } | null = null;
   /** Local-player health pill (bottom-right): bar + number, mirrors the Anchor arc style. */
   private localHud: { root: HTMLElement; bar: HTMLElement; num: HTMLElement } | null = null;
-  /** Inventory hotbar + contextual hint prompts (docs/12). Pure reader of sim state. */
+  /** Inventory hotbar + contextual hint prompts (docs/11). Pure reader of sim state. */
   private hotbar: Hotbar | null = null;
   private winBanner: HTMLElement | null = null;
   /** Off-screen crew indicators: a DOM container + per-body arrow elements (pooled). */
@@ -578,7 +581,7 @@ export class Renderer {
    *  - `moving/facing/speed`: the local player's live motion, consumed with dt in
    *    updateCamera for the recenter-on-move drift.
    */
-  setViewControls(wheel: number, panDX: number, panDY: number, moving: boolean, facing: number, speed: number, focusYaw = 0): void {
+  setViewControls(wheel: number, panDX: number, panDY: number, moving: boolean, facing: number, speed: number, focusYaw = 0, focusPitch = Math.atan2(CAM_SIN55, CAM_COS55)): void {
     if (wheel !== 0) {
       this.userZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.userZoom * Math.exp(wheel * ZOOM_PER_DELTA)));
     }
@@ -591,6 +594,7 @@ export class Renderer {
     this.localFacing = facing;
     this.localSpeed = speed;
     this.focusYaw = focusYaw; // camera orbits the player at this heading (docs/11)
+    this.focusPitch = focusPitch; // ...and at this inclination (left-drag vertical, docs/11 §2)
   }
 
   private colorFor(w: WorldState, id: number): number {
@@ -1258,16 +1262,18 @@ export class Renderer {
     const wantDist = Math.min(CAM_DIST_MAX, Math.max(CAM_DIST_MIN, baseDist * this.userZoom));
     this.camDist += (wantDist - this.camDist) * (1 - Math.exp(-CAM_DOLLY_RATE * dt));
 
-    // TRUE 55° pitch: offset (0, D·sin55, D·cos55) and lookAt the (panned) target
-    // EXACTLY — pitch = atan(0.819/0.574) = 54.97° ≈ 55°. The 42%-up framing is a
-    // projection SHIFT via setViewOffset in resize() (see CAM_SIN55/FRAME_SHIFT docs).
-    // Orbit the player at the focus heading (docs/11): rotate the ground offset (0, D·cos55)
-    // around Y by focusYaw. focusYaw 0 = the shipped +Z view; camera-forward = (−sin,−cos)
-    // exactly matches the input's forwardDir, so "W" always goes up the screen.
+    // Camera offset (0, D·sinP, D·cosP) + lookAt the (panned) target EXACTLY, so the
+    // pitch equals focusPitch (default ≈72° = atan2(CAM_SIN55, CAM_COS55); now USER-
+    // adjustable via left-drag vertical, docs/11 §2). The 42%-up framing stays a projection
+    // SHIFT via setViewOffset in resize() (CAM_SIN55/FRAME_SHIFT) and is left as-is.
+    // Orbit the player at the focus heading (docs/11): rotate the ground offset around Y by
+    // focusYaw. focusYaw 0 = the shipped +Z view; camera-forward = (−sin,−cos) matches the
+    // input's forwardDir, so "W" always goes up the screen.
     const D = this.camDist;
     const fx = this.camTarget.x + this.panX, fy = this.camTarget.y, fz = this.camTarget.z + this.panZ;
-    const gr = D * CAM_COS55;
-    this.camera.position.set(fx + Math.sin(this.focusYaw) * gr, fy + D * CAM_SIN55, fz + Math.cos(this.focusYaw) * gr);
+    const sinP = Math.sin(this.focusPitch), cosP = Math.cos(this.focusPitch);
+    const gr = D * cosP;
+    this.camera.position.set(fx + Math.sin(this.focusYaw) * gr, fy + D * sinP, fz + Math.cos(this.focusYaw) * gr);
     this.camera.lookAt(fx, fy, fz);
 
     // SCREEN SHAKE (docs/07 §1.7): offset = trauma² · maxOffset · cosmetic-noise.
@@ -1419,7 +1425,7 @@ export class Renderer {
   }
 
   /**
-   * Attach the INVENTORY HOTBAR + contextual HINT overlay (docs/12). Pure reader of the
+   * Attach the INVENTORY HOTBAR + contextual HINT overlay (docs/11). Pure reader of the
    * sim's per-player inventory + targeting state; `localCrew` only picks the accent color.
    * Kept as its own method (and its own file, src/render/hotbar.ts) so the renderer edit
    * stays minimal. Call once by main after attachHud.

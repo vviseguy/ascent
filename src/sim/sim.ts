@@ -160,7 +160,7 @@ export class Sim {
     // `count`, so the pre-tick loops below won't re-scan them this tick.
     applyBreakables(w, this.index, w.tick);
 
-    // SYSTEM 6.6: INTERACTION + INVENTORY (docs/12) — contextual targeting + the 5-slot
+    // SYSTEM 6.6: INTERACTION + INVENTORY (docs/11) — contextual targeting + the 5-slot
     // hotbar. Runs AFTER verbs/breakables so grab linkage + drops are settled (a freshly
     // dropped item is a valid pickup target next tick) and BEFORE fall-damage/game-layer.
     // Reuses the same index (queries only). Item bodies it spawns (placed/thrown) land at

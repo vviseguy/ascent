@@ -379,13 +379,12 @@ export class Dungeon {
    * WORLD-grid-aligned geometry (never camera-facing / never a screen overlay): it lies
    * flat on the cell's floor plane so an UNEXPLORED cell reads as a pool of solid ink that
    * lines up exactly to the grid (fixing the "misaligned black rectangles"). It is only a
-   * LOW slab (not a full-height column) on purpose: an unexplored cell's tiles/props/walls
-   * are HIDDEN (cell.group.visible = false), so there is nothing to poke through — the slab
-   * only has to hide the FLOOR footprint. Keeping it low means the steep top-down camera
-   * always sees ACROSS the ink instead of being walled into a black canyon. Oversized in
-   * X/Z so neighbouring slabs overlap seamlessly. Shared opaque material. */
+   * FULL cell/wall-height column (per request: the low slab wasn't tall enough): an unexplored
+   * cell's tiles/props/walls are HIDDEN (cell.group.visible = false), so the ink stands in for
+   * them as a solid black wall the same height as the masonry. Oversized in X/Z so neighbouring
+   * slabs overlap seamlessly. Shared opaque material. */
   private makeFogCube(cx: number, sy: number, cz: number, cs: number): THREE.Mesh {
-    const height = Math.max(0.6, cs * 0.18); // a low ink slab, ~0.8u — never towers
+    const height = cs; // FULL cell/wall-height ink (cs ≈ wall height) so unexplored reads as a solid black wall
     const box = new THREE.Mesh(new THREE.BoxGeometry(cs * 1.04, height, cs * 1.04), this.fogMat);
     // straddle the floor plane so the ink sits just over the floor tile and a touch above.
     box.position.set(cx, sy + height / 2 - 0.1, cz);

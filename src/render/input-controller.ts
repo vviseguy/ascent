@@ -9,15 +9,16 @@
 // focus heading is VIEW-ONLY state — it only shapes how this client forms its input;
 // the sim still receives canonical WORLD-space move + aim, so determinism is intact.
 //
-// CONTROL SCHEME (docs/12 — the interaction overhaul):
+// CONTROL SCHEME (docs/11 — the controls + interaction reference):
 //   WASD / arrows  : MOVE relative to the camera focus (W = up the screen)
-//   left-DRAG      : active-pan the focus + camera yaw (Minecraft look; replaces the
-//                    old edge-hold infinite pan)
+//   left-DRAG horiz: orbit the focus + camera yaw (Minecraft look; replaces the old
+//                    edge-hold pan). Sign FLIPPED (2026-06 feel pass): drag right → focus left.
+//   left-DRAG vert : tilt the camera INCLINATION (pitch); clamped (docs/11 §2)
 //   left-TAP       : PRIMARY interact (contextual; sim resolves pickup/place/use/grab)
 //   right          : SECONDARY interact (contextual; throw held body/item, open)
-//   wheel          : hotbar slot select (Ctrl+wheel / − = : camera zoom)
+//   wheel          : camera ZOOM        Shift+wheel : hotbar slot select
 //   1–5            : direct hotbar slot select
-//   Shift          : RUSH (dash)        E : role ABILITY
+//   Shift          : (unbound — Rush disabled for now)   E : role ABILITY
 //   Space jump · L struggle · Q recall/plant · middle-click recenter focus
 //
 // CONTEXTUAL BODY MAPPING (determinism-safe — still canonical world-space output):
@@ -34,12 +35,17 @@ import { InteractAction } from '../sim/interact/model.ts';
 
 const TWO_PI = Math.PI * 2;
 const FIXED_ONE = 65536; // Q16.16 scale: aim is a raw Fixed angle (view-layer float→raw is fine)
-// --- focus-relative control tunables (docs/11 §6 + docs/12) ---
+// --- focus-relative control tunables (docs/11 §8) ---
+const DEG = Math.PI / 180;
 const FACE_TURN_RATE = 7.0;    // /s facing lerp toward forward while moving fwd/back
 const FOCUS_SNAP_RATE = 16.0;  // /s focus lerp toward movement on middle-click
 const DRAG_DEADZONE_PX = 6;    // left-drag distance below which a press is a TAP, not a pan
 const TAP_MAX_MS = 250;        // max left-press duration that still counts as a tap
-const DRAG_PAN_RATE = 3.0;     // focus rotation (rad) per one screen-width of horizontal drag
+const DRAG_PAN_RATE = 3.0;     // focus yaw (rad) per one screen-width of horizontal drag
+const PITCH_DRAG_RATE = 1.4;   // camera pitch (rad) per one screen-height of vertical drag
+const PITCH_MIN = 40 * DEG;    // shallowest inclination (toward the horizon)
+const PITCH_MAX = 85 * DEG;    // steepest inclination (near top-down)
+const DEFAULT_PITCH = Math.atan2(0.951, 0.309); // ≈72° — matches renderer CAM_SIN55/COS55
 
 /**
  * The local player's CONTEXTUAL state, read from the sim by the loop each frame and
@@ -61,7 +67,7 @@ export class InputController {
   private keys = new Set<string>();
   private mouseDownL = false;
   private mouseDownR = false;
-  /** Plain wheel accumulator (hotbar scroll); Ctrl+wheel routes to zoom instead. */
+  /** Shift+wheel accumulator (hotbar scroll); plain wheel routes to zoom instead. */
   private wheelHotbar = 0;
   private wheelZoom = 0;
   /** Pending direct slot select from 1–5 (or NO_SLOT). Consumed once per sample. */
@@ -75,6 +81,9 @@ export class InputController {
    *  −Z) opening framed the perimeter wall / void behind the player → an all-black screen
    *  (boss #1/#2). At π, "W" also walks the player forward INTO the dungeon, as expected. */
   focusYaw = Math.PI;
+  /** VIEW-ONLY camera INCLINATION (pitch, radians); left-drag vertical tilts it (docs/11 §2).
+   *  Default ≈72° matches the renderer's shipped pitch; clamped to [PITCH_MIN, PITCH_MAX]. */
+  focusPitch = DEFAULT_PITCH;
   /** Smoothed body facing (world radians); turns toward forward when moving fwd/back. */
   private bodyAim = Math.PI / 2; // forward at focusYaw π (= +Z, up the screen / into the dungeon)
   /** Pending middle-click focus-snap target, or null. */
@@ -83,14 +92,15 @@ export class InputController {
   /** Kept for API compat (aim is now derived from movement, not a cursor raycast). */
   aimRaw = 0;
 
-  // --- left-button TAP-vs-DRAG tracking (docs/12 §7.1) ---
+  // --- left-button TAP-vs-DRAG tracking (docs/11 §7.1) ---
   /** Wall-clock ms the left button went down, or -1. */
   private lDownMs = -1;
   /** Cursor X at left-press (drag origin). */
   private lDownX = 0;
   private lDownY = 0;
-  /** Accumulated horizontal drag pixels since last consumed (drives active pan). */
+  /** Accumulated drag pixels since last consumed: horizontal drives yaw, vertical drives pitch. */
   private dragDX = 0;
+  private dragDY = 0;
   /** Did the current left-press exceed the drag threshold (→ it's a pan, not a tap)? */
   private isDragging = false;
   /** Latched: a completed TAP (press+release under threshold) to emit as PRIMARY for one tick. */
@@ -143,14 +153,14 @@ export class InputController {
       if (this.mouseDownL) {
         const totalDX = px - this.lDownX, totalDY = py - this.lDownY;
         if (!this.isDragging && Math.hypot(totalDX, totalDY) > DRAG_DEADZONE_PX) this.isDragging = true;
-        if (this.isDragging) this.dragDX += px - this.mouseX;
+        if (this.isDragging) { this.dragDX += px - this.mouseX; this.dragDY += py - this.mouseY; }
       }
       this.mouseX = px; this.mouseY = py;
     });
     target.addEventListener('wheel', (e) => {
-      // Ctrl+wheel = zoom; plain wheel = hotbar scroll (docs/12 §7.5).
-      if (e.ctrlKey) this.wheelZoom += e.deltaY;
-      else this.wheelHotbar += e.deltaY;
+      // plain wheel = camera zoom; Shift+wheel = hotbar slot scroll (docs/11 §7.5).
+      if (e.shiftKey) this.wheelHotbar += e.deltaY;
+      else this.wheelZoom += e.deltaY;
       e.preventDefault();
     }, { passive: false });
   }
@@ -172,11 +182,11 @@ export class InputController {
   private rightDir(): { x: number; z: number } { return { x: Math.cos(this.focusYaw), z: -Math.sin(this.focusYaw) }; }
 
   /**
-   * Advance the view-layer focus heading + body-facing reorientation (docs/11/12). `dt`
-   * seconds. Call once per frame (after the cursor is current) BEFORE sample(). The pan
-   * is now ACTIVE-DRAG (left-drag), not edge-hold.
+   * Advance the view-layer focus heading + inclination + body-facing reorientation
+   * (docs/11 §2). `dt` seconds. Call once per frame (after the cursor is current) BEFORE
+   * sample(). Tilt/pan is ACTIVE-DRAG (left-drag horizontal = yaw, vertical = pitch).
    */
-  updateFocus(dt: number, screenW: number): void {
+  updateFocus(dt: number, screenW: number, screenH: number): void {
     const { fwd, right } = this.stick();
     const f = this.forwardDir(), r = this.rightDir();
     const mx = f.x * fwd + r.x * right, mz = f.z * fwd + r.z * right;
@@ -192,11 +202,21 @@ export class InputController {
       if (Math.abs(angDiff(this.focusYaw, this.snapTarget)) < 0.01) this.snapTarget = null;
     }
 
-    // ACTIVE DRAG-PAN (docs/12 §3.2): horizontal drag pixels rotate the focus, scaled so
-    // one full screen-width of drag turns DRAG_PAN_RATE radians. Consumed each frame.
+    // ACTIVE DRAG-ORBIT (docs/11 §2): horizontal drag pixels swing the focus YAW, one
+    // full screen-width = DRAG_PAN_RATE radians. Sign FLIPPED (2026-06 feel pass): drag
+    // right swings the focus left. Consumed each frame.
     if (this.dragDX !== 0 && screenW > 0) {
-      this.focusYaw += (this.dragDX / screenW) * DRAG_PAN_RATE;
+      this.focusYaw -= (this.dragDX / screenW) * DRAG_PAN_RATE;
       this.dragDX = 0;
+    }
+    // vertical drag tilts the camera INCLINATION (pitch): drag DOWN → more top-down, drag
+    // UP → toward the horizon. One full screen-height = ±PITCH_DRAG_RATE rad, clamped so
+    // the view never flips past top-down or below the horizon floor.
+    if (this.dragDY !== 0 && screenH > 0) {
+      this.focusPitch += (this.dragDY / screenH) * PITCH_DRAG_RATE;
+      if (this.focusPitch < PITCH_MIN) this.focusPitch = PITCH_MIN;
+      if (this.focusPitch > PITCH_MAX) this.focusPitch = PITCH_MAX;
+      this.dragDY = 0;
     }
 
     // body facing gently reorients toward FORWARD when moving fwd/back (not pure strafe)
@@ -206,7 +226,7 @@ export class InputController {
     }
   }
 
-  /** Consume this frame's VIEW-ONLY camera deltas (Ctrl+wheel zoom only; pan is sim-free). */
+  /** Consume this frame's VIEW-ONLY camera deltas (plain-wheel zoom only; pan/tilt is sim-free). */
   takeViewDeltas(): { wheel: number; panDX: number; panDY: number } {
     const out = { wheel: this.wheelZoom, panDX: 0, panDY: 0 };
     this.wheelZoom = 0;
@@ -215,7 +235,7 @@ export class InputController {
 
   /**
    * Consume this frame's hotbar SLOT selection (a sim input field): a direct 1–5 press
-   * takes precedence; otherwise the plain wheel scrolls the selection by ±1 (wrapping).
+   * takes precedence; otherwise a Shift+wheel scrolls the selection by ±1 (wrapping).
    * `curSlot` is the local player's current selected slot (from the sim) so wheel-scroll
    * is relative to it. Returns NO_SLOT when nothing changed this frame.
    */
@@ -293,8 +313,9 @@ export class InputController {
       }
     }
 
-    // keyboard verbs (docs/12): Shift = Rush, E = Ability; plus the legacy fallbacks.
-    if (this.has('shift')) buttons |= Button.Rush;
+    // keyboard verbs (docs/11): E = Ability; plus the legacy fallbacks. RUSH is UNBOUND
+    // for now — Shift is the hotbar-scroll modifier (Shift+wheel), so binding Rush to
+    // Shift would fire accidental dashes while scrolling.
     if (this.has('e')) buttons |= Button.Ability;
     if (this.has('f')) buttons |= Button.Throw;      // legacy empty-hand shove
     if (this.has('l')) buttons |= Button.Struggle;

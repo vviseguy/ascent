@@ -2,7 +2,7 @@
 // src/sim/interact/index.ts — public surface of the interaction + inventory system.
 // ============================================================================
 //
-// The contextual-interaction + 5-slot hotbar scheme (docs/12). One deterministic,
+// The contextual-interaction + 5-slot hotbar scheme (docs/11). One deterministic,
 // rollback-safe sim system; the integrator wires applyInteract into sim.ts as
 // SYSTEM 6.6 (after verbs/breakables, before fall-damage). See interact.ts.
 // ============================================================================

@@ -1,5 +1,5 @@
 // ============================================================================
-// Standalone PROOF for the INTERACTION + INVENTORY system (docs/12).
+// Standalone PROOF for the INTERACTION + INVENTORY system (docs/11).
 //   Run:  node --experimental-strip-types src/sim/interact/prove.ts
 // ============================================================================
 //
@@ -126,7 +126,7 @@ function runReference(stream: PlayerInput[][]): number[] {
 let failures = 0;
 const log = (s: string) => console.log(s);
 log('----------------------------------------------------------------');
-log('ASCENT interaction + inventory — STANDALONE PROOF (docs/12)');
+log('ASCENT interaction + inventory — STANDALONE PROOF (docs/11)');
 log('----------------------------------------------------------------');
 
 const SEED = 0x12345678;

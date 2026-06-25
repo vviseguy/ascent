@@ -23,7 +23,7 @@
 //   3    1     count        (number of frames in this packet, 1..MAX_REDUNDANT)
 //   4    4     baseTick     (uint32 LE = tick of the FIRST/newest frame)
 //   8    n*8   frames[]     newest→oldest, each 8 bytes:
-//                 0-1: buttons (uint16 LE — widened for Primary/Secondary, docs/12 §9.1)
+//                 0-1: buttons (uint16 LE — widened for Primary/Secondary, docs/11 §9.1)
 //                 2: moveX    (int8, quantized stick X)
 //                 3: moveZ    (int8, quantized stick Z)
 //                 4-5: aim    (uint16 LE, 65536-step angle)
@@ -36,7 +36,7 @@ import { MOVE_Q, NO_SLOT, NUM_SLOTS } from '../sim/world/input.ts';
 import { TWO_PI, toRaw, fromRaw, toFloat } from '../sim/fixed/fixed.ts';
 
 // PROTO_VERSION bumped to 2: the input frame grew (uint16 buttons + a slot byte) for the
-// docs/12 interaction scheme. Peers on different protos reject each other's packets.
+// docs/11 interaction scheme. Peers on different protos reject each other's packets.
 export const PROTO_VERSION = 2;
 
 /** Packet kinds (versioned-envelope discipline reused from Frequency). */

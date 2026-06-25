@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import type { LabElement, LabElementBuild } from './element.ts';
+import type { WorldObject } from './world-object.ts';
 
 type LabWindow = Window & {
   __LAB_READY?: boolean;
@@ -43,27 +44,52 @@ for (const [path, mod] of Object.entries(modules)) {
   if (mod.default) elements.set(id, mod.default);
 }
 
+// ---- WorldObject discovery (objects/<id>.ts; same auto-discover pattern, docs/15) ----
+const objectMods = import.meta.glob('./objects/*.ts', { eager: true }) as Record<
+  string,
+  { default?: WorldObject }
+>;
+const objects = new Map<string, WorldObject>();
+for (const [path, mod] of Object.entries(objectMods)) {
+  const id = path.replace('./objects/', '').replace('.ts', '');
+  if (mod.default) objects.set(id, mod.default);
+}
+
 function boot(): void {
   const params = new URLSearchParams(location.search);
-  const ids = [...elements.keys()].sort();
-  const id = params.get('element') ?? ids[0] ?? '';
+  const elIds = [...elements.keys()].sort();
+  const objIds = [...objects.keys()].sort();
+  const objId = params.get('object');
   const seed = Number(params.get('seed') ?? '1') || 1;
   const withActor = params.get('actor') === '1';
   const frozen = params.get('frozen') === '1';
-  const el = elements.get(id);
   const hud = document.getElementById('hud');
 
-  if (!el) {
-    W.__LAB_ERROR = `unknown element "${id}" — known: ${ids.join(', ')}`;
-    if (hud) hud.textContent = W.__LAB_ERROR;
-    return;
-  }
-
+  // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
   let built: LabElementBuild;
   let renderer: THREE.WebGLRenderer;
+  let hudHtml: string;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true });
-    built = el.build(seed);
+    if (objId !== null) {
+      const obj = objects.get(objId);
+      if (!obj) throw new Error(`unknown object "${objId}" — known: ${objIds.join(', ')}`);
+      const variant = params.get('variant') ?? obj.variants[0] ?? '';
+      built = obj.build(variant, seed);
+      hudHtml =
+        `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed})</span><br>` +
+        `${obj.describe}<br>` +
+        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; · objects: ${objIds.join(' · ')}</span>`;
+    } else {
+      const id = params.get('element') ?? elIds[0] ?? '';
+      const el = elements.get(id);
+      if (!el) throw new Error(`unknown element "${id}" — known: ${elIds.join(', ')}`);
+      built = el.build(seed);
+      hudHtml =
+        `<b>${el.name}</b> <span style="opacity:.6">(${id}, seed ${seed})</span><br>` +
+        `${el.describe}<br>` +
+        `<span style="opacity:.5">elements: ${elIds.join(' · ')} · objects: ${objIds.join(' · ')} — ?object=&lt;id&gt;&amp;variant=&lt;v&gt;</span>`;
+    }
   } catch (e) {
     W.__LAB_ERROR = String(e);
     if (hud) hud.textContent = W.__LAB_ERROR;
@@ -132,17 +158,12 @@ function boot(): void {
     renderer.render(scene, cam);
   };
 
-  if (hud) {
-    hud.innerHTML =
-      `<b>${el.name}</b> <span style="opacity:.6">(${id}, seed ${seed})</span><br>` +
-      `${el.describe}<br>` +
-      `<span style="opacity:.5">elements: ${ids.join(' · ')} — ?element=&lt;id&gt;&amp;seed=N&amp;actor=1</span>`;
-  }
+  if (hud) hud.innerHTML = hudHtml;
 
   // snapshot hooks
   W.__labSetAngle = (deg: number) => { angleDeg = deg; renderOnce(); };
   W.__labSetTime = (sec: number) => { timeSec = sec; renderOnce(); };
-  W.__labList = () => ids;
+  W.__labList = () => [...elIds, ...objIds.map((o) => 'object:' + o)];
 
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);

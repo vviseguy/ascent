@@ -2,7 +2,7 @@
 // src/sim/interact/interact.ts — the CONTEXTUAL INTERACTION + INVENTORY system.
 // ============================================================================
 //
-// applyInteract(w, inputs, index, tick) is ONE deterministic sim system (docs/12)
+// applyInteract(w, inputs, index, tick) is ONE deterministic sim system (docs/11)
 // that, per player, each tick:
 //   1. applies the selected-slot change (the wire `slot` field),
 //   2. computes the interaction SPOT in front of the player + picks the single best
@@ -385,7 +385,7 @@ function killItemBody(w: WorldState, t: number): void {
 }
 
 // ============================================================================
-// DOORS / CONTAINERS — DEFERRED hook (docs/12 §3.4)
+// DOORS / CONTAINERS — DEFERRED hook (docs/11 §3.4)
 // ============================================================================
 
 /**

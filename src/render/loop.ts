@@ -58,10 +58,10 @@ export function startLoop(
     // terrain.groundY — the deep slab ≈ 14 u below the playfield — skewed every aim
     // up-screen by floors of height (GAPS C7).
     const w = sim.world;
-    // FOCUS-RELATIVE controls (docs/11): advance the view-layer focus heading (cursor
-    // edge-pan + middle-click snap) and the body-facing reorientation, then sample WASD
-    // in that focus frame. Aim is derived from movement now, not a cursor raycast.
-    input.updateFocus(dt / 1000, window.innerWidth);
+    // FOCUS-RELATIVE controls (docs/11): advance the view-layer focus heading + camera
+    // inclination (left-drag orbit + middle-click snap) and the body-facing reorientation,
+    // then sample WASD in that focus frame. Aim is derived from movement, not a raycast.
+    input.updateFocus(dt / 1000, window.innerWidth, window.innerHeight);
 
     // Read the local player's CONTEXTUAL sim state so the IO layer can route the
     // contextual PRIMARY/SECONDARY onto the proven body verbs (carry/throw) — and the
@@ -87,7 +87,7 @@ export function startLoop(
       localInput.moveX !== 0 || localInput.moveZ !== 0,
       toFloat(fromRaw(w.facing[localPlayerId]!)),
       Math.hypot(toFloat(fromRaw(w.vx[localPlayerId]!)), toFloat(fromRaw(w.vz[localPlayerId]!))),
-      input.focusYaw,
+      input.focusYaw, input.focusPitch,
     );
 
     let steps = 0;

@@ -30,13 +30,13 @@ export const Button = {
    *  a sustained HOLD → Rush, using a held-tick counter (deterministic, rollback-safe). */
   RightHold: 1 << 7,
   /**
-   * PRIMARY interact (docs/12 §1): the contextual left-TAP action — pick up a loose
+   * PRIMARY interact (docs/11 §1): the contextual left-TAP action — pick up a loose
    * item, place/use the held item, grab a body, or open a container. The SIM's interact
    * system (src/sim/interact) resolves WHAT it does from the per-tick target + inventory.
    */
   Primary: 1 << 8,
   /**
-   * SECONDARY interact (docs/12 §1): the contextual RIGHT action — throw the held body
+   * SECONDARY interact (docs/11 §1): the contextual RIGHT action — throw the held body
    * or held item (hold to charge), or open a container. Resolved by the interact system.
    */
   Secondary: 1 << 9,
@@ -50,7 +50,7 @@ export type Button = (typeof Button)[keyof typeof Button];
  * (a slot change is sticky in WorldState, not re-asserted every tick).
  */
 export const NO_SLOT = -1;
-/** Number of hotbar slots (docs/12 §4). */
+/** Number of hotbar slots (docs/11 §4). */
 export const NUM_SLOTS = 5;
 
 /** Quantization scale for movement components: move ∈ [-MOVE_Q, MOVE_Q] integer. */
@@ -65,7 +65,7 @@ export const MOVE_Q = 1024;
  *  - grabTarget    : entity id the GRAB verb targets this tick, or -1 (resolved by
  *    the verb layer; included so grab intent is part of the deterministic input).
  *  - slot          : hotbar slot the player selected THIS tick (0..NUM_SLOTS-1), or
- *    NO_SLOT (-1) for "unchanged". A level field, not an edge (docs/12 §9.1).
+ *    NO_SLOT (-1) for "unchanged". A level field, not an edge (docs/11 §9.1).
  */
 export interface PlayerInput {
   moveX: number;

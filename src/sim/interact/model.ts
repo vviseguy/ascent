@@ -18,7 +18,7 @@
  * What occupies a hotbar slot. A compact small int so it folds into the per-slot
  * Int32 hash field. 0 = Empty (the slot default). Pickups map their kind from the
  * picked body (for now everything loose maps to Generic; bottle/key/coin are reserved
- * for when authored props carry a kind tag — docs/12 §7.3).
+ * for when authored props carry a kind tag — docs/11 §7.3).
  */
 export const ItemKind = {
   Empty: 0,
@@ -33,7 +33,7 @@ export type ItemKind = (typeof ItemKind)[keyof typeof ItemKind];
  * The contextual actions a target can offer this tick, as a bitfield in
  * WorldState.targetActions. The HUD shows a PRIMARY hint for the first primary-tier
  * action present and a SECONDARY hint for the first secondary-tier action present
- * (docs/12 §3). Append-only (the value is part of the hash + the HUD contract).
+ * (docs/11 §3). Append-only (the value is part of the hash + the HUD contract).
  */
 export const InteractAction = {
   None: 0,
@@ -41,7 +41,7 @@ export const InteractAction = {
   Pickup: 1 << 0,
   /** PRIMARY: grab a body → carry (routes to the existing grab verb). */
   Grab: 1 << 1,
-  /** PRIMARY/SECONDARY: open a container/door (DEFERRED door hook, docs/12 §3.4). */
+  /** PRIMARY/SECONDARY: open a container/door (DEFERRED door hook, docs/11 §3.4). */
   Open: 1 << 2,
   /** PRIMARY: place / use the active hotbar item. */
   PlaceUse: 1 << 3,

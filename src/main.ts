@@ -97,7 +97,7 @@ async function boot(): Promise<void> {
   }
   overlay.remove();
   renderer.attachHud(app);
-  renderer.attachHotbar(app, scene.localCrew); // inventory hotbar + contextual hints (docs/12)
+  renderer.attachHotbar(app, scene.localCrew); // inventory hotbar + contextual hints (docs/11)
   const input = new InputController(canvas);
   const anchorId = scene.anchorIds[scene.localCrew]!;
   // DEV: expose the renderer for headless screenshot verification (camera pose etc.).

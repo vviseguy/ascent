@@ -29,7 +29,7 @@ Living checklist of every goal/critique set in this build stream, with status. L
 - ⚠️ **Opening view sometimes black (NEW follow-up)** — on edge-spawn seeds the default camera dolly frames the perimeter wall/void → black at default zoom (zooming out shows the dungeon fine). A camera default-distance/framing × edge-spawn interaction; flagged by W2.
 - 🔄 **30×30 dungeon renders BLACK on load (regression at scale)** — render was tuned at 8×8; now the world is 135u across and the default camera/fog frames pure black (HUD fine, no JS errors → it builds). Render-polish agent fixing camera framing + fog-at-scale + build perf (+ folding in the black-opening-view above and wall D1–D3).
 
-## D. Interaction / inventory / HUD (docs/12 — interaction agent, all green: 76/76 + prove:interact)
+## D. Interaction / inventory / HUD (docs/11 — interaction agent, all green: 76/76 + prove:interact)
 - ✅ Health shown (HUD pill)
 - ✅ Active Minecraft-style pan (left-drag), NOT infinite edge-hold
 - ✅ 5-slot scroll-select hotbar (wheel / 1–5)
@@ -37,7 +37,7 @@ Living checklist of every goal/critique set in this build stream, with status. L
 - ✅ Chest opens on right-click when hand free; pick up the item at a spot in front of the player
 - ✅ Regular click = translate-pan; clean suggested-action UI matching app vibe
 - ✅ Placeholder "not real" cubes removed → KayKit props
-- ✅ Interaction scheme doc — cohesive, idiomatic, no input collisions (docs/12)
+- ✅ Interaction scheme doc — cohesive, idiomatic, no input collisions (docs/11)
 - ✅ Fall damage softened
 
 ## E. Walls / doors / corners / stairs
@@ -48,7 +48,7 @@ Living checklist of every goal/critique set in this build stream, with status. L
 - ✅ "Soft wall flow" explained (inset half-walls + corner overlap + protruding doorways) — docs/13
 - ✅ **Stairs aligned to collision** — exact `StairInfo` placement; bounding boxes verified identical to the sim treads (W2)
 - 🔄 **Door click-to-open (lock/key)** — interaction door hook left; generation agent (W1) filling lock+key open
-- 📄 **Drag-open "carry the door"** — documented + phased (docs/12 §3.4), after hinge physics
+- 📄 **Drag-open "carry the door"** — documented + phased (docs/11 §3.4), after hinge physics
 
 ## F. Fog / visibility
 - ✅ Walls between camera and player fade (occlusion cutaway) — kept + clearly separated
@@ -71,7 +71,7 @@ Living checklist of every goal/critique set in this build stream, with status. L
 ## J. Deferred-documented (intentional)
 - 📄 Rooms many levels tall (docs/14 §5 — own pass; touches stratum/physics/camera/fog)
 - 📄 9-cell model / Layer C wall-edge grid (docs/13/14 §6)
-- 📄 Drag-open door (docs/12 §3.4)
+- 📄 Drag-open door (docs/11 §3.4)
 
 ## K. Process
 - ✅ Orchestration workflow: boss plans → delegates → continuous queue (saved to memory)

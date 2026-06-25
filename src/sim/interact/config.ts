@@ -11,7 +11,7 @@ import { type Fixed, fromFloatConst } from '../fixed/fixed.ts';
 /**
  * How far IN FRONT of the player (along facing) the interaction "spot" sits (u). The
  * targeting system picks the interactable nearest this spot within reach + a frontal
- * cone (docs/12 §3.1). ~1.4u reads as "arm's reach" for pickups/chests.
+ * cone (docs/11 §3.1). ~1.4u reads as "arm's reach" for pickups/chests.
  */
 export const INTERACT_SPOT_REACH: Fixed = fromFloatConst(1.4);
 
@@ -24,7 +24,7 @@ export const INTERACT_RANGE: Fixed = fromFloatConst(2.4);
 
 /**
  * Half-angle of the frontal interaction cone (radians). An item outside this cone of
- * `facing` is never targeted, so you interact with what you face (docs/12 §3.1). 75°.
+ * `facing` is never targeted, so you interact with what you face (docs/11 §3.1). 75°.
  */
 export const INTERACT_HALF_ANGLE: Fixed = fromFloatConst((75 * Math.PI) / 180);
 
