@@ -57,17 +57,49 @@ export interface AABB {
 }
 
 export interface FitBoxesOpts {
-  /** Voxel edge length (object-local metres). Smaller = tighter fit, more cost.
-   *  Default 0.08 — finer than the old 0.12 now that the loose cover won't shatter. */
+  /** EXPLICIT voxel edge length (object-local metres). Normally LEFT UNSET so the cell is
+   *  derived RELATIVE to the mesh (bbox-diagonal / `cellDivisor`, clamped to
+   *  [`cellMin`,`cellMax`]) — that auto-scales resolution to any object with ZERO per-object
+   *  tuning. Set this only to pin a fixed resolution. */
   cell?: number;
-  /** PRIMARY GROWTH KNOB — minimum solid density of the BOUNDARY SLAB a face-grow adds
-   *  (solid voxels / slab voxels, 0..1). A face grows by one voxel-thick slab only while
-   *  that slab is ≥ edgeDensity solid; it stops the instant the next slab is sparser.
-   *  This brakes growth at the real solid boundary in EACH direction while ignoring
-   *  interior voids (a grooved tabletop still has a dense top face → the box grows over
-   *  the groove). Default 0.5. Raise toward 1.0 to hug tighter (more, smaller boxes);
-   *  lower to swallow more empty space in fewer boxes. */
+  /** Voxels along the mesh's bbox DIAGONAL when `cell` is auto-derived (cell = diag /
+   *  cellDivisor). Higher = finer. Default 26 — enough to separate a table's legs/stretcher
+   *  without shattering simple props. Clamped by cellMin/cellMax. */
+  cellDivisor?: number;
+  /** Floor/ceiling (object-local metres) on the auto-derived cell, so a tiny prop doesn't
+   *  voxelize absurdly fine nor a huge one absurdly coarse. Defaults 0.04 / 0.16. */
+  cellMin?: number;
+  cellMax?: number;
+  /** SIZE-BASED STOP (the real terminator): only EMIT a relaxed box whose longest edge is
+   *  ≥ minBoxSize, and keep seeding while big-enough boxes remain. An absolute,
+   *  collision-relevant floor SHARED by every object (no per-object count). Default 0.14u.
+   *  (Replaces minBox as the primary limit; minBox is kept as an alias if set.) */
+  minBoxSize?: number;
+  /** PRIMARY GROWTH KNOB — minimum (edge-weighted) solid density of the BOUNDARY SLAB a
+   *  face-grow adds (solid voxels / slab voxels, 0..1). In the GROW+SHRINK relaxation a
+   *  face grows by one slab while the NEXT slab (just beyond the edge) is ≥ edgeDensity
+   *  solid, and RETRACTS while its own outermost slab is < edgeDensity — so each face
+   *  settles exactly at the density transition (outer slab passes, next fails), regardless
+   *  of where the seed sat. This brakes growth at the real solid boundary in EACH direction
+   *  while ignoring interior voids (a grooved tabletop still has a dense top face → the box
+   *  grows over the groove). Default 0.5. Raise toward 1.0 to hug tighter (more, smaller
+   *  boxes); lower to swallow more empty space in fewer boxes. */
   edgeDensity?: number;
+  /** EDGE-WEIGHTED emptiness weight (≥1). A slab's PERIMETER/CORNER voxels count this many
+   *  times more toward its weighted density than its centre voxels: weighted = Σ w·solid/Σ w
+   *  with w = edgeWeight on the slab rim, 1 in the interior. So a face stops/retracts the
+   *  moment its leading EDGE drifts off the solid (a feature narrowing or ending) even while
+   *  the slab CENTRE is still solid — this is what peels a box back to a single leg/feature
+   *  rather than letting it bridge a gap on a still-dense core. Default 1.5; 1.0 = uniform
+   *  (the old behaviour). */
+  edgeWeight?: number;
+  /** NON-OVERLAPPING boxes — the main SEPARATION lever (default TRUE). Each placed box
+   *  CLAIMS its whole AABB volume; later boxes may only grow into UNCLAIMED volume (a slab
+   *  touching any claimed voxel can't be grown into). Boxes therefore partition the solid
+   *  into ABUTTING but non-overlapping chunks → individual legs, the stretcher in the gap
+   *  between claimed legs, a pillow and blanket each in their own box. Set false for the old
+   *  overlap-allowed cover. */
+  nonOverlap?: boolean;
   /** Optional GLOBAL fill safety cap (0..1): refuse any face-grow that would drop the
    *  whole box's solid-fill below this. edgeDensity is the real brake; this is just a
    *  backstop against a box accreting many borderline slabs. 1.0 = also require every
@@ -77,10 +109,12 @@ export interface FitBoxesOpts {
   /** Stop emitting boxes once this fraction of all solid voxels is covered (0..1).
    *  The remaining sliver voxels are left to the collider's slop. Default 0.93. */
   coverageTarget?: number;
-  /** Hard cap on emitted boxes; if exceeded the cell coarsens (×1.4) and we retry. */
+  /** FAR SAFETY BACKSTOP on emitted boxes (NOT the real limit — `minBoxSize` is). If
+   *  exceeded the cell coarsens (×1.4) and we retry. Default 24 — generous, so size, not
+   *  count, governs normal objects. */
   maxBoxes?: number;
-  /** Drop any emitted box whose LONGEST edge is below this (so a knob/handle is
-   *  not promoted to a collider). Object-local metres. */
+  /** DEPRECATED alias for `minBoxSize` (kept so old specs still parse). If both are set,
+   *  minBoxSize wins. */
   minBox?: number;
   /** Dilate the solid set by N voxels AFTER voxelization (collision errs bigger).
    *  Default 0 — the outward envelope rounding already pads slightly. Bump to 1 for
@@ -88,13 +122,19 @@ export interface FitBoxesOpts {
   dilate?: number;
 }
 
+// GLOBAL DEFAULTS — tuned to give good footprints on ANY mesh with ZERO per-object knobs.
+// `cell` is left undefined so it derives RELATIVE to the object (bbox-diag / cellDivisor).
 const DEFAULTS = {
-  cell: 0.08,
+  cellDivisor: 26,
+  cellMin: 0.04,
+  cellMax: 0.16,
   edgeDensity: 0.5,
+  edgeWeight: 1.5,
+  nonOverlap: true,
   minFill: 0,
   coverageTarget: 0.93,
-  maxBoxes: 12,
-  minBox: 0.1,
+  maxBoxes: 24,
+  minBoxSize: 0.14,
   dilate: 0,
 } as const;
 
@@ -137,23 +177,36 @@ export function fitBoxes(object: THREE.Object3D, opts: FitBoxesOpts = {}): AABB[
  */
 export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {}): { boxes: AABB[]; stats: FitStats } {
   const edgeDensity = opts.edgeDensity ?? DEFAULTS.edgeDensity;
+  const edgeWeight = opts.edgeWeight ?? DEFAULTS.edgeWeight;
+  const nonOverlap = opts.nonOverlap ?? DEFAULTS.nonOverlap;
   const minFill = opts.minFill ?? DEFAULTS.minFill;
   const coverageTarget = opts.coverageTarget ?? DEFAULTS.coverageTarget;
   const maxBoxes = opts.maxBoxes ?? DEFAULTS.maxBoxes;
-  const minBox = opts.minBox ?? DEFAULTS.minBox;
+  // minBoxSize is the SIZE-BASED stop; minBox survives only as a deprecated alias.
+  const minBoxSize = opts.minBoxSize ?? opts.minBox ?? DEFAULTS.minBoxSize;
   const dilate = opts.dilate ?? DEFAULTS.dilate;
 
   const soup = bakeSoup(object);
+
+  // RELATIVE cell: derive from the bbox diagonal so resolution auto-scales to the mesh,
+  // clamped to a sane absolute band. An explicit `cell` opt pins it instead.
+  const b0 = soup.box;
+  const diag = soup.count > 0 ? Math.hypot(b0.max.x - b0.min.x, b0.max.y - b0.min.y, b0.max.z - b0.min.z) : 1;
+  const cellMin = opts.cellMin ?? DEFAULTS.cellMin, cellMax = opts.cellMax ?? DEFAULTS.cellMax;
+  const cellDivisor = opts.cellDivisor ?? DEFAULTS.cellDivisor;
+  const autoCell = clamp(diag / cellDivisor, cellMin, cellMax);
+
   if (soup.count === 0) {
-    return { boxes: [], stats: { cell: opts.cell ?? DEFAULTS.cell, solidVoxels: 0, coverage: 0, fill: 0, boxCount: 0 } };
+    return { boxes: [], stats: { cell: opts.cell ?? autoCell, solidVoxels: 0, coverage: 0, fill: 0, boxCount: 0 } };
   }
 
-  // Start at the requested cell; coarsen (×1.4) until the box count fits the cap.
-  let cell = opts.cell ?? DEFAULTS.cell;
+  // Start at the (auto or explicit) cell; coarsen (×1.4) only if the box count blows the
+  // far backstop — size, not count, is the normal terminator.
+  let cell = opts.cell ?? autoCell;
   for (let attempt = 0; attempt < 9; attempt++) {
     const grid = voxelize(soup, cell, dilate);
     if (grid && grid.solidCount > 0) {
-      const res = looseCover(grid, { edgeDensity, minFill, coverageTarget, maxBoxes, minBox });
+      const res = looseCover(grid, { edgeDensity, edgeWeight, nonOverlap, minFill, coverageTarget, maxBoxes, minBoxSize });
       if (res.boxes.length > 0 && res.boxes.length <= maxBoxes) {
         return { boxes: res.boxes, stats: { cell, solidVoxels: grid.solidCount, ...res.stats } };
       }
@@ -326,25 +379,44 @@ function dilateOnce(g: Grid): void {
 }
 
 // ---------------------------------------------------------------------------
-// 3. LOOSE-BOX cover over the solid grid (the edge-density grow).
-//    Seed z→y→x at the first uncovered solid voxel; grow each of the 6 faces
-//    OUTWARD greedily while the boundary SLAB the grow adds is ≥ edgeDensity solid
-//    (an optional global minFill cap also applies); emit the maximal loose box; mark
-//    its solid voxels covered; repeat until coverage ≥ coverageTarget or maxBoxes.
-//    Fixed seed + round-robin face order = deterministic.
+// 3. LOOSE-BOX cover over the solid grid — GROW+SHRINK relaxation, EDGE-WEIGHTED
+//    emptiness, and NON-OVERLAPPING claimed-volume partitioning (Jacob's pass).
+//
+//    For each seed we RELAX a box: every face GROWS by one slab while the NEXT slab
+//    (just beyond the edge) PASSES the edge criterion, and SHRINKS by one slab while
+//    its CURRENT outermost slab FAILS it — repeating over all 6 faces in a fixed order
+//    until STABLE. Each face then sits at the density transition (outer slab passes,
+//    next fails), so the box HUGS the feature regardless of where the seed landed. This
+//    converges: grow only adds passing slabs, shrink only drops failing ones, so a face
+//    can't oscillate. The criterion is EDGE-WEIGHTED: a slab's rim voxels count more, so
+//    a face retracts the instant its leading EDGE drifts off the solid (a feature ending)
+//    even while the slab centre is still solid.
+//
+//    NON-OVERLAP (default) is the SEPARATION lever: each placed box CLAIMS its whole AABB
+//    volume; later boxes treat claimed voxels as empty (a slab containing any claimed
+//    voxel can't be grown into), so boxes ABUT but never overlap → individual legs, the
+//    stretcher in the gap between claimed legs, pillow/blanket each in their own box.
+//    Seeds are taken in z→y→x SCAN ORDER (the first unclaimed solid voxel each round).
+//
+//    A SIZE-BASED stop governs the box count: a relaxed box is kept only if its longest
+//    edge ≥ minBoxSize (no count cap). The loop ends when coverage is met or no unclaimed
+//    solid voxel remains. Fixed seed order + fixed face order = deterministic. NO Math.random.
 // ---------------------------------------------------------------------------
-interface CoverOpts { edgeDensity: number; minFill: number; coverageTarget: number; maxBoxes: number; minBox: number; }
+interface CoverOpts { edgeDensity: number; edgeWeight: number; nonOverlap: boolean; minFill: number; coverageTarget: number; maxBoxes: number; minBoxSize: number; }
 
 function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStats, 'cell' | 'solidVoxels'> } {
   const { nx, ny, nz, solid, solidCount } = g;
-  const covered = new Uint8Array(solid.length); // solid voxels already claimed by a box
+  const covered = new Uint8Array(solid.length); // solid voxels already claimed by a box (coverage stat)
+  // CLAIMED tracks every voxel (solid OR empty) inside a placed box's AABB. Under nonOverlap
+  // a later box may not grow into any claimed voxel, so the boxes partition the volume.
+  const claimed = new Uint8Array(solid.length);
   const idx = (x: number, y: number, z: number) => z * ny * nx + y * nx + x;
   const maxXm = g.ox + nx * g.cell, maxYm = g.oy + ny * g.cell, maxZm = g.oz + nz * g.cell;
 
-  const boxes: AABB[] = [];
+  // Placed boxes as GRID EXTENTS (inclusive), converted to metre AABBs at the end.
+  type GBox = { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number };
+  const gboxes: GBox[] = [];
   let coveredSolid = 0;
-  // accumulators for the union fill stat (sum over emitted boxes)
-  let unionSolid = 0, unionVoxels = 0;
 
   // # solid voxels inside box [x0..x1]×[y0..y1]×[z0..z1] (inclusive).
   const solidIn = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number => {
@@ -355,93 +427,174 @@ function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStat
     }
     return s;
   };
-  // # solid voxels on ONE candidate face slab (the layer we'd add by growing a face).
-  const slabSolid = (ax: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, at: number): number => {
-    // ax: 0=x face,1=y,2=z. `at` is the new index on that axis; the slab is the
-    // full cross-section at that index over the box's other two spans.
-    let s = 0;
-    if (ax === 0) { for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) if (solid[idx(at, y, z)]) s++; }
-    else if (ax === 1) { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (solid[idx(x, at, z)]) s++; }
-    else { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (solid[idx(x, y, at)]) s++; }
-    return s;
+
+  // EDGE-WEIGHTED slab density: a voxel on the slab RIM (outer ring of the slab's 2D
+  // cross-section) weighs `edgeWeight`, an interior voxel weighs 1; a CLAIMED voxel reads
+  // as EMPTY (weight still counts, solid contribution 0) so a box can't reclaim another's
+  // volume. Returns weighted_density = Σ w·solid / Σ w over the slab, or -1 for an empty
+  // slab (no voxels). `at` is the new index on `ax`; the slab spans the box's other two axes.
+  const slabDensity = (ax: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, at: number): number => {
+    let wSolid = 0, wTotal = 0;
+    if (ax === 0) {
+      for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) {
+        const rim = (y === y0 || y === y1 || z === z0 || z === z1);
+        const w = rim ? o.edgeWeight : 1;
+        wTotal += w;
+        const i = idx(at, y, z);
+        if (solid[i] && !claimed[i]) wSolid += w;
+      }
+    } else if (ax === 1) {
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+        const rim = (x === x0 || x === x1 || z === z0 || z === z1);
+        const w = rim ? o.edgeWeight : 1;
+        wTotal += w;
+        const i = idx(x, at, z);
+        if (solid[i] && !claimed[i]) wSolid += w;
+      }
+    } else {
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const rim = (x === x0 || x === x1 || y === y0 || y === y1);
+        const w = rim ? o.edgeWeight : 1;
+        wTotal += w;
+        const i = idx(x, y, at);
+        if (solid[i] && !claimed[i]) wSolid += w;
+      }
+    }
+    return wTotal > 0 ? wSolid / wTotal : -1;
+  };
+  // Does the slab at index `at` (on axis `ax`, over the box's other two spans) contain ANY
+  // claimed voxel? Under nonOverlap such a slab is off-limits to growth.
+  const slabHasClaimed = (ax: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, at: number): boolean => {
+    if (ax === 0) { for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) if (claimed[idx(at, y, z)]) return true; }
+    else if (ax === 1) { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (claimed[idx(x, at, z)]) return true; }
+    else { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (claimed[idx(x, y, at)]) return true; }
+    return false;
   };
 
-  for (let sz = 0; sz < nz && coveredSolid < solidCount * o.coverageTarget; sz++) {
-    for (let sy = 0; sy < ny; sy++) {
-      for (let sx = 0; sx < nx; sx++) {
-        if (!solid[idx(sx, sy, sz)] || covered[idx(sx, sy, sz)]) continue;
-        if (boxes.length >= o.maxBoxes) break;
+  // Relax ONE box from a seed voxel: grow+shrink each face to the density transition.
+  // Returns the stabilised box, or null if it relaxed to empty (caller reseeds).
+  const relax = (sx: number, sy: number, sz: number): { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number } | null => {
+    let x0 = sx, x1 = sx, y0 = sy, y1 = sy, z0 = sz, z1 = sz;
 
-        // grow a LOOSE box outward from the seed voxel.
-        let x0 = sx, x1 = sx, y0 = sy, y1 = sy, z0 = sz, z1 = sz;
-        let boxVox = 1, boxSolid = 1; // seed is solid
-
-        // attempt one face-grow; returns true if it grew. ax: axis, dir: -1|+1.
-        // GATE = the density of the BOUNDARY SLAB being added (Jacob's refinement):
-        // accept iff slabSolid/slabCount ≥ edgeDensity. The slab — not the whole box —
-        // is the brake, so a dense bulk can't dilute a sparse edge into acceptance, and
-        // the box stops exactly at the solid boundary in this direction. An optional
-        // global minFill (default off) is a backstop against many borderline slabs.
-        const tryGrow = (ax: number, dir: number): boolean => {
-          let at: number, slabCount: number;
-          if (ax === 0) { at = dir < 0 ? x0 - 1 : x1 + 1; if (at < 0 || at >= nx) return false; slabCount = (y1 - y0 + 1) * (z1 - z0 + 1); }
-          else if (ax === 1) { at = dir < 0 ? y0 - 1 : y1 + 1; if (at < 0 || at >= ny) return false; slabCount = (x1 - x0 + 1) * (z1 - z0 + 1); }
-          else { at = dir < 0 ? z0 - 1 : z1 + 1; if (at < 0 || at >= nz) return false; slabCount = (x1 - x0 + 1) * (y1 - y0 + 1); }
-          const slabSol = slabSolid(ax, x0, y0, z0, x1, y1, z1, at);
-          if (slabSol === 0) return false;                      // never grow into pure void
-          if (slabSol < slabCount * o.edgeDensity) return false; // PRIMARY brake: edge slab density
-          const newVox = boxVox + slabCount;
-          const newSolid = boxSolid + slabSol;
-          if (o.minFill > 0 && newSolid < newVox * o.minFill) return false; // optional global cap
-          // commit the grow
-          if (ax === 0) { if (dir < 0) x0 = at; else x1 = at; }
-          else if (ax === 1) { if (dir < 0) y0 = at; else y1 = at; }
-          else { if (dir < 0) z0 = at; else z1 = at; }
-          boxVox = newVox; boxSolid = newSolid;
-          return true;
-        };
-
-        // round-robin the 6 faces in a fixed order until no face can grow. This keeps
-        // the box near-cubic as it expands rather than racing one axis to the wall,
-        // which yields larger maximal boxes under the fill floor.
-        let grew = true;
-        while (grew) {
-          grew = false;
-          if (tryGrow(0, -1)) grew = true;
-          if (tryGrow(0, +1)) grew = true;
-          if (tryGrow(1, -1)) grew = true;
-          if (tryGrow(1, +1)) grew = true;
-          if (tryGrow(2, -1)) grew = true;
-          if (tryGrow(2, +1)) grew = true;
-        }
-
-        // mark the box's SOLID voxels covered (empty ones it swallowed don't count
-        // toward coverage — they were never solid to begin with).
-        const before = coveredSolid;
-        for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-          const i = idx(x, y, z);
-          if (solid[i] && !covered[i]) { covered[i] = 1; coveredSolid++; }
-        }
-        const gained = coveredSolid - before;
-        // a box that claims no NEW solid voxels (fully overlapped a prior box) is useless.
-        if (gained === 0) { covered[idx(sx, sy, sz)] = 1; continue; }
-
-        // emit as object-local AABB, clamped to the true mesh bound so the outward
-        // rounding / loose padding never sticks out past the model.
-        const aabb: AABB = {
-          min: [g.ox + x0 * g.cell, g.oy + y0 * g.cell, g.oz + z0 * g.cell],
-          max: [Math.min(maxXm, g.ox + (x1 + 1) * g.cell), Math.min(maxYm, g.oy + (y1 + 1) * g.cell), Math.min(maxZm, g.oz + (z1 + 1) * g.cell)],
-        };
-        const dx = aabb.max[0] - aabb.min[0], dy = aabb.max[1] - aabb.min[1], dz = aabb.max[2] - aabb.min[2];
-        if (Math.max(dx, dy, dz) >= o.minBox) {
-          boxes.push(aabb);
-          unionSolid += solidIn(x0, y0, z0, x1, y1, z1);
-          unionVoxels += boxVox;
-        }
+    // GROW face (ax,dir) by one slab iff the NEXT slab passes (edge-weighted ≥ edgeDensity,
+    // not all-claimed under nonOverlap, and the optional global minFill backstop holds).
+    const tryGrow = (ax: number, dir: number): boolean => {
+      let at: number;
+      if (ax === 0) { at = dir < 0 ? x0 - 1 : x1 + 1; if (at < 0 || at >= nx) return false; }
+      else if (ax === 1) { at = dir < 0 ? y0 - 1 : y1 + 1; if (at < 0 || at >= ny) return false; }
+      else { at = dir < 0 ? z0 - 1 : z1 + 1; if (at < 0 || at >= nz) return false; }
+      if (o.nonOverlap && slabHasClaimed(ax, x0, y0, z0, x1, y1, z1, at)) return false; // can't enter claimed volume
+      const d = slabDensity(ax, x0, y0, z0, x1, y1, z1, at);
+      if (d < o.edgeDensity) return false; // PRIMARY brake: edge-weighted boundary-slab density
+      if (o.minFill > 0) { // optional global fill backstop
+        const slabCount = ax === 0 ? (y1 - y0 + 1) * (z1 - z0 + 1) : ax === 1 ? (x1 - x0 + 1) * (z1 - z0 + 1) : (x1 - x0 + 1) * (y1 - y0 + 1);
+        const cur = solidIn(x0, y0, z0, x1, y1, z1), vox = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+        if (cur + Math.round(d * slabCount) < (vox + slabCount) * o.minFill) return false;
       }
-      if (boxes.length >= o.maxBoxes) break;
+      if (ax === 0) { if (dir < 0) x0 = at; else x1 = at; }
+      else if (ax === 1) { if (dir < 0) y0 = at; else y1 = at; }
+      else { if (dir < 0) z0 = at; else z1 = at; }
+      return true;
+    };
+
+    // SHRINK face (ax,dir) by one slab iff its CURRENT outermost slab FAILS the criterion.
+    // Never shrink below 1 slab on an axis. (claimed voxels read empty, so a slab that
+    // strayed onto another box's volume fails and is retracted.)
+    const tryShrink = (ax: number, dir: number): boolean => {
+      let at: number;
+      if (ax === 0) { if (x1 - x0 < 1) return false; at = dir < 0 ? x0 : x1; }
+      else if (ax === 1) { if (y1 - y0 < 1) return false; at = dir < 0 ? y0 : y1; }
+      else { if (z1 - z0 < 1) return false; at = dir < 0 ? z0 : z1; }
+      // edge-weighted density of the box's CURRENT outermost slab on this axis at `at`.
+      const d = slabDensity(ax, x0, y0, z0, x1, y1, z1, at);
+      if (d >= o.edgeDensity) return false; // outermost slab still passes — keep it
+      if (ax === 0) { if (dir < 0) x0 = at + 1; else x1 = at - 1; }
+      else if (ax === 1) { if (dir < 0) y0 = at + 1; else y1 = at - 1; }
+      else { if (dir < 0) z0 = at + 1; else z1 = at - 1; }
+      return true;
+    };
+
+    // Relax until STABLE: a full pass over the 6 faces that neither grows nor shrinks.
+    // Bounded iteration count (can't exceed the grid span) guarantees termination.
+    let changed = true, guard = 0;
+    const guardMax = (nx + ny + nz) * 2 + 8;
+    while (changed && guard++ < guardMax) {
+      changed = false;
+      // fixed face order: X-,X+,Y-,Y+,Z-,Z+. Try grow then shrink on each.
+      if (tryGrow(0, -1)) changed = true; else if (tryShrink(0, -1)) changed = true;
+      if (tryGrow(0, +1)) changed = true; else if (tryShrink(0, +1)) changed = true;
+      if (tryGrow(1, -1)) changed = true; else if (tryShrink(1, -1)) changed = true;
+      if (tryGrow(1, +1)) changed = true; else if (tryShrink(1, +1)) changed = true;
+      if (tryGrow(2, -1)) changed = true; else if (tryShrink(2, -1)) changed = true;
+      if (tryGrow(2, +1)) changed = true; else if (tryShrink(2, +1)) changed = true;
     }
-    if (boxes.length >= o.maxBoxes) break;
+
+    // discard a box that relaxed to no solid (e.g. the seed was a lone speck the shrink ate).
+    if (solidIn(x0, y0, z0, x1, y1, z1) === 0) return null;
+    return { x0, y0, z0, x1, y1, z1 };
+  };
+
+  // Seed loop — SIZE-DRIVEN, scan-order seeding. Walk the grid z→y→x; the FIRST solid voxel
+  // not yet claimed becomes the next seed (the existing scan order — no clearance heuristic).
+  // We RELAX a box from it, then KEEP it only if its longest edge ≥ minBoxSize. A relaxed box
+  // is always CLAIMED (so its volume isn't re-seeded and the loop terminates) even if it is
+  // below the floor — so the box COUNT auto-adapts to the mesh, governed by an absolute size
+  // floor rather than a count cap. `maxBoxes` is only a far backstop. We stop when coverage is
+  // met or no unclaimed solid voxel remains.
+  let seedScan = 0; // z→y→x scan cursor
+  while (coveredSolid < solidCount * o.coverageTarget && gboxes.length < o.maxBoxes) {
+    // next seed = first unclaimed solid voxel in scan order
+    let seed: [number, number, number] | null = null;
+    for (; seedScan < nx * ny * nz; seedScan++) {
+      if (solid[seedScan] && !claimed[seedScan]) {
+        const z = (seedScan / (ny * nx)) | 0, y = ((seedScan - z * ny * nx) / nx) | 0, x = seedScan - z * ny * nx - y * nx;
+        seed = [x, y, z];
+        break;
+      }
+    }
+    if (!seed) break;
+    const [sx, sy, sz] = seed;
+
+    const r = relax(sx, sy, sz);
+    if (!r) {
+      // box vanished — claim the seed so we don't loop on it forever.
+      claimed[idx(sx, sy, sz)] = 1; covered[idx(sx, sy, sz)] = 1;
+      continue;
+    }
+    const { x0, y0, z0, x1, y1, z1 } = r;
+
+    // CLAIM the box's whole AABB (every voxel, solid or empty) under nonOverlap, so the
+    // next box can't grow into it. Always mark its SOLID voxels covered (coverage stat).
+    const before = coveredSolid;
+    for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const i = idx(x, y, z);
+      claimed[i] = 1;
+      if (solid[i] && !covered[i]) { covered[i] = 1; coveredSolid++; }
+    }
+    const gained = coveredSolid - before;
+    // a box claiming no NEW solid voxels is useless — claim its seed and move on.
+    if (gained === 0) { claimed[idx(sx, sy, sz)] = 1; covered[idx(sx, sy, sz)] = 1; continue; }
+
+    // SIZE-BASED STOP: only KEEP boxes whose longest edge clears the absolute floor (in
+    // metres). A sub-threshold box is still claimed (above) so its sliver volume won't be
+    // re-seeded — the box COUNT auto-adapts to the mesh, governed by size not a count cap.
+    const sxm = (x1 - x0 + 1) * g.cell, sym = (y1 - y0 + 1) * g.cell, szm = (z1 - z0 + 1) * g.cell;
+    if (Math.max(sxm, sym, szm) >= o.minBoxSize) {
+      gboxes.push({ x0, y0, z0, x1, y1, z1 });
+    }
+  }
+
+  // convert to object-local AABBs, clamped to the true mesh bound so the outward rounding /
+  // loose padding never sticks out past the model. Accumulate the union fill stat.
+  const boxes: AABB[] = [];
+  let unionSolid = 0, unionVoxels = 0;
+  for (const bx of gboxes) {
+    boxes.push({
+      min: [g.ox + bx.x0 * g.cell, g.oy + bx.y0 * g.cell, g.oz + bx.z0 * g.cell],
+      max: [Math.min(maxXm, g.ox + (bx.x1 + 1) * g.cell), Math.min(maxYm, g.oy + (bx.y1 + 1) * g.cell), Math.min(maxZm, g.oz + (bx.z1 + 1) * g.cell)],
+    });
+    unionSolid += solidIn(bx.x0, bx.y0, bx.z0, bx.x1, bx.y1, bx.z1);
+    unionVoxels += (bx.x1 - bx.x0 + 1) * (bx.y1 - bx.y0 + 1) * (bx.z1 - bx.z0 + 1);
   }
 
   const coverage = solidCount > 0 ? coveredSolid / solidCount : 1;

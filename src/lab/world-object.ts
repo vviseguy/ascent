@@ -55,14 +55,21 @@ export interface MeshObjectSpec {
   level: WorldObjectLevel;
   /** Per-variant colour-keyed re-skin rules. First key is the default variant. */
   variants: Record<string, RetextureRule[]>;
-  /** Optional box-fit knobs. `edgeDensity` is the primary tunable (boundary-slab
-   *  density brake on box growth); see box-fit.ts FitBoxesOpts for the rest. */
+  /** Optional box-fit knobs. Normally LEFT UNSET — the GLOBAL box-fit defaults (relative
+   *  cell + grow/shrink relaxation + non-overlap) give good footprints on any mesh with
+   *  ZERO per-object tuning. See box-fit.ts FitBoxesOpts for every knob. */
   fit?: {
     cell?: number;
+    cellDivisor?: number;
+    cellMin?: number;
+    cellMax?: number;
     edgeDensity?: number;
+    edgeWeight?: number;
+    nonOverlap?: boolean;
     minFill?: number;
     coverageTarget?: number;
     maxBoxes?: number;
+    minBoxSize?: number;
     minBox?: number;
     dilate?: number;
   };

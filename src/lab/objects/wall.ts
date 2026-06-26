@@ -28,9 +28,7 @@ export default meshObject({
   describe: 'The 1:1 KayKit dungeon wall. Variants re-skin the stone swatch: default stone · mossy (green-tinted stone PBR) · bloodstone (oxblood). Footprint auto-fitted (~1 slab box).',
   level: 'object',
   scale: 0.5, // KayKit native 4×4×1u → 2×2×0.5m cell wall
-  // A wall is a single solid slab → one box. Coarse cell + a low edge-density brake so
-  // the thin 0.5m depth still grows into one slab rather than splitting on grazing votes.
-  fit: { cell: 0.12, edgeDensity: 0.4, maxBoxes: 3, minBox: 0.2 },
+  // No `fit` overrides — the GLOBAL box-fit defaults cover the single solid slab in 1 box.
   // The grey stone ramp is wide; a generous tolerance recolours the whole masonry face.
   retextureTolerance: 95,
   variants: {

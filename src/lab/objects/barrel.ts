@@ -21,7 +21,7 @@ export default meshObject({
   describe: 'The 1:1 KayKit large barrel. Variants re-skin the stave swatch: default oak · iron drum (metal PBR) · mossy. Footprint auto-fitted (~1 box).',
   level: 'object',
   scale: 0.5, // KayKit native ~2u tall → ~1m game barrel
-  fit: { cell: 0.18, maxBoxes: 2, minBox: 0.12 }, // → 1 solid drum box
+  // No `fit` overrides — the GLOBAL box-fit defaults cover the solid drum in ~1 box.
   variants: {
     oak: [],
     iron: [{ from: STAVE, to: { pbr: 'metal', roughness: 0.5, metalness: 0.9 } }],

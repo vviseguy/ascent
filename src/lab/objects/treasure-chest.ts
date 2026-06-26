@@ -26,10 +26,8 @@ export default meshObject({
   describe: 'The 1:1 KayKit chest. Variants re-skin ONLY the iron-strap swatch — iron · gold · emerald — leaving the wood planks untouched. Footprint auto-fitted.',
   level: 'object',
   scale: 0.5, // KayKit native → ~0.6m game chest
-  // A chest = a rectangular BODY block + a rounded LID. A finer cell + a higher
-  // edge-density makes growth stop where the lid's curve goes sparse, so the body and
-  // lid emerge as their own boxes (≈2) instead of one fat block swallowing both.
-  fit: { cell: 0.07, edgeDensity: 0.72, maxBoxes: 5, minBox: 0.1 },
+  // No `fit` overrides — the GLOBAL box-fit defaults split the rectangular BODY block from
+  // the rounded LID (≈2 boxes) where the lid's curve goes sparse.
   retextureTolerance: 22, // strap-grey and plank-grey are close — keep them apart
   variants: {
     iron: [], // default — leave the iron straps grey

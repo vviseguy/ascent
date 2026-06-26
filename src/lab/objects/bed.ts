@@ -30,10 +30,8 @@ export default meshObject({
   describe: 'The 1:1 KayKit bed (clean single bed). Variants re-skin DISTINCT aspects: red-linen/blue-linen recolour the FABRIC · bare-frame recolours the WOOD FRAME. Footprint auto-fitted (frame slab + mattress + headboard).',
   level: 'object',
   scale: 0.5, // KayKit native ~1.5×1.06×3u → ~0.75×0.53×1.5m bed
-  // A bed is a low frame slab + a softer mattress + a taller headboard. A moderate
-  // edge-density lets the frame+mattress merge into a slab while the headboard reads
-  // as its own box; coverage target relaxed so a few sliver trims don't force a coarsen.
-  fit: { cell: 0.06, edgeDensity: 0.45, coverageTarget: 0.9, maxBoxes: 6, minBox: 0.12 },
+  // No `fit` overrides — the GLOBAL box-fit defaults auto-separate the frame board, the
+  // mattress, the pillow and the blanket (each its own non-overlapping box).
   retextureTolerance: 26, // fabric blue-grey vs dark wood are close-ish — keep apart
   variants: {
     'red-linen': [{ from: FABRIC, to: { color: 0xb02a2a, roughness: 0.7, metalness: 0 } }],

@@ -28,9 +28,8 @@ export default meshObject({
   describe: 'The 1:1 KayKit shelf unit as a bookshelf. Variants re-skin DISTINCT aspects: oak/walnut recolour the FRAME · colorful-books recolours only the shelf-board swatch. Footprint auto-fitted to the shelf volume.',
   level: 'object',
   scale: 0.5, // KayKit native 2×1.95×0.5u → ~1×1×0.25m bookshelf
-  // A bookshelf is a mostly-solid slab with internal shelf gaps; a moderate edge-density
-  // lets one box span the whole frame volume (the gaps are interior voids it grows over).
-  fit: { cell: 0.06, edgeDensity: 0.45, maxBoxes: 4, minBox: 0.1 },
+  // No `fit` overrides — the GLOBAL box-fit defaults cover the shelf volume reasonably
+  // (the internal shelf gaps are interior voids the boxes grow over).
   // The frame grey (~152) and the lighter board grey (~214) are ~62 apart; tolerance 45
   // catches each band's gradient WITHOUT crossing into the other, so oak/walnut hit only
   // the frame and colorful-books hits only the boards.

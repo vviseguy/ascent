@@ -25,7 +25,8 @@ export default meshObject({
   describe: 'The 1:1 KayKit long table. Variants re-skin its single wood swatch: default oak · stained walnut · stone slab. Footprint auto-fitted (top + legs).',
   level: 'object',
   scale: 0.5, // KayKit native ~4u long → ~2m game table
-  fit: { cell: 0.13, maxBoxes: 10, minBox: 0.08 }, // → ~6-7 boxes: top slab + legs
+  // No `fit` overrides — the GLOBAL box-fit defaults (relative cell + grow/shrink relax +
+  // non-overlap) auto-separate the top slab, the 4 legs and the cross-bar/stretcher.
   variants: {
     oak: [], // default — keep the original atlas-derived material
     walnut: [{ from: WOOD, to: { color: 0x5a3a22, roughness: 0.78, metalness: 0 } }],
