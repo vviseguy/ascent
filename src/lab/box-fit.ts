@@ -49,12 +49,20 @@
 // ============================================================================
 
 import * as THREE from 'three';
+import { mulberry32 } from './element.ts';
 
 /** An axis-aligned box in object-local metres: inclusive corners. */
 export interface AABB {
   min: [number, number, number];
   max: [number, number, number];
 }
+
+/** Seeding strategy for the loose-box cover (which unclaimed-solid voxel(s) to grow from).
+ *  - `scan`        : first unclaimed-solid voxel in z→y→x scan order (simplest, deterministic).
+ *  - `cluster`     : interior peak of the LARGEST remaining blob (the established default).
+ *  - `random-best` : sample N random unclaimed-solid voxels (SEEDED PRNG), relax a box from
+ *                    each, place the best by fill% (tie-break larger); see `looseCover`. */
+export type SeedMode = 'scan' | 'cluster' | 'random-best';
 
 export interface FitBoxesOpts {
   /** EXPLICIT voxel edge length (object-local metres). Normally LEFT UNSET so the cell is
@@ -82,7 +90,7 @@ export interface FitBoxesOpts {
    *  settles exactly at the density transition (outer slab passes, next fails), regardless
    *  of where the seed sat. This brakes growth at the real solid boundary in EACH direction
    *  while ignoring interior voids (a grooved tabletop still has a dense top face → the box
-   *  grows over the groove). Default 0.5. Raise toward 1.0 to hug tighter (more, smaller
+   *  grows over the groove). Default 0.7. Raise toward 1.0 to hug tighter (more, smaller
    *  boxes); lower to swallow more empty space in fewer boxes. */
   edgeDensity?: number;
   /** EDGE-WEIGHTED emptiness weight (≥1). A slab's PERIMETER/CORNER voxels count this many
@@ -120,6 +128,23 @@ export interface FitBoxesOpts {
    *  Default 0 — the outward envelope rounding already pads slightly. Bump to 1 for
    *  a genuinely leaky mesh that needs its seams closed. */
   dilate?: number;
+  /** SEEDING STRATEGY for the cover. Default `cluster` (interior peak of the largest blob,
+   *  the established behaviour). `scan` seeds the first unclaimed-solid voxel; `random-best`
+   *  samples voxels and keeps the best-filling box (see `samples`/`beam`). */
+  seedMode?: SeedMode;
+  /** `random-best` only: # of random unclaimed-solid voxels SAMPLED per round; each is
+   *  relaxed to a full box and the best (highest fill%, tie-break larger) is placed.
+   *  Default 10. Higher = better boxes, more fit time. */
+  samples?: number;
+  /** `random-best` only: TREEING beam width B. After scoring the round's samples we keep the
+   *  top-B candidate boxes as branches, provisionally claim each, do a SHALLOW 1-level
+   *  lookahead (one more best-of-`samples` box on the remaining volume), and place the branch
+   *  whose 2-box total fill is best. B=1 disables treeing (pure greedy). Default 2 (shallow,
+   *  per Jacob). */
+  beam?: number;
+  /** SEED for `random-best`'s mulberry32 PRNG (so the same mesh+seed reproduces the same
+   *  boxes — these footprints get baked). Defaults to 1; the lab passes the build seed. */
+  randomSeed?: number;
 }
 
 // GLOBAL DEFAULTS — tuned to give good footprints on ANY mesh with ZERO per-object knobs.
@@ -130,6 +155,8 @@ const DEFAULTS = {
   cellDivisor: 104,
   cellMin: 0.01,
   cellMax: 0.16,
+  // edgeDensity 0.5 (reset from the 0.7 tightening experiment): a face grows into a boundary
+  // slab that is ≥50% solid — the balanced baseline. The live lab control overrides this.
   edgeDensity: 0.5,
   edgeWeight: 1.5,
   nonOverlap: true,
@@ -138,6 +165,10 @@ const DEFAULTS = {
   maxBoxes: 24,
   minBoxSize: 0.14,
   dilate: 0,
+  seedMode: 'cluster' as SeedMode,
+  samples: 10,
+  beam: 2,
+  randomSeed: 1,
 } as const;
 
 /** Per-fit diagnostics surfaced to the lab HUD (how well the boxes hug). */
@@ -187,6 +218,10 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   // minBoxSize is the SIZE-BASED stop; minBox survives only as a deprecated alias.
   const minBoxSize = opts.minBoxSize ?? opts.minBox ?? DEFAULTS.minBoxSize;
   const dilate = opts.dilate ?? DEFAULTS.dilate;
+  const seedMode = opts.seedMode ?? DEFAULTS.seedMode;
+  const samples = opts.samples ?? DEFAULTS.samples;
+  const beam = opts.beam ?? DEFAULTS.beam;
+  const randomSeed = opts.randomSeed ?? DEFAULTS.randomSeed;
 
   const soup = bakeSoup(object);
 
@@ -208,7 +243,7 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   for (let attempt = 0; attempt < 9; attempt++) {
     const grid = voxelize(soup, cell, dilate);
     if (grid && grid.solidCount > 0) {
-      const res = looseCover(grid, { edgeDensity, edgeWeight, nonOverlap, minFill, coverageTarget, maxBoxes, minBoxSize });
+      const res = looseCover(grid, { edgeDensity, edgeWeight, nonOverlap, minFill, coverageTarget, maxBoxes, minBoxSize, seedMode, samples, beam, randomSeed });
       if (res.boxes.length > 0 && res.boxes.length <= maxBoxes) {
         return { boxes: res.boxes, stats: { cell, solidVoxels: grid.solidCount, ...res.stats } };
       }
@@ -402,9 +437,17 @@ function dilateOnce(g: Grid): void {
 //
 //    A SIZE-BASED stop governs the box count: a relaxed box is kept only if its longest
 //    edge ≥ minBoxSize (no count cap). The loop ends when coverage is met or no unclaimed
-//    solid voxel remains. Fixed seed order + fixed face order = deterministic. NO Math.random.
+//    solid voxel remains. Fixed seed order + fixed face order = deterministic.
+//
+//    SEED MODE (`seedMode`) chooses WHICH unclaimed-solid voxel to grow from each round:
+//      cluster (default) — interior peak of the largest blob (pickClusterSeed);
+//      scan              — first unclaimed-solid voxel in z→y→x order;
+//      random-best       — sample `samples` random voxels (SEEDED mulberry32, NOT Math.random,
+//                          so footprints reproduce), relax a box from each, keep the best by
+//                          fill% (tie-break larger), with a SHALLOW 1-level treeing lookahead
+//                          over the top-`beam` candidates. Still deterministic for a fixed seed.
 // ---------------------------------------------------------------------------
-interface CoverOpts { edgeDensity: number; edgeWeight: number; nonOverlap: boolean; minFill: number; coverageTarget: number; maxBoxes: number; minBoxSize: number; }
+interface CoverOpts { edgeDensity: number; edgeWeight: number; nonOverlap: boolean; minFill: number; coverageTarget: number; maxBoxes: number; minBoxSize: number; seedMode: SeedMode; samples: number; beam: number; randomSeed: number; }
 
 function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStats, 'cell' | 'solidVoxels'> } {
   const { nx, ny, nz, solid, solidCount } = g;
@@ -615,24 +658,135 @@ function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStat
     return { x0, y0, z0, x1, y1, z1 };
   };
 
-  // Seed loop — SIZE-DRIVEN, CLUSTER-CENTERED seeding. Each round we seed at the interior peak
-  // of the LARGEST remaining blob of unclaimed-solid voxels (pickClusterSeed), then RELAX a box
-  // from it, then KEEP it only if its longest edge ≥ minBoxSize. A relaxed box is always CLAIMED
-  // (so its volume isn't re-seeded and the loop terminates) even if it is below the floor — so
-  // the box COUNT auto-adapts to the mesh, governed by an absolute size floor rather than a
-  // count cap. `maxBoxes` is only a far backstop. We stop when coverage is met or no unclaimed
-  // solid voxel remains.
-  while (coveredSolid < solidCount * o.coverageTarget && gboxes.length < o.maxBoxes) {
-    const seed = pickClusterSeed();
-    if (!seed) break;
-    const [sx, sy, sz] = seed;
+  type RBox = { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number };
+  // FILL% of a relaxed box: solid voxels / total voxels (1 = all solid). The `random-best`
+  // objective — higher fill = a box that swallowed less empty space, hugging the feature.
+  const boxFill = (b: RBox): number => {
+    const vox = (b.x1 - b.x0 + 1) * (b.y1 - b.y0 + 1) * (b.z1 - b.z0 + 1);
+    return vox > 0 ? solidIn(b.x0, b.y0, b.z0, b.x1, b.y1, b.z1) / vox : 0;
+  };
+  // box SIZE (longest edge in voxels) — the fill tie-breaker (prefer the larger box).
+  const boxSpan = (b: RBox): number => Math.max(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0);
 
-    const r = relax(sx, sy, sz);
-    if (!r) {
-      // box vanished — claim the seed so we don't loop on it forever.
-      claimed[idx(sx, sy, sz)] = 1; covered[idx(sx, sy, sz)] = 1;
-      continue;
+  // SCAN seed: the first unclaimed-solid voxel in z→y→x order, or null when none remain.
+  const pickScanSeed = (): [number, number, number] | null => {
+    for (let s = 0; s < solid.length; s++) {
+      if (solid[s] && !claimed[s]) {
+        const z = (s / (ny * nx)) | 0, y = ((s - z * ny * nx) / nx) | 0, x = s - z * ny * nx - y * nx;
+        return [x, y, z];
+      }
     }
+    return null;
+  };
+
+  // ---- random-best machinery (SEEDED PRNG — reproducible, footprints get baked) ----
+  // One PRNG for the whole cover so the sample sequence is fixed for a given mesh+seed.
+  const rng = mulberry32(o.randomSeed >>> 0);
+  // Collect every currently-unclaimed-solid voxel flat index (rebuilt each round since
+  // claiming shrinks the pool). Returns the list so we can sample WITHOUT replacement.
+  const collectUnclaimed = (): number[] => {
+    const pool: number[] = [];
+    for (let s = 0; s < solid.length; s++) if (solid[s] && !claimed[s]) pool.push(s);
+    return pool;
+  };
+  // Relax a box from up to `samples` DISTINCT random voxels of `pool`; return the best box
+  // (highest fill%, tie-break larger span), its score, or null if none relaxed to solid.
+  // Sampling is Fisher–Yates partial-shuffle on the pool index (seeded) — distinct picks.
+  const bestSampledBox = (pool: number[]): { box: RBox; fill: number; span: number } | null => {
+    const n = pool.length;
+    if (n === 0) return null;
+    const k = Math.min(o.samples, n);
+    // partial shuffle: pick k distinct positions from the front. Mutates a scratch copy so
+    // the caller's pool order is preserved for the lookahead's own (independent) sampling.
+    const scratch = pool.slice();
+    let best: { box: RBox; fill: number; span: number } | null = null;
+    for (let i = 0; i < k; i++) {
+      const j = i + ((rng() * (n - i)) | 0);
+      const tmp = scratch[i]!; scratch[i] = scratch[j]!; scratch[j] = tmp;
+      const c = scratch[i]!;
+      const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+      const r = relax(x, y, z);
+      if (!r) continue;
+      const fill = boxFill(r), span = boxSpan(r);
+      // strictly-better fill, or equal fill with a larger span — keep it.
+      if (!best || fill > best.fill + 1e-9 || (Math.abs(fill - best.fill) <= 1e-9 && span > best.span)) {
+        best = { box: r, fill, span };
+      }
+    }
+    return best;
+  };
+  // Claim a box's AABB into `claimed` (mutates) — used both to place a box for real and to
+  // PROVISIONALLY claim a branch during the shallow lookahead (then rolled back).
+  const claimBox = (b: RBox, into: Uint8Array): void => {
+    for (let z = b.z0; z <= b.z1; z++) for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) into[idx(x, y, z)] = 1;
+  };
+
+  // ROUND of random-best WITH SHALLOW TREEING: take the top-B candidate boxes from this
+  // round's samples as branches; for each branch provisionally claim it, run ONE more
+  // best-of-`samples` lookahead box on the remaining volume, and score the branch by the
+  // 2-box COMBINED fill (avg of branch fill + lookahead fill). Place the best branch's box.
+  // Keep it SHALLOW (1 level) per Jacob. B=1 short-circuits to pure greedy (no lookahead).
+  const randomBestRound = (): RBox | null => {
+    const pool = collectUnclaimed();
+    if (pool.length === 0) return null;
+    // gather the top-B distinct candidate boxes by (fill desc, span desc) from one sample set.
+    const branches: { box: RBox; fill: number; span: number }[] = [];
+    {
+      const n = pool.length, k = Math.min(o.samples, n), scratch = pool.slice();
+      for (let i = 0; i < k; i++) {
+        const j = i + ((rng() * (n - i)) | 0);
+        const tmp = scratch[i]!; scratch[i] = scratch[j]!; scratch[j] = tmp;
+        const c = scratch[i]!;
+        const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+        const r = relax(x, y, z);
+        if (!r) continue;
+        branches.push({ box: r, fill: boxFill(r), span: boxSpan(r) });
+      }
+    }
+    if (branches.length === 0) return null;
+    branches.sort((a, b) => (b.fill - a.fill) || (b.span - a.span));
+    const B = Math.max(1, o.beam);
+    if (B === 1 || branches.length === 1) return branches[0]!.box; // pure greedy, no lookahead
+
+    let bestBranch: RBox | null = null, bestScore = -1;
+    const topB = branches.slice(0, B);
+    for (const br of topB) {
+      // provisionally claim this branch, sample ONE lookahead box on what remains, score the
+      // pair, then ROLL BACK the provisional claim. (Shallow: exactly one level deep.)
+      claimBox(br.box, claimed);
+      const look = bestSampledBox(collectUnclaimed());
+      // restore: clear only THIS branch's voxels (nothing else touched `claimed`).
+      for (let z = br.box.z0; z <= br.box.z1; z++) for (let y = br.box.y0; y <= br.box.y1; y++) for (let x = br.box.x0; x <= br.box.x1; x++) claimed[idx(x, y, z)] = 0;
+      const score = look ? (br.fill + look.fill) / 2 : br.fill;
+      if (score > bestScore + 1e-9) { bestScore = score; bestBranch = br.box; }
+    }
+    return bestBranch ?? topB[0]!.box;
+  };
+
+  // Pick the next seed/box for the configured mode. `cluster`/`scan` return a seed voxel to
+  // relax; `random-best` returns an already-relaxed box (it samples internally). Returns
+  // null when no unclaimed-solid voxel remains.
+  const nextBox = (): RBox | null => {
+    if (o.seedMode === 'random-best') return randomBestRound();
+    const seed = o.seedMode === 'scan' ? pickScanSeed() : pickClusterSeed();
+    if (!seed) return null;
+    const r = relax(seed[0], seed[1], seed[2]);
+    if (!r) { // box vanished — claim the seed so we don't loop on it forever.
+      const i = idx(seed[0], seed[1], seed[2]); claimed[i] = 1; covered[i] = 1;
+      return { x0: seed[0], y0: seed[1], z0: seed[2], x1: seed[0], y1: seed[1], z1: seed[2], dead: true } as RBox & { dead: true };
+    }
+    return r;
+  };
+
+  // Seed loop — SIZE-DRIVEN. Each round picks the next box per `seedMode` (cluster interior
+  // peak / scan order / random-best sampling), CLAIMS it (so its volume isn't re-seeded and
+  // the loop terminates), then KEEPS it only if its longest edge ≥ minBoxSize. The box COUNT
+  // auto-adapts to the mesh, governed by an absolute size floor rather than a count cap.
+  // `maxBoxes` is only a far backstop. We stop when coverage is met or nothing unclaimed remains.
+  while (coveredSolid < solidCount * o.coverageTarget && gboxes.length < o.maxBoxes) {
+    const r = nextBox();
+    if (!r) break;
+    if ((r as RBox & { dead?: boolean }).dead) continue; // seed relaxed to nothing — already claimed
     const { x0, y0, z0, x1, y1, z1 } = r;
 
     // CLAIM the box's whole AABB (every voxel, solid or empty) under nonOverlap, so the
@@ -644,8 +798,8 @@ function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStat
       if (solid[i] && !covered[i]) { covered[i] = 1; coveredSolid++; }
     }
     const gained = coveredSolid - before;
-    // a box claiming no NEW solid voxels is useless — claim its seed and move on.
-    if (gained === 0) { claimed[idx(sx, sy, sz)] = 1; covered[idx(sx, sy, sz)] = 1; continue; }
+    // a box claiming no NEW solid voxels is useless — claim a corner voxel so we don't spin.
+    if (gained === 0) { const i = idx(x0, y0, z0); claimed[i] = 1; covered[i] = 1; continue; }
 
     // SIZE-BASED STOP: only KEEP boxes whose longest edge clears the absolute floor (in
     // metres). A sub-threshold box is still claimed (above) so its sliver volume won't be
