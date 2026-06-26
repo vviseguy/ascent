@@ -124,9 +124,11 @@ export interface FitBoxesOpts {
 
 // GLOBAL DEFAULTS — tuned to give good footprints on ANY mesh with ZERO per-object knobs.
 // `cell` is left undefined so it derives RELATIVE to the object (bbox-diag / cellDivisor).
+// cellDivisor is the EXPERIMENTAL 4× granularity (26 → 104): 4× finer voxels per axis.
+// cellMin shrinks ×4 too so the absolute floor doesn't clamp the finer cell back up.
 const DEFAULTS = {
-  cellDivisor: 26,
-  cellMin: 0.04,
+  cellDivisor: 104,
+  cellMin: 0.01,
   cellMax: 0.16,
   edgeDensity: 0.5,
   edgeWeight: 1.5,
@@ -471,6 +473,85 @@ function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStat
     return false;
   };
 
+  // CLUSTER-CENTERED SEED. Instead of "first unclaimed-solid voxel in scan order", label the
+  // unclaimed-solid voxels into 6-connected components (blobs), pick the LARGEST blob, and seed
+  // at its MOST-INTERIOR voxel (the L1 distance-transform PEAK within the blob — furthest from
+  // any non-blob voxel). So a box starts centred on a feature and grows/shrinks symmetrically
+  // outward. Deterministic: BFS in fixed z→y→x order, blob chosen by (size desc, then first
+  // scan index), peak chosen by (distance desc, then first scan index). Returns null when no
+  // unclaimed-solid voxel remains. Scratch arrays are reused across rounds.
+  const comp = new Int32Array(solid.length);   // component id per voxel (-1 = none this round)
+  const bfsQ = new Int32Array(solid.length);    // BFS queue
+  const blobIdx: number[] = [];                 // flat indices of the current largest blob
+  const pickClusterSeed = (): [number, number, number] | null => {
+    comp.fill(-1);
+    let bestSize = -1, bestStart = -1, nextId = 0;
+    // first pass: flood every unclaimed-solid blob, track the largest (size, then earliest start)
+    for (let s = 0; s < solid.length; s++) {
+      if (!solid[s] || claimed[s] || comp[s] !== -1) continue;
+      const id = nextId++;
+      let head = 0, tail = 0, size = 0;
+      bfsQ[tail++] = s; comp[s] = id;
+      while (head < tail) {
+        const c = bfsQ[head++]!; size++;
+        const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+        // 6-neighbours
+        if (x > 0)      { const n = c - 1;         if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+        if (x < nx - 1) { const n = c + 1;         if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+        if (y > 0)      { const n = c - nx;        if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+        if (y < ny - 1) { const n = c + nx;        if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+        if (z > 0)      { const n = c - ny * nx;   if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+        if (z < nz - 1) { const n = c + ny * nx;   if (solid[n] && !claimed[n] && comp[n] === -1) { comp[n] = id; bfsQ[tail++] = n; } }
+      }
+      if (size > bestSize) { bestSize = size; bestStart = s; }
+    }
+    if (bestSize < 0) return null;
+    const bestId = comp[bestStart]!;
+    // collect the largest blob's voxels in scan order
+    blobIdx.length = 0;
+    for (let s = 0; s < solid.length; s++) if (comp[s] === bestId) blobIdx.push(s);
+    // L1 distance transform WITHIN the blob: distance to the nearest non-blob voxel. Two-pass
+    // chamfer over the blob's voxels (scan order then reverse) seeded so border voxels start
+    // at 1 (a neighbour outside the blob is distance-0). The PEAK is the most-interior voxel.
+    const BIG = nx + ny + nz + 2;
+    const dist = new Int32Array(blobIdx.length);
+    const pos = new Map<number, number>(); // flat index -> position in blobIdx
+    for (let k = 0; k < blobIdx.length; k++) pos.set(blobIdx[k]!, k);
+    const inBlob = (c: number) => pos.has(c);
+    // forward pass
+    for (let k = 0; k < blobIdx.length; k++) {
+      const c = blobIdx[k]!;
+      const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+      // a voxel on the grid edge, or with any 6-neighbour outside the blob, is a border (dist 1)
+      let border = (x === 0 || x === nx - 1 || y === 0 || y === ny - 1 || z === 0 || z === nz - 1);
+      if (!border) {
+        if (!inBlob(c - 1) || !inBlob(c + 1) || !inBlob(c - nx) || !inBlob(c + nx) || !inBlob(c - ny * nx) || !inBlob(c + ny * nx)) border = true;
+      }
+      let d = border ? 1 : BIG;
+      // chamfer from already-processed lower neighbours (-x,-y,-z)
+      if (x > 0)      { const p = pos.get(c - 1);       if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      if (y > 0)      { const p = pos.get(c - nx);      if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      if (z > 0)      { const p = pos.get(c - ny * nx); if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      dist[k] = d;
+    }
+    // backward pass
+    for (let k = blobIdx.length - 1; k >= 0; k--) {
+      const c = blobIdx[k]!;
+      const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+      let d = dist[k]!;
+      if (x < nx - 1) { const p = pos.get(c + 1);       if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      if (y < ny - 1) { const p = pos.get(c + nx);      if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      if (z < nz - 1) { const p = pos.get(c + ny * nx); if (p !== undefined) d = Math.min(d, dist[p]! + 1); }
+      dist[k] = d;
+    }
+    // PEAK = max distance, ties broken by earliest scan index (blobIdx is already scan-ordered).
+    let bestD = -1, bestK = 0;
+    for (let k = 0; k < blobIdx.length; k++) if (dist[k]! > bestD) { bestD = dist[k]!; bestK = k; }
+    const c = blobIdx[bestK]!;
+    const z = (c / (ny * nx)) | 0, y = ((c - z * ny * nx) / nx) | 0, x = c - z * ny * nx - y * nx;
+    return [x, y, z];
+  };
+
   // Relax ONE box from a seed voxel: grow+shrink each face to the density transition.
   // Returns the stabilised box, or null if it relaxed to empty (caller reseeds).
   const relax = (sx: number, sy: number, sz: number): { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number } | null => {
@@ -534,24 +615,15 @@ function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStat
     return { x0, y0, z0, x1, y1, z1 };
   };
 
-  // Seed loop — SIZE-DRIVEN, scan-order seeding. Walk the grid z→y→x; the FIRST solid voxel
-  // not yet claimed becomes the next seed (the existing scan order — no clearance heuristic).
-  // We RELAX a box from it, then KEEP it only if its longest edge ≥ minBoxSize. A relaxed box
-  // is always CLAIMED (so its volume isn't re-seeded and the loop terminates) even if it is
-  // below the floor — so the box COUNT auto-adapts to the mesh, governed by an absolute size
-  // floor rather than a count cap. `maxBoxes` is only a far backstop. We stop when coverage is
-  // met or no unclaimed solid voxel remains.
-  let seedScan = 0; // z→y→x scan cursor
+  // Seed loop — SIZE-DRIVEN, CLUSTER-CENTERED seeding. Each round we seed at the interior peak
+  // of the LARGEST remaining blob of unclaimed-solid voxels (pickClusterSeed), then RELAX a box
+  // from it, then KEEP it only if its longest edge ≥ minBoxSize. A relaxed box is always CLAIMED
+  // (so its volume isn't re-seeded and the loop terminates) even if it is below the floor — so
+  // the box COUNT auto-adapts to the mesh, governed by an absolute size floor rather than a
+  // count cap. `maxBoxes` is only a far backstop. We stop when coverage is met or no unclaimed
+  // solid voxel remains.
   while (coveredSolid < solidCount * o.coverageTarget && gboxes.length < o.maxBoxes) {
-    // next seed = first unclaimed solid voxel in scan order
-    let seed: [number, number, number] | null = null;
-    for (; seedScan < nx * ny * nz; seedScan++) {
-      if (solid[seedScan] && !claimed[seedScan]) {
-        const z = (seedScan / (ny * nx)) | 0, y = ((seedScan - z * ny * nx) / nx) | 0, x = seedScan - z * ny * nx - y * nx;
-        seed = [x, y, z];
-        break;
-      }
-    }
+    const seed = pickClusterSeed();
     if (!seed) break;
     const [sx, sy, sz] = seed;
 
