@@ -29,10 +29,12 @@ const TEX_DIR = 'textures/';
 /** A material CLASS — what the surface should physically read as. */
 export type SurfaceKind = 'stone' | 'floor' | 'wood' | 'metal' | 'gold' | 'flame';
 
-/** Texture-set filenames per class (albedo / normal-GL / roughness). null = procedural-only. */
+/** Texture-set filenames per class (albedo / normal-GL / roughness). `nor: null` = no normal
+ *  map (the derivative tangent-frame on KayKit's untangented, non-uniformly-scaled wall boxes
+ *  blows up at grazing / back-lit angles and renders the surface PURE BLACK — see `stone`). */
 interface TexSet {
   diff: string;
-  nor: string;
+  nor: string | null;
   rough: string;
   /** World units one texture tile spans (so masonry/plank scale reads physical, not stretched). */
   worldScale: number;
@@ -45,8 +47,15 @@ interface TexSet {
 }
 
 const SETS: Record<Exclude<SurfaceKind, 'flame'>, TexSet> = {
-  // medieval stone blocks — walls, pillars, stairs, doorways
-  stone: { diff: 'stone_diff.jpg', nor: 'stone_nor.jpg', rough: 'stone_rough.jpg', worldScale: 4.0, metalness: 0, roughness: 0.95 },
+  // medieval stone blocks — walls, pillars, stairs, doorways.
+  // NO normal map ON PURPOSE: walls are tall vertical boxes (non-uniformly scaled ×2 in
+  // length, no vertex tangents). The standard derivative-based TBN for a tangent-space
+  // normal map degenerates on those faces at grazing / back-lit angles (the camera at a
+  // dungeon EDGE looks along the near-edge-on -Z wall faces), producing a NaN shading
+  // normal that renders the whole wall PURE BLACK and even swallows emissive — the
+  // "flickering black squares that vanish when you pan" bug. Albedo + roughness alone
+  // read as real masonry; the bump was only "a touch" of relief at the play camera anyway.
+  stone: { diff: 'stone_diff.jpg', nor: null, rough: 'stone_rough.jpg', worldScale: 4.0, metalness: 0, roughness: 0.95 },
   // cobblestone — the floor underfoot (denser tiling so cells read as paved)
   floor: { diff: 'floor_diff.jpg', nor: 'floor_nor.jpg', rough: 'floor_rough.jpg', worldScale: 3.2, metalness: 0, roughness: 1.0 },
   // wood planks — chests, tables, barrels, shelves, doors, crates
@@ -108,18 +117,20 @@ export class DungeonMaterials {
     const s = SETS[kind];
     const [diff, nor, rough] = await Promise.all([
       this.loadTex(s.diff, true),
-      this.loadTex(s.nor, false),
+      s.nor ? this.loadTex(s.nor, false) : Promise.resolve(null),
       this.loadTex(s.rough, false),
     ]);
     const mat = new THREE.MeshStandardMaterial({
       map: diff,
-      normalMap: nor,
       roughnessMap: rough,
       roughness: s.roughness,
       metalness: s.metalness,
-      // a touch of normal so chunky stone/wood relief reads under the key light
-      normalScale: new THREE.Vector2(1.0, 1.0),
     });
+    if (nor) {
+      mat.normalMap = nor;
+      // a touch of normal so chunky stone/wood relief reads under the key light
+      mat.normalScale.set(1.0, 1.0);
+    }
     if (s.tint !== undefined) mat.color.setHex(s.tint);
     // WORLD-SPACE TILING: re-derive UVs from world position so the texture tiles at a
     // PHYSICAL scale (worldScale u per tile) and ignores KayKit's atlas-swatch UVs.

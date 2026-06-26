@@ -1,12 +1,18 @@
-# 11 — Controls & Interaction (the input reference)
+# 11 — Controls & Input Modes (the input reference)
 
-> **Status: IMPLEMENTED.** This is the single canonical reference for ASCENT's controls,
-> camera, and interaction scheme — a merge of the old `11-camera-movement-controls` and
-> `12-player-interaction` docs. **The master input table in §1 is the source of truth**;
-> every later section is topical detail behind a row of that table. Implemented in
-> `src/render/input-controller.ts`, `src/render/loop.ts`, `src/render/renderer.ts`, and the
-> sim's `src/sim/interact/` system. Last feel pass: 2026-06 (drag-yaw flipped, vertical-drag
+> **Status: IMPLEMENTED.** This is the canonical reference for ASCENT's **input modes** — what
+> every input does and how the camera, movement, and contextual interaction are *driven*. A merge
+> of the old `11-camera-movement-controls` and `12-player-interaction` docs. **The master input
+> table in §1 is the source of truth**; every later section is topical detail behind a row of it.
+> Implemented in `src/render/input-controller.ts`, `src/render/loop.ts`, `src/render/renderer.ts`,
+> and the sim's `src/sim/interact/` system. Last feel pass: 2026-06 (drag-yaw flipped, vertical-drag
 > inclination added, scroll→zoom / Shift+scroll→hotbar, Rush temporarily unbound).
+>
+> **Scope.** This doc owns **input** (bindings, camera/movement control, interaction *mechanics*).
+> The player-facing **UI / HUD presentation** of these systems — the hotbar's look, the interaction
+> prompt chips, the health pill, camera/HUD feel — lives in the UX bible **`07-ux-ui-gamefeel.md`
+> §2** (UX is broader than this doc should be). Pure-UI sections below (§3.3, §5, §6) are kept as
+> numbered pointers so the §-anchors that code comments reference stay stable.
 >
 > **DETERMINISM (non-negotiable).** Everything here is a **VIEW / IO-layer** scheme: it only
 > changes how the local client *forms* its input. The sim still receives canonical
@@ -101,8 +107,8 @@ reorient** the body (v1; §7). The lerp is rate-limited so it reads as a smooth 
 ### 2.5 Inclination (pitch) + zoom
 - **Left-drag vertical** tilts the camera **inclination** (`focusPitch`): drag **down** → more
   top-down, drag **up** → toward the horizon. `PITCH_DRAG_RATE` rad per screen-height, clamped
-  to `[PITCH_MIN, PITCH_MAX]` = 40°–85° so the view never flips past top-down or below the
-  horizon floor. (Horizontal + vertical components of one drag combine, so a diagonal drag
+  to `[PITCH_MIN, PITCH_MAX]` = 3°–85° so the view can drop to **near-horizontal (almost ground
+  level)** at the low end without flipping past top-down at the high end. (Horizontal + vertical components of one drag combine, so a diagonal drag
   orbits and tilts at once.)
 - **Wheel** drives an exponential **zoom** multiplier on the dolly distance, clamped to
   `[ZOOM_MIN, ZOOM_MAX]`. (Pre-2026-06 this was Ctrl+wheel; plain wheel now zooms.)
@@ -141,12 +147,10 @@ contextual buttons onto the existing `Button.Grab/Throw` bits (carrying = hold G
 right charges the verb's throw, releasing fires it; a primary tap drops). The interact *system*
 only owns the **item** + **open** actions. See §9.3.
 
-### 3.3 Hint UI (Minecraft-Dungeons-clean)
-When the sim reports an available action, the HUD shows one small, calm prompt: a **button
-glyph + verb (+ item name)** — e.g. `▣ RMB  Open chest`, `▣ LMB  Pick up  Bottle`. Placed on a
-single line near the targeted object (or above the player), fading in only while an action is
-available, in the app's dark blurred-glass style with a crew-color accent. Never more than one
-PRIMARY + one SECONDARY hint at a time (§6).
+### 3.3 Hint UI → see `07` §2.7
+When the sim reports an available action (`targetActions`), the HUD draws a calm PRIMARY (`LMB`) +
+SECONDARY (`RMB`) prompt. This doc owns only **what the buttons do** (§3.2); the **visual spec
+lives in `07-ux-ui-gamefeel.md` §2.7**. The prompt is a pure reader of the sim's targeting state.
 
 ### 3.4 Doors — a special interactable ("carry the door")
 Doors fit the game's physical/tactile identity (same grab-and-manipulate idiom as carrying
@@ -182,24 +186,24 @@ reveals — doors gate exploration. **Phasing:** ship **click-toggle (animated)*
 - This is **sim state** (a per-player 5-entry item array + selected index), hashed and
   rollback-safe — it lives in `WorldState` and the wire input gains a "selected slot" field;
   pickup/use intents flow through the contextual buttons (§9).
+- **Visual presentation** (the bottom-center bar, selected ring, item icons) is owned by
+  `07-ux-ui-gamefeel.md` §2.7 — this section owns only the slot-select *input* + the inventory model.
 
 ---
 
-## 5. Health display
+## 5. Health display → see `07` §2.8
 
-A **local-player health bar + number** in the HUD — the player *you're driving* (distinct from
-the Anchor's health arc). Placed near the hotbar (bottom) / a screen corner in the HUD style,
-driven by `w.health[localId]` (0–100).
+The local-player health pill (the player *you're driving*, distinct from the Anchor durability arc)
+is a HUD element; its spec lives in `07-ux-ui-gamefeel.md` §2.8. Kept here as a numbered pointer so
+the §-anchors that code comments reference stay stable.
 
 ---
 
-## 6. UI vibe (match the app)
+## 6. UI vibe → see `07`
 
-Reuse the existing HUD language: **dark blurred-glass panels, system-ui, crew-color accents,
-soft glow** (cf. the Anchor HUD + style picker). Hotbar slots = rounded dark cells with a bright
-selected ring. Hints = one calm line, glyph + verb, fade in/out, never cluttered. Look-and-feel
-reference: **Minecraft Dungeons** (uncluttered contextual prompts, readable hotbar) over
-Minecraft-classic's denser HUD.
+The HUD look-and-feel (dark blurred-glass, crew-color accents, Minecraft-Dungeons-clean prompts) is
+owned by the UX bible `07-ux-ui-gamefeel.md` (§2 HUD + §6 accessibility). Kept here as a numbered
+pointer so the §-anchors below (§7–§10) stay stable for the code that references them.
 
 ---
 
@@ -244,7 +248,7 @@ a separate chord.
 | `TAP_MAX_MS` | 250 ms | max left-press duration that still counts as a tap |
 | `DRAG_PAN_RATE` | 3.0 rad | focus **yaw** per one screen-width of horizontal drag (sign flipped in code) |
 | `PITCH_DRAG_RATE` | 1.4 rad | camera **pitch** per one screen-height of vertical drag |
-| `PITCH_MIN` / `PITCH_MAX` | 40° / 85° | inclination clamp (toward horizon / near top-down) |
+| `PITCH_MIN` / `PITCH_MAX` | 3° / 85° | inclination clamp (near-horizontal / near top-down) |
 | `DEFAULT_PITCH` | ≈72° | shipped pitch = `atan2(CAM_SIN55, CAM_COS55)` |
 | `FACE_TURN_RATE` | 7.0 /s | facing lerp toward forward when moving fwd/back |
 | `FOCUS_SNAP_RATE` | 16 /s | middle-click focus-snap lerp speed |

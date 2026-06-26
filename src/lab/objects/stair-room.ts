@@ -25,7 +25,7 @@ const stairRoom: WorldObject = {
   describe: 'A whole room composed FROM objects: stone walls + floor + a climbable staircase + a real Door object in the doorway.',
   level: 'room',
   variants: [...VARIANTS],
-  build(variant: string, seed: number): WorldObjectBuild {
+  async build(variant: string, seed: number): Promise<WorldObjectBuild> {
     const v = (VARIANTS as readonly string[]).includes(variant) ? variant : VARIANTS[0];
     const root = new THREE.Group();
     const stone = new THREE.MeshStandardMaterial({ color: 0x4a4a55, roughness: 0.92, metalness: 0 });
@@ -49,7 +49,7 @@ const stairRoom: WorldObject = {
     wall(gap + 0.4, WALL_H - 2.5, WALL_T, 0, WALL_H - (WALL_H - 2.5) / 2, ROOM / 2);
 
     // COMPOSE: a real Door object dropped into the opening (proves the hierarchy)
-    const d = door.build('handled', seed);
+    const d = await door.build('handled', seed);
     d.root.position.set(0, 0, ROOM / 2);
     root.add(d.root);
     if (d.footprint) for (const b of d.footprint.boxes) boxes.push({ ...b, cz: b.cz + ROOM / 2 });

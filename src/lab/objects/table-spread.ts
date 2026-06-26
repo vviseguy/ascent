@@ -24,7 +24,7 @@ const tableSpread: WorldObject = {
   describe: 'A grouping/prefab: wood table + draped cloth; "feast" adds plates + a lit candle. Composition above a single object.',
   level: 'grouping',
   variants: [...VARIANTS],
-  build(variant: string, seed: number): WorldObjectBuild {
+  build(variant: string, seed: number): Promise<WorldObjectBuild> {
     const v = (VARIANTS as readonly string[]).includes(variant) ? variant : VARIANTS[0];
     const rnd = mulberry32(seed * 99991 + 3);
     const root = new THREE.Group();
@@ -57,7 +57,7 @@ const tableSpread: WorldObject = {
       flame.position.set(0.72, T_H + TOP_T / 2 + 0.29, -0.24); root.add(flame);
     }
 
-    return { root, radius: 1.9, footprint: { boxes: [{ cx: 0, cy: T_H / 2, cz: 0, hx: T_W / 2, hy: T_H / 2, hz: T_D / 2 }] } };
+    return Promise.resolve({ root, radius: 1.9, footprint: { boxes: [{ cx: 0, cy: T_H / 2, cz: 0, hx: T_W / 2, hy: T_H / 2, hz: T_D / 2 }] } });
   },
 };
 

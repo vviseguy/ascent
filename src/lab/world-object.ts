@@ -21,7 +21,12 @@
 // come from the deterministic generator — only cosmetic variant picks live here.
 // ============================================================================
 
-import type * as THREE from 'three';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { fitBoxes, aabbToFootprintBox } from './box-fit.ts';
+import { retexture, type RetextureRule } from './retexture.ts';
+import { DungeonMaterials } from '../render/materials.ts';
 
 /** A collision box in OBJECT-LOCAL space (centre + half-extents, metres). */
 export interface FootprintBox {
@@ -32,6 +37,31 @@ export interface FootprintBox {
 /** The collision shape authored alongside the visual (empty = non-colliding decor). */
 export interface Footprint {
   boxes: FootprintBox[];
+}
+
+/**
+ * The MESH-BASED authoring path (vs. the procedural `build`): an object IS a 1:1
+ * real mesh (a KayKit GLB), re-skinned per variant by COLOUR-KEYED rules (retexture.ts)
+ * — "variants are re-skins of ONE mesh" (docs/15). Its `footprint` is fitted
+ * automatically from the mesh (box-fit.ts), so nothing is hand-authored.
+ */
+export interface MeshObjectSpec {
+  /** URL of the 1:1 mesh (e.g. 'models/kaykit_dungeon/table_long.glb'). */
+  meshUrl: string;
+  /** Display name. */
+  name: string;
+  /** One-liner: what this is for in the game. */
+  describe: string;
+  level: WorldObjectLevel;
+  /** Per-variant colour-keyed re-skin rules. First key is the default variant. */
+  variants: Record<string, RetextureRule[]>;
+  /** Optional box-fit knobs (cell/maxBoxes/minBox). */
+  fit?: { cell?: number; maxBoxes?: number; minBox?: number };
+  /** Uniform scale applied to the loaded mesh (KayKit native units → game metres). */
+  scale?: number;
+  /** Colour-match tolerance for retexture (sRGB distance). Tighten when two swatches
+   *  on the model are close (e.g. the chest's strap-grey vs plank-grey). Default 70. */
+  retextureTolerance?: number;
 }
 
 export interface WorldObjectBuild {
@@ -56,6 +86,87 @@ export interface WorldObject {
   level: WorldObjectLevel;
   /** Named visual modes; the first is the default. Always at least one. */
   variants: string[];
-  /** Build a fresh instance for (variant, seed). Unknown variant → fall back to variants[0]. */
-  build(variant: string, seed: number): WorldObjectBuild;
+  /**
+   * Build a fresh instance for (variant, seed). Unknown variant → fall back to
+   * variants[0]. ASYNC across the contract: a mesh-based object loads a GLB; a
+   * procedural one returns immediately (Promise.resolve). The lab awaits it.
+   */
+  build(variant: string, seed: number): Promise<WorldObjectBuild>;
+}
+
+// ----------------------------------------------------------------------------
+// Mesh-based WorldObject factory (the real-asset path). Loads the GLB once,
+// re-skins per variant via colour-keyed retexture, and fits the footprint with
+// box-fit. Procedural objects (e.g. the custom door) keep authoring `build`
+// directly — KayKit has no door-leaf mesh.
+// ----------------------------------------------------------------------------
+
+/** One shared loader + per-URL template cache + one shared PBR material set. */
+const _loader = new GLTFLoader();
+const _templates = new Map<string, Promise<THREE.Object3D>>();
+let _materials: DungeonMaterials | null = null;
+
+function loadTemplate(url: string): Promise<THREE.Object3D> {
+  let p = _templates.get(url);
+  if (!p) {
+    p = _loader.loadAsync(url).then((g) => g.scene);
+    _templates.set(url, p);
+  }
+  return p;
+}
+
+/** Build a mesh-based WorldObject from a spec: load → clone → re-skin → fit boxes. */
+export function meshObject(spec: MeshObjectSpec): WorldObject {
+  const variantNames = Object.keys(spec.variants);
+  return {
+    name: spec.name,
+    describe: spec.describe,
+    level: spec.level,
+    variants: variantNames,
+    async build(variant: string): Promise<WorldObjectBuild> {
+      const v = variant in spec.variants ? variant : (variantNames[0] ?? '');
+      const template = await loadTemplate(spec.meshUrl);
+      // own copy per build (skeleton-safe even if the GLB has none)
+      const model = cloneSkeleton(template);
+
+      // ensure shadows + a unique material per build so re-skin never mutates the template
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.castShadow = true; m.receiveShadow = true;
+        if (Array.isArray(m.material)) m.material = m.material.map((x) => x.clone());
+        else if (m.material) m.material = (m.material as THREE.Material).clone();
+      });
+
+      // apply the variant's colour-keyed re-skin (no-op for an empty rule list)
+      const rules = spec.variants[v] ?? [];
+      if (rules.length) {
+        if (!_materials && rules.some((r) => r.to.pbr)) { _materials = new DungeonMaterials(); await _materials.load(); }
+        const rtxOpts: { materials?: DungeonMaterials; tolerance?: number } = {};
+        if (_materials) rtxOpts.materials = _materials;
+        if (spec.retextureTolerance !== undefined) rtxOpts.tolerance = spec.retextureTolerance;
+        await retexture(model, rules, rtxOpts);
+      }
+
+      // wrap in a scaled group, then DROP to y=0 (base on the ground, like LabElement)
+      const inner = new THREE.Group();
+      inner.add(model);
+      inner.scale.setScalar(spec.scale ?? 1);
+      const root = new THREE.Group();
+      root.add(inner);
+      root.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(root);
+      inner.position.y -= bb.min.y; // sit the lowest point on y=0
+      root.updateMatrixWorld(true);
+
+      // fit collision boxes from the FINAL placed mesh (object-local)
+      const boxes = fitBoxes(root, spec.fit ?? {});
+      // frame the camera from the bounding HALF-DIAGONAL (incl. height) so tall props
+      // (a barrel) and long ones (a table) are fully in frame — the lab multiplies
+      // this radius for the orbit distance.
+      const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y, d = bb.max.z - bb.min.z;
+      const radius = 0.5 * Math.hypot(w, h, d) || 1.5;
+      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) } };
+    },
+  };
 }

@@ -59,12 +59,18 @@ a crew together, frame **flashpoints** (brawls), and never disorient.
 - **Projection:** perspective, **not** orthographic. FOV ~38–42° (longish lens) to keep the
   three-quarter Hades look without strong parallax distortion at the edges. Ortho was rejected: it
   flattens the vertical depth that sells "how far is the fall," which is the core stakes read.
-- **Tilt:** "slight-tilt top-down" = camera pitched **~55° down from horizontal** (35° above the
-  floor plane). This is the Hades three-quarter compromise: you see floor tops (for traversal/route
-  reading) **and** the vertical faces of the shaft and the gap depth below (for fall stakes).
-- **Yaw:** fixed. The tower has a canonical "front." We do **not** allow free camera rotation —
-  rotation destroys the muscle-memory mapping of "throw stick = world direction" and is a comedy/
-  readability disaster in a grab-throw game. Up is always up.
+- **Tilt:** "slight-tilt top-down." **As built: ~72° down** (the shipped default; specced at ~55°
+  but raised because the 30×30 dungeon is a sparse top-down map and a shallow pitch framed the void
+  past the −Z entry edge). It is now **player-adjustable** — left-drag vertical, clamped 3°–85°
+  (`11` §2.5), down to a **near-horizontal** ground-level view — so each player can trade
+  floor-top reading against shaft/fall-depth reading. You
+  still see floor tops (traversal) **and** the vertical faces + gap depth below (fall stakes).
+- **Yaw:** **player-controlled focus orbit** (as built, `11` §2), not fixed. The camera orbits the
+  player at a **view-only** `focusYaw` swung by left-drag. The old "fixed yaw" rule existed to
+  protect the muscle-memory mapping "move stick = world direction"; we keep that guarantee a
+  different way — **movement is focus-relative, so W is always "up the screen"** regardless of
+  orbit. `focusYaw`/`focusPitch` never enter the sim, hash, or wire (`11` §10), so players framing
+  the scene differently stays determinism-safe. Up is still up; roll still locked (below).
 - **Roll:** locked at 0 except for **bounded cosmetic roll** during big impacts (see screenshake).
 
 ### 1.2 Target: crew/Anchor centroid, Anchor-weighted
@@ -301,6 +307,37 @@ Anchor's height, never ahead**, cooldown-gated. UX:
   text to set expectations for the migration/reconnect UX (§8).
 - **Accessibility surfaced early:** colorblind mode, UI scale, motion, and input remap are reachable
   **from the lobby and mid-match pause**, not buried (§6).
+
+### 2.7 Inventory hotbar + contextual interaction prompts (implemented)
+
+The player you *drive* (not the Anchor) gets a **bottom-center stack**: a contextual hint line just
+above a 5-slot hotbar. Both are pure readers of deterministic sim state (the inventory + the
+per-tick interaction target are hashed and rollback-safe — `11` §9.2), drawn by
+`src/render/hotbar.ts`. The **input** side (slot select, primary/secondary) is specced in `11`; this
+section owns the **look**.
+
+- **Hotbar (Minecraft-style):** five rounded dark blurred-glass cells (48 px) in a glass tray, each
+  numbered 1–5. The active slot is selected via **`1`–`5`** or **Shift+wheel** (`11` §4) and drawn
+  with a **crew-color ring + glow**; filled slots brighten. Cell contents are **loose ITEMS** picked
+  up from the world (Bottle 🜺 / Key ⚷ / Coin ◉ / Generic ◆) — **bodies are never hotbar items**
+  (carrying a body is the separate, exclusive carry verb). Hidden while the local player is dead/out
+  of range.
+- **Contextual prompts (Minecraft-Dungeons-clean):** at most **one PRIMARY (`LMB`) + one SECONDARY
+  (`RMB`)** chip, each a crew-color glyph badge + **verb (+ item/target name)** — e.g.
+  `▣ LMB Pick up Bottle`, `▣ RMB Open chest`. They appear **only while the sim reports an available
+  action** (`targetActions` for the local player) and fade in/out (~0.18 s). Verb mapping follows the
+  contextual model (`11` §3.2): PRIMARY shows Pick up / Grab / Place / Drop / Open; SECONDARY shows
+  Throw / Open. Never more than the two chips at once — the calm, uncluttered read *is* the point.
+- **Determinism:** a pure reader; a rollback that corrects the target or inventory simply shows the
+  corrected values next frame — there is no UI state to re-sync.
+
+### 2.8 Local-player health pill (implemented)
+
+A small **bottom-right bar + number** for the **character you're driving** — distinct from the
+Anchor durability arc (§2.2), which reads your *crew's* keystone. Driven by `w.health[localId]`
+(0–100); the fill + number recolor **green > 50 → amber > 25 → red**, and the pill hides when the
+local player is dead. It answers "can *I* survive the next hit?" the way §2.2 answers it for the
+Anchor.
 
 ---
 

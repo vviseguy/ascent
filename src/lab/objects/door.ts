@@ -39,7 +39,7 @@ const door: WorldObject = {
   describe: 'Stone-framed wood door — variants swap the ironwork: plain straps · barred cell window · ring handle.',
   level: 'object',
   variants: [...VARIANTS],
-  build(variant: string, seed: number): WorldObjectBuild {
+  build(variant: string, seed: number): Promise<WorldObjectBuild> {
     const v = (VARIANTS as readonly string[]).includes(variant) ? variant : VARIANTS[0];
     const rnd = mulberry32(seed * 2654435761 + 7);
     const root = new THREE.Group();
@@ -93,10 +93,10 @@ const door: WorldObject = {
     }
 
     root.add(leaf);
-    return {
+    return Promise.resolve({
       root, radius: 1.6,
       footprint: { boxes: [{ cx: 0, cy: LEAF_H / 2, cz: 0, hx: LEAF_W / 2, hy: LEAF_H / 2, hz: LEAF_T / 2 }] },
-    };
+    });
   },
 };
 

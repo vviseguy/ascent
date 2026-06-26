@@ -43,7 +43,7 @@ const DRAG_DEADZONE_PX = 6;    // left-drag distance below which a press is a TA
 const TAP_MAX_MS = 250;        // max left-press duration that still counts as a tap
 const DRAG_PAN_RATE = 3.0;     // focus yaw (rad) per one screen-width of horizontal drag
 const PITCH_DRAG_RATE = 1.4;   // camera pitch (rad) per one screen-height of vertical drag
-const PITCH_MIN = 40 * DEG;    // shallowest inclination (toward the horizon)
+const PITCH_MIN = 3 * DEG;     // shallowest inclination (near-horizontal, almost ground level)
 const PITCH_MAX = 85 * DEG;    // steepest inclination (near top-down)
 const DEFAULT_PITCH = Math.atan2(0.951, 0.309); // ≈72° — matches renderer CAM_SIN55/COS55
 

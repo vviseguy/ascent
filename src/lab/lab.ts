@@ -22,7 +22,7 @@
 
 import * as THREE from 'three';
 import type { LabElement, LabElementBuild } from './element.ts';
-import type { WorldObject } from './world-object.ts';
+import type { WorldObject, WorldObjectBuild, Footprint } from './world-object.ts';
 
 type LabWindow = Window & {
   __LAB_READY?: boolean;
@@ -30,6 +30,8 @@ type LabWindow = Window & {
   __labSetAngle?: (deg: number) => void;
   __labSetTime?: (sec: number) => void;
   __labList?: () => string[];
+  /** The fitted footprint of the shown object (for box-fit tooling/verification). */
+  __labFootprint?: Footprint | null;
 };
 const W = window as LabWindow;
 
@@ -55,7 +57,21 @@ for (const [path, mod] of Object.entries(objectMods)) {
   if (mod.default) objects.set(id, mod.default);
 }
 
-function boot(): void {
+/** Build a WIREFRAME overlay of a footprint's collision boxes (toggle ?boxes=0). */
+function buildBoxOverlay(footprint: Footprint): THREE.Group {
+  const g = new THREE.Group();
+  const mat = new THREE.LineBasicMaterial({ color: 0x4effa1, transparent: true, opacity: 0.9, depthTest: false });
+  for (const b of footprint.boxes) {
+    const geo = new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2);
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mat);
+    edges.position.set(b.cx, b.cy, b.cz);
+    edges.renderOrder = 999;
+    g.add(edges);
+  }
+  return g;
+}
+
+async function boot(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const elIds = [...elements.keys()].sort();
   const objIds = [...objects.keys()].sort();
@@ -63,10 +79,12 @@ function boot(): void {
   const seed = Number(params.get('seed') ?? '1') || 1;
   const withActor = params.get('actor') === '1';
   const frozen = params.get('frozen') === '1';
+  const showBoxes = params.get('boxes') !== '0'; // collision-box wireframe, default ON
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
-  let built: LabElementBuild;
+  let built: LabElementBuild | WorldObjectBuild;
+  let footprint: Footprint | undefined;
   let renderer: THREE.WebGLRenderer;
   let hudHtml: string;
   try {
@@ -75,11 +93,14 @@ function boot(): void {
       const obj = objects.get(objId);
       if (!obj) throw new Error(`unknown object "${objId}" — known: ${objIds.join(', ')}`);
       const variant = params.get('variant') ?? obj.variants[0] ?? '';
-      built = obj.build(variant, seed);
+      const ob = await obj.build(variant, seed);
+      built = ob;
+      footprint = ob.footprint;
+      const nBoxes = footprint?.boxes.length ?? 0;
       hudHtml =
         `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed})</span><br>` +
         `${obj.describe}<br>` +
-        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; · objects: ${objIds.join(' · ')}</span>`;
+        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; · ${nBoxes} collision box${nBoxes === 1 ? '' : 'es'} (?boxes=0 off) · objects: ${objIds.join(' · ')}</span>`;
     } else {
       const id = params.get('element') ?? elIds[0] ?? '';
       const el = elements.get(id);
@@ -123,6 +144,10 @@ function boot(): void {
   scene.add(ground);
 
   scene.add(built.root);
+
+  // COLLISION-BOX OVERLAY: the fitted footprint as a green wireframe hugging the mesh.
+  W.__labFootprint = footprint ?? null;
+  if (showBoxes && footprint && footprint.boxes.length) scene.add(buildBoxOverlay(footprint));
 
   // demo actor: a capsule that orbits through the element (for reactivity shots)
   const actor = new THREE.Mesh(
@@ -187,4 +212,4 @@ function boot(): void {
   }
 }
 
-boot();
+void boot();

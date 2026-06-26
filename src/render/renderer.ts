@@ -1402,7 +1402,7 @@ export class Renderer {
     onboard.style.cssText = 'position:fixed;bottom:64px;left:50%;transform:translateX(-50%);font-family:system-ui;color:#cdd;background:rgba(10,10,22,0.7);padding:10px 16px;border-radius:10px;pointer-events:none;text-align:center;transition:opacity 1.2s;max-width:440px';
     onboard.innerHTML = '<b style="color:#ffd23f">Get your gold Anchor to the top.</b><br>' +
       '<span style="opacity:.75;font-size:13px">Its height is your score. Climb together — carry it across gaps, ' +
-      'hold <b>K</b> to grab &amp; <b>release</b> to throw, <b>E</b> for your role ability, <b>Q</b> to plant/recall.</span>';
+      '<b>left-tap</b> to grab &amp; <b>right-click</b> to throw, <b>E</b> for your role ability, <b>Q</b> to plant/recall.</span>';
     app.appendChild(onboard);
     this.onboard = onboard;
 
