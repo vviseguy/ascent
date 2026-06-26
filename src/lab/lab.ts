@@ -12,6 +12,8 @@
 //   ?object=<id>    which WorldObject to show (&variant=<v>); supersedes ?element
 //   &seed=<n>       build seed (default 1)
 //   &boxes=0        hide the green collision-box wireframe overlay (default ON)
+//   &voxels=1       show the SOLID-VOXEL diagnostic (pink cubes at each solid voxel the
+//                   voxelizer marked) — to SEE what the fitter thinks is solid (default OFF)
 //   &actor=1        orbit a demo capsule through the element (shows reactivity)
 //   &frozen=1       no rAF loop — renders only on the snapshot hooks (headless use)
 //   LIVE FIT (object mode): &edgeDensity=<0..1> &overlap=<0|1> &seedMode=<scan|cluster|
@@ -21,9 +23,11 @@
 // LOOK-AROUND: mouse OrbitControls own the camera (left-drag orbit, wheel zoom,
 // right/shift-drag pan). A lazy auto-turntable spins UNTIL the user first interacts.
 //
-// OBJECT PICKER: in object mode a dark vertical LIST down the left side (one small
-// RENDERED thumbnail + name per WorldObject) lets you click to switch objects (preserves
-// &variant/&seed/&boxes). The current object's row is highlighted.
+// OBJECT PICKER: in object mode a dark vertical TEXT LIST down the left side, GROUPED
+// by category (Featured · Procedural · Structure · Furniture · Containers · Decor) with
+// one NAME row per WorldObject. It is text-only — no thumbnails, no GLB loads on page
+// load (a GLB loads only when an object is picked). Click a row to switch objects
+// (preserves &variant/&seed/&boxes); the current object's row is highlighted.
 //
 // SNAPSHOT HOOKS (used by scripts/lab-snap.mjs through headless Chromium):
 //   window.__LAB_READY   true once the first frame has rendered
@@ -36,10 +40,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { LabElement, LabElementBuild } from './element.ts';
-import type { WorldObject, WorldObjectBuild, Footprint } from './world-object.ts';
-import { buildObjectPicker } from './object-picker.ts';
-import { fitBoxesWithStats, aabbToFootprintBox, type FitStats } from './box-fit.ts';
+import type { WorldObject, WorldObjectBuild, Footprint, WorldObjectBuildOpts } from './world-object.ts';
+import { buildObjectPicker, type PickerGroup } from './object-picker.ts';
+import { fitBoxesWithStats, aabbToFootprintBox, voxelGridForViz, lastStitchInfo, type FitStats } from './box-fit.ts';
 import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-controls.ts';
+import { kaykitObjects, kaykitCategories, CATALOG_CATEGORY_ORDER } from './kaykit-catalog.ts';
+import { buildThemePicker } from './theme-picker.ts';
+import { compileTheme, readThemeFromParams, THEMES } from './themes.ts';
 
 type LabWindow = Window & {
   __LAB_READY?: boolean;
@@ -64,14 +71,45 @@ for (const [path, mod] of Object.entries(modules)) {
 }
 
 // ---- WorldObject discovery (objects/<id>.ts; same auto-discover pattern, docs/15) ----
+// Hand-made objects/*.ts are discovered first; the auto-generated KayKit catalog
+// (kaykit-catalog.ts — the whole free pack as meshObjects) is MERGED in after, deduped
+// by id. The catalog ids are prefixed `kk-…` so a hand-made file always wins a collision.
 const objectMods = import.meta.glob('./objects/*.ts', { eager: true }) as Record<
   string,
   { default?: WorldObject }
 >;
 const objects = new Map<string, WorldObject>();
+// the hand-made objects, and which of them are the FEATURED real-mesh meshObjects vs
+// the PROCEDURAL ones (door/table-spread/stair-room) — used to group the side list.
+const handmadeIds: string[] = [];
 for (const [path, mod] of Object.entries(objectMods)) {
   const id = path.replace('./objects/', '').replace('.ts', '');
-  if (mod.default) objects.set(id, mod.default);
+  if (mod.default) { objects.set(id, mod.default); handmadeIds.push(id); }
+}
+// the 3 PROCEDURAL hand-made objects (everything else hand-made is a featured real mesh).
+const PROCEDURAL_IDS = new Set(['door', 'table-spread', 'stair-room']);
+// MERGE the KayKit catalog (skip any id a hand-made file already claimed).
+for (const [id, obj] of Object.entries(kaykitObjects)) {
+  if (!objects.has(id)) objects.set(id, obj);
+}
+
+/** The grouped side-list sections: Featured + Procedural hand-made objects, then the
+ *  KayKit catalog categories (Structure · Furniture · Containers · Decor). Empty groups
+ *  are dropped by the picker. */
+function buildPickerGroups(): PickerGroup[] {
+  const featured = handmadeIds.filter((id) => !PROCEDURAL_IDS.has(id)).sort();
+  const procedural = handmadeIds.filter((id) => PROCEDURAL_IDS.has(id)).sort();
+  const groups: PickerGroup[] = [
+    { label: 'Featured', ids: featured },
+    { label: 'Procedural', ids: procedural },
+  ];
+  for (const cat of CATALOG_CATEGORY_ORDER) {
+    const ids = Object.keys(kaykitObjects)
+      .filter((id) => kaykitCategories[id] === cat)
+      .sort();
+    groups.push({ label: cat, ids });
+  }
+  return groups;
 }
 
 /** Build a WIREFRAME overlay of a footprint's collision boxes (toggle ?boxes=0). */
@@ -99,6 +137,34 @@ function disposeOverlay(g: THREE.Group): void {
   mat?.dispose();
 }
 
+/** Build the VOXEL-VISUALIZATION overlay (?voxels=1): a semi-transparent InstancedMesh of small
+ *  cubes at the centre of every SOLID voxel the voxelizer produced. This is the diagnostic for
+ *  "what does the fitter think is solid?" — a concavity over-fill (a leg-gap / under-top reading
+ *  solid) shows up as cubes floating in empty space. The cube is slightly smaller than the cell so
+ *  adjacent voxels stay visually distinct. Reads the SAME grid the fit used (voxelGridForViz). */
+function buildVoxelOverlay(root: THREE.Object3D, opts: Parameters<typeof voxelGridForViz>[1]): THREE.Object3D | null {
+  const { cell, centers, count } = voxelGridForViz(root, opts);
+  if (count === 0) return null;
+  const geo = new THREE.BoxGeometry(cell * 0.82, cell * 0.82, cell * 0.82);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff5aa0, transparent: true, opacity: 0.28, depthWrite: false });
+  const inst = new THREE.InstancedMesh(geo, mat, count);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < count; i++) {
+    m.makeTranslation(centers[i * 3]!, centers[i * 3 + 1]!, centers[i * 3 + 2]!);
+    inst.setMatrixAt(i, m);
+  }
+  inst.instanceMatrix.needsUpdate = true;
+  inst.renderOrder = 998; // under the green box wireframe (999), over the mesh
+  return inst;
+}
+
+/** Dispose a voxel InstancedMesh overlay's geometry + material. */
+function disposeVoxelOverlay(o: THREE.Object3D): void {
+  const inst = o as THREE.InstancedMesh;
+  inst.geometry?.dispose();
+  (inst.material as THREE.Material | undefined)?.dispose();
+}
+
 async function boot(): Promise<void> {
   // BUILD-TIME clock: from boot() through the FIRST render (GLB load + box-fit + render),
   // surfaced in the HUD timing readout alongside the per-fit box-fit time.
@@ -111,6 +177,14 @@ async function boot(): Promise<void> {
   const withActor = params.get('actor') === '1';
   const frozen = params.get('frozen') === '1';
   const showBoxes = params.get('boxes') !== '0'; // collision-box wireframe, default ON
+  const showVoxels = params.get('voxels') === '1'; // solid-voxel diagnostic cubes, default OFF
+  // GLOBAL THEME (?theme=<id>): a palette→material remap applied pack-wide (themes.ts).
+  // Compiled here once and passed into every mesh-object build (procedural objects ignore it).
+  const themeId = readThemeFromParams(params);
+  const theme = themeId ? compileTheme(themeId) : null;
+  const buildOpts: WorldObjectBuildOpts = theme
+    ? { themeRules: theme.rules, themeTolerance: theme.tolerance }
+    : {};
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -127,13 +201,14 @@ async function boot(): Promise<void> {
       const obj = objects.get(objId);
       if (!obj) throw new Error(`unknown object "${objId}" — known: ${objIds.join(', ')}`);
       const variant = params.get('variant') ?? obj.variants[0] ?? '';
-      const ob = await obj.build(variant, seed);
+      const ob = await obj.build(variant, seed, buildOpts);
       built = ob;
       footprint = ob.footprint;
+      const themeName = themeId ? (THEMES[themeId]?.name ?? themeId) : 'none';
       objHudPrefix =
-        `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed})</span><br>` +
+        `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed} · theme ${themeName})</span><br>` +
         `${obj.describe}<br>` +
-        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; (?boxes=0 off) · objects: ${objIds.join(' · ')}</span>`;
+        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; (?boxes=0 off) · ${objIds.length} objects in the side list →</span>`;
       hudHtml = objHudPrefix; // the fit-line + timing are appended after the first render
     } else {
       const id = params.get('element') ?? elIds[0] ?? '';
@@ -143,7 +218,7 @@ async function boot(): Promise<void> {
       hudHtml =
         `<b>${el.name}</b> <span style="opacity:.6">(${id}, seed ${seed})</span><br>` +
         `${el.describe}<br>` +
-        `<span style="opacity:.5">elements: ${elIds.join(' · ')} · objects: ${objIds.join(' · ')} — ?object=&lt;id&gt;&amp;variant=&lt;v&gt;</span>`;
+        `<span style="opacity:.5">elements: ${elIds.join(' · ')} · ${objIds.length} objects — ?object=&lt;id&gt;&amp;variant=&lt;v&gt;</span>`;
     }
   } catch (e) {
     W.__LAB_ERROR = String(e);
@@ -188,6 +263,14 @@ async function boot(): Promise<void> {
     if (showBoxes && fp && fp.boxes.length) { overlay = buildBoxOverlay(fp); scene.add(overlay); }
   };
   setOverlay(footprint);
+
+  // VOXEL-VIZ OVERLAY (?voxels=1): the solid-voxel diagnostic, rebuilt by the object-mode refit
+  // when the fit opts change (its grid depends on the same opts). Mutable so refits swap it.
+  let voxelOverlay: THREE.Object3D | null = null;
+  const setVoxelOverlay = (root: THREE.Object3D, opts: Parameters<typeof voxelGridForViz>[1]): void => {
+    if (voxelOverlay) { scene.remove(voxelOverlay); disposeVoxelOverlay(voxelOverlay); voxelOverlay = null; }
+    if (showVoxels) { const v = buildVoxelOverlay(root, opts); if (v) { voxelOverlay = v; scene.add(v); } }
+  };
 
   // demo actor: a capsule that orbits through the element (for reactivity shots)
   const actor = new THREE.Mesh(
@@ -268,7 +351,13 @@ async function boot(): Promise<void> {
       : `${n} collision box${n === 1 ? '' : 'es'}`;
     const buildMs = buildShownMs ?? performance.now() - buildStart;
     const timing = `<b style="color:#cfe3ff">fit ${lastFitMs.toFixed(0)}ms</b> · build ${buildMs.toFixed(0)}ms`;
-    return `${objHudPrefix}<br><span style="opacity:.85">${fitLine}</span><br><span style="opacity:.7">${timing}</span>`;
+    // STITCH readout: how many boundary holes were closed; flag the ground-seal FALLBACK if any
+    // loop couldn't be stitched (the mesh stayed leaky for that fit).
+    const si = lastStitchInfo;
+    const stitch = si.loops > 0
+      ? `stitch ${si.stitched}/${si.loops} hole${si.loops === 1 ? '' : 's'}${si.failed > 0 ? ` · <b style="color:#ffb060">FALLBACK (${si.failed} unclosed)</b>` : ''}`
+      : 'stitch watertight';
+    return `${objHudPrefix}<br><span style="opacity:.85">${fitLine}</span><br><span style="opacity:.7">${timing} · ${stitch}</span>`;
   };
 
   if (objId !== null && objHudPrefix !== null) {
@@ -277,12 +366,14 @@ async function boot(): Promise<void> {
     // Re-fit the displayed object with the current control state; update overlay + HUD + timing.
     const refit = (state = fitState): void => {
       const t0 = performance.now();
-      const { boxes, stats } = fitBoxesWithStats(root, fitStateToOpts(state, seed));
+      const opts = fitStateToOpts(state, seed);
+      const { boxes, stats } = fitBoxesWithStats(root, opts);
       lastFitMs = performance.now() - t0;
       lastFitStats = stats;
       footprint = { boxes: boxes.map(aabbToFootprintBox) };
       W.__labFootprint = footprint;
       setOverlay(footprint);
+      setVoxelOverlay(root, opts); // refresh the solid-voxel diagnostic (?voxels=1) for this fit
       if (hud) hud.innerHTML = composeObjHud();
       renderOnce();
     };
@@ -293,15 +384,18 @@ async function boot(): Promise<void> {
     buildFitControls({ container: document.body, initial: fitState, onChange: (s) => refit(s) });
   }
 
-  // ---- OBJECT PICKER (object mode only): clickable list of rendered thumbnails ----
+  // ---- OBJECT PICKER (object mode only): TEXT-ONLY grouped clickable list ----
+  // No thumbnails, no GLB loads here — a GLB loads only when a row is picked.
   if (objId !== null) {
-    void buildObjectPicker({
+    buildObjectPicker({
       container: document.body,
       objects,
-      objIds,
+      groups: buildPickerGroups(),
       currentId: objId,
       params,
     });
+    // ---- THEME PICKER (object mode only): a dropdown that reskins the whole pack ----
+    buildThemePicker({ container: document.body, currentId: themeId, params });
   }
 
   // snapshot hooks — __labSetAngle positions the camera directly (so headless tooling

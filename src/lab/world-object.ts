@@ -95,6 +95,19 @@ export interface WorldObjectBuild {
 
 export type WorldObjectLevel = 'object' | 'grouping' | 'room';
 
+/**
+ * Optional build inputs that apply ACROSS objects (vs. the per-object variant).
+ * Today: a global THEME (themes.ts) — a palette→material remap layered UNDER the
+ * object's own variant rules (variant wins per-swatch). Procedural objects ignore it
+ * (they don't use the KayKit atlas); only mesh-based objects honour it.
+ */
+export interface WorldObjectBuildOpts {
+  /** Compiled theme rules (themes.ts compileTheme().rules) to apply pack-wide. */
+  themeRules?: RetextureRule[];
+  /** The theme's colour-match tolerance (sRGB). Overrides the object's own when set. */
+  themeTolerance?: number;
+}
+
 export interface WorldObject {
   /** Display name. The object ID is its filename (objects/<id>.ts). */
   name: string;
@@ -108,8 +121,10 @@ export interface WorldObject {
    * Build a fresh instance for (variant, seed). Unknown variant → fall back to
    * variants[0]. ASYNC across the contract: a mesh-based object loads a GLB; a
    * procedural one returns immediately (Promise.resolve). The lab awaits it.
+   * `opts` carries cross-object inputs (e.g. a global theme); a procedural build may
+   * simply ignore it.
    */
-  build(variant: string, seed: number): Promise<WorldObjectBuild>;
+  build(variant: string, seed: number, opts?: WorldObjectBuildOpts): Promise<WorldObjectBuild>;
 }
 
 // ----------------------------------------------------------------------------
@@ -141,7 +156,7 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
     describe: spec.describe,
     level: spec.level,
     variants: variantNames,
-    async build(variant: string): Promise<WorldObjectBuild> {
+    async build(variant: string, _seed: number, opts?: WorldObjectBuildOpts): Promise<WorldObjectBuild> {
       const v = variant in spec.variants ? variant : (variantNames[0] ?? '');
       const template = await loadTemplate(spec.meshUrl);
       // own copy per build (skeleton-safe even if the GLB has none)
@@ -156,13 +171,23 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
         else if (m.material) m.material = (m.material as THREE.Material).clone();
       });
 
-      // apply the variant's colour-keyed re-skin (no-op for an empty rule list)
-      const rules = spec.variants[v] ?? [];
+      // MERGE the global THEME (if any) UNDER this object's variant rules: the theme
+      // remaps swatch families pack-wide; the variant's own rules override the SAME
+      // swatch (keyed by `from`) for this object's special parts (e.g. the chest's
+      // gold straps still win over the theme's metal). One retexture pass for both.
+      const variantRules = spec.variants[v] ?? [];
+      const themeRules = opts?.themeRules ?? [];
+      const byFrom = new Map<number, RetextureRule>();
+      for (const r of themeRules) byFrom.set(r.from, r);
+      for (const r of variantRules) byFrom.set(r.from, r); // variant wins on exact-colour ties
+      const rules = [...byFrom.values()];
       if (rules.length) {
         if (!_materials && rules.some((r) => r.to.pbr)) { _materials = new DungeonMaterials(); await _materials.load(); }
         const rtxOpts: { materials?: DungeonMaterials; tolerance?: number } = {};
         if (_materials) rtxOpts.materials = _materials;
-        if (spec.retextureTolerance !== undefined) rtxOpts.tolerance = spec.retextureTolerance;
+        // theme tolerance wins when a theme is active; else the object's own.
+        const tol = themeRules.length ? opts?.themeTolerance : spec.retextureTolerance;
+        if (tol !== undefined) rtxOpts.tolerance = tol;
         await retexture(model, rules, rtxOpts);
       }
 

@@ -13,6 +13,7 @@
     "typecheck": "tsc -b --noEmit",
     "lab": "vite --open /ascent/lab.html",
     "lab:snap": "node scripts/lab-snap.mjs",
+    "probe:palette": "node scripts/palette-probe.mjs",
     "prove:fixed": "node --experimental-strip-types src/sim/fixed/prove.ts",
     "prove:floor": "node --experimental-strip-types src/floor/prove.ts",
     "prove:world": "node --experimental-strip-types src/sim/world/prove.ts",

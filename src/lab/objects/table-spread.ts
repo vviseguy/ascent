@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../element.ts';
+import { fitBoxesWithStats, aabbToFootprintBox } from '../box-fit.ts';
 import type { WorldObject, WorldObjectBuild } from '../world-object.ts';
 
 const VARIANTS = ['feast', 'plain'] as const;
@@ -57,7 +58,14 @@ const tableSpread: WorldObject = {
       flame.position.set(0.72, T_H + TOP_T / 2 + 0.29, -0.24); root.add(flame);
     }
 
-    return Promise.resolve({ root, radius: 1.9, footprint: { boxes: [{ cx: 0, cy: T_H / 2, cz: 0, hx: T_W / 2, hy: T_H / 2, hz: T_D / 2 }] } });
+    // FIT the footprint from the built geometry (box-fit), exactly like the mesh objects, so a
+    // grouping gets TIGHT boxes — individual legs, the top, the cloth drape — instead of a single
+    // crude box that would otherwise wrap the empty space under the top and between the legs. The
+    // lab also re-fits live, but fitting HERE keeps the authored footprint correct everywhere the
+    // build() output is used (not just under the lab's override). Deterministic (no Math.random).
+    root.updateMatrixWorld(true);
+    const { boxes, stats } = fitBoxesWithStats(root, {});
+    return Promise.resolve({ root, radius: 1.9, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats });
   },
 };
 

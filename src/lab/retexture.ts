@@ -74,12 +74,17 @@ class AtlasSampler {
     ctx.drawImage(image as CanvasImageSource, 0, 0);
     this.data = ctx.getImageData(0, 0, this.w, this.h).data;
   }
-  /** Sample sRGB [r,g,b] (0..255) at a UV (wraps; v flipped to match GL convention). */
+  /** Sample sRGB [r,g,b] (0..255) at a UV (wraps; canvas row 0 = atlas top).
+   *  NO v-flip: glTF textures load with flipY=false, so UV v=0 is the TOP of the image
+   *  — the same row a 2D-canvas getImageData() returns first. (Flipping here silently
+   *  mis-read every triangle — e.g. brown planks sampled as the pink swatch — and only
+   *  "worked" on greys because grey appears at many atlas rows. Verified by sampling real
+   *  GLB triangle UVs: no-flip makes coins→gold, chest planks→wood, sword→metal.) */
   sample(u: number, v: number): [number, number, number] {
     const fx = ((u % 1) + 1) % 1;
     const fy = ((v % 1) + 1) % 1;
     const x = Math.min(this.w - 1, Math.floor(fx * this.w));
-    const y = Math.min(this.h - 1, Math.floor((1 - fy) * this.h)); // GL: v=0 is bottom
+    const y = Math.min(this.h - 1, Math.floor(fy * this.h));
     const i = (y * this.w + x) * 4;
     return [this.data[i]!, this.data[i + 1]!, this.data[i + 2]!];
   }
