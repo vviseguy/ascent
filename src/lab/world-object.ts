@@ -24,7 +24,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { fitBoxes, aabbToFootprintBox } from './box-fit.ts';
+import { fitBoxesWithStats, aabbToFootprintBox, type FitStats } from './box-fit.ts';
 import { retexture, type RetextureRule } from './retexture.ts';
 import { DungeonMaterials } from '../render/materials.ts';
 
@@ -55,8 +55,17 @@ export interface MeshObjectSpec {
   level: WorldObjectLevel;
   /** Per-variant colour-keyed re-skin rules. First key is the default variant. */
   variants: Record<string, RetextureRule[]>;
-  /** Optional box-fit knobs (cell/maxBoxes/minBox). */
-  fit?: { cell?: number; maxBoxes?: number; minBox?: number };
+  /** Optional box-fit knobs. `edgeDensity` is the primary tunable (boundary-slab
+   *  density brake on box growth); see box-fit.ts FitBoxesOpts for the rest. */
+  fit?: {
+    cell?: number;
+    edgeDensity?: number;
+    minFill?: number;
+    coverageTarget?: number;
+    maxBoxes?: number;
+    minBox?: number;
+    dilate?: number;
+  };
   /** Uniform scale applied to the loaded mesh (KayKit native units → game metres). */
   scale?: number;
   /** Colour-match tolerance for retexture (sRGB distance). Tighten when two swatches
@@ -71,6 +80,8 @@ export interface WorldObjectBuild {
   radius?: number;
   /** Collision shape (object-local). Drives the collider when wired to the sim. */
   footprint?: Footprint;
+  /** Box-fit diagnostics (coverage / fill% / box count) for the lab HUD. */
+  fitStats?: FitStats;
   /** Optional per-frame animation/reactivity (actors = nearby world-space player positions). */
   update?: (timeSec: number, actors: readonly THREE.Vector3[]) => void;
 }
@@ -160,13 +171,13 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       root.updateMatrixWorld(true);
 
       // fit collision boxes from the FINAL placed mesh (object-local)
-      const boxes = fitBoxes(root, spec.fit ?? {});
+      const { boxes, stats } = fitBoxesWithStats(root, spec.fit ?? {});
       // frame the camera from the bounding HALF-DIAGONAL (incl. height) so tall props
       // (a barrel) and long ones (a table) are fully in frame — the lab multiplies
       // this radius for the orbit distance.
       const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y, d = bb.max.z - bb.min.z;
       const radius = 0.5 * Math.hypot(w, h, d) || 1.5;
-      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) } };
+      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats };
     },
   };
 }

@@ -1,19 +1,37 @@
 // ============================================================================
-// src/lab/box-fit.ts — COLLISION-BOX GENERATOR (solid voxelize → greedy cover).
+// src/lab/box-fit.ts — COLLISION-BOX GENERATOR (solid voxelize → loose-box cover).
 // ============================================================================
 //
 // Turns an arbitrary mesh (a KayKit GLB, a procedural prop) into a SMALL set of
 // object-local AABBs that HUG its solid volume — the `footprint` a WorldObject
 // hands the collider. We never hand-author boxes for real assets: a table comes
-// out as a top slab + legs, a barrel as ~1-2 chunky boxes, a chest as a body block.
+// out as a top slab + legs, a barrel as ~1-2 chunky boxes, a chest as a body block,
+// a bed as a frame slab + mattress + posts, a wall as one box.
 //
-// WHY SOLID VOXELIZE + GREEDY COVER:
+// WHY SOLID VOXELIZE + LOOSE-BOX COVER:
 //  - A collider wants the SOLID OBSTACLE, not a hollow shell: you can't walk through
 //    a barrel even though its model is an open-topped tube. So we fill the SOLID
 //    ENVELOPE (the span between the outermost surface crossings) per scan-row, not
 //    the thin wall shells a naive parity fill leaves — that's what made the old boxes
-//    explode into a loose cage. The greedy MAXIMAL-box cover then merges the filled
-//    voxels into a handful of tight boxes (the table's whole top becomes ONE box).
+//    explode into a loose cage.
+//  - We then cover the filled voxels with a handful of boxes. The OLD cover required
+//    every box to be 100% solid, which SHATTERS into slivers at a fine cell (a bed's
+//    slatted frame, a chest's curved lid). The NEW cover is an EDGE-DENSITY grow: a box
+//    grows a face only while the one-voxel-thick BOUNDARY SLAB it adds is dense enough
+//    (≥ `edgeDensity` solid). A loose box that pokes a little past the mesh is SAFE for
+//    collision (it errs slightly bigger), and it lets ONE box span a slatted frame or a
+//    rounded lid instead of a dozen slivers.
+//
+// THE OBJECTIVE (don't get this backwards): we maximize box SIZE, braked by the EDGE.
+// We do NOT gate on the whole box's average fill — a dense bulk would dilute a sparse
+// slab and let the box over-grow into empty space. Instead each face-grow is judged on
+// the DENSITY OF THE SLAB BEING ADDED: accept iff that boundary slab is ≥ edgeDensity
+// solid. Growth therefore stops exactly at the solid boundary in EACH direction, yet
+// ignores INTERIOR voids (a grooved top face is still dense → the box grows over the
+// groove). Bigger where the solid extends, tight at the real edges. A 1-voxel box is
+// trivially "100% filled" so a fill objective degenerates to slivers — edge density
+// does not. (`minFill` survives only as an optional global safety cap; `minFill: 1.0`
+// still reproduces the old strict every-box-100%-solid cover.)
 //
 // ROBUST INSIDE-TEST (handles non-watertight KayKit parts): we scan along ALL THREE
 // axes and a voxel is SOLID where the X-, Y- and Z-envelopes carry a MAJORITY vote
@@ -26,7 +44,8 @@
 //
 // DETERMINISM: this runs OFFLINE / at lab-load (FLOATS ARE FINE here — docs say so).
 // Only the RESULTING boxes would later become fixed-point sim constants (boxesToConsts).
-// The scan order is fixed (axis 0→2, then z→y→x cover), so same mesh → same boxes.
+// The scan order is fixed (axis 0→2 voxelize, then z→y→x seed, then a fixed
+// face-grow order X-,X+,Y-,Y+,Z-,Z+), so same mesh → same boxes. NO Math.random.
 // ============================================================================
 
 import * as THREE from 'three';
@@ -38,8 +57,26 @@ export interface AABB {
 }
 
 export interface FitBoxesOpts {
-  /** Voxel edge length (object-local metres). Smaller = tighter fit, more cost. */
+  /** Voxel edge length (object-local metres). Smaller = tighter fit, more cost.
+   *  Default 0.08 — finer than the old 0.12 now that the loose cover won't shatter. */
   cell?: number;
+  /** PRIMARY GROWTH KNOB — minimum solid density of the BOUNDARY SLAB a face-grow adds
+   *  (solid voxels / slab voxels, 0..1). A face grows by one voxel-thick slab only while
+   *  that slab is ≥ edgeDensity solid; it stops the instant the next slab is sparser.
+   *  This brakes growth at the real solid boundary in EACH direction while ignoring
+   *  interior voids (a grooved tabletop still has a dense top face → the box grows over
+   *  the groove). Default 0.5. Raise toward 1.0 to hug tighter (more, smaller boxes);
+   *  lower to swallow more empty space in fewer boxes. */
+  edgeDensity?: number;
+  /** Optional GLOBAL fill safety cap (0..1): refuse any face-grow that would drop the
+   *  whole box's solid-fill below this. edgeDensity is the real brake; this is just a
+   *  backstop against a box accreting many borderline slabs. 1.0 = also require every
+   *  box 100% solid (reproduces the old strict cover, regardless of edgeDensity).
+   *  Default 0 (off — edge-density alone governs growth). */
+  minFill?: number;
+  /** Stop emitting boxes once this fraction of all solid voxels is covered (0..1).
+   *  The remaining sliver voxels are left to the collider's slop. Default 0.93. */
+  coverageTarget?: number;
   /** Hard cap on emitted boxes; if exceeded the cell coarsens (×1.4) and we retry. */
   maxBoxes?: number;
   /** Drop any emitted box whose LONGEST edge is below this (so a knob/handle is
@@ -51,7 +88,30 @@ export interface FitBoxesOpts {
   dilate?: number;
 }
 
-const DEFAULTS = { cell: 0.12, maxBoxes: 12, minBox: 0.1, dilate: 0 } as const;
+const DEFAULTS = {
+  cell: 0.08,
+  edgeDensity: 0.5,
+  minFill: 0,
+  coverageTarget: 0.93,
+  maxBoxes: 12,
+  minBox: 0.1,
+  dilate: 0,
+} as const;
+
+/** Per-fit diagnostics surfaced to the lab HUD (how well the boxes hug). */
+export interface FitStats {
+  /** Voxel edge actually used (after any coarsening retries). */
+  cell: number;
+  /** # solid voxels found by the voxelizer. */
+  solidVoxels: number;
+  /** Fraction of solid voxels the emitted boxes cover (0..1). */
+  coverage: number;
+  /** Overall solid-fill of the union of emitted boxes: solidCovered / totalBoxVoxels
+   *  (1 = boxes contain only solid; lower = boxes swallowed empty space). */
+  fill: number;
+  /** # boxes emitted (post sliver-drop). */
+  boxCount: number;
+}
 
 /** A flat triangle soup baked into ONE object-local space (positions only). */
 interface TriSoup {
@@ -68,26 +128,42 @@ interface TriSoup {
  * `footprint` about its own origin at y=0).
  */
 export function fitBoxes(object: THREE.Object3D, opts: FitBoxesOpts = {}): AABB[] {
+  return fitBoxesWithStats(object, opts).boxes;
+}
+
+/**
+ * Same as `fitBoxes` but also returns the {@link FitStats} for HUD/tooling — the
+ * coverage + fill% + box count so a reviewer can see how tightly the boxes hug.
+ */
+export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {}): { boxes: AABB[]; stats: FitStats } {
+  const edgeDensity = opts.edgeDensity ?? DEFAULTS.edgeDensity;
+  const minFill = opts.minFill ?? DEFAULTS.minFill;
+  const coverageTarget = opts.coverageTarget ?? DEFAULTS.coverageTarget;
   const maxBoxes = opts.maxBoxes ?? DEFAULTS.maxBoxes;
   const minBox = opts.minBox ?? DEFAULTS.minBox;
   const dilate = opts.dilate ?? DEFAULTS.dilate;
 
   const soup = bakeSoup(object);
-  if (soup.count === 0) return [];
+  if (soup.count === 0) {
+    return { boxes: [], stats: { cell: opts.cell ?? DEFAULTS.cell, solidVoxels: 0, coverage: 0, fill: 0, boxCount: 0 } };
+  }
 
   // Start at the requested cell; coarsen (×1.4) until the box count fits the cap.
   let cell = opts.cell ?? DEFAULTS.cell;
   for (let attempt = 0; attempt < 9; attempt++) {
     const grid = voxelize(soup, cell, dilate);
     if (grid && grid.solidCount > 0) {
-      const boxes = greedyCover(grid, minBox);
-      if (boxes.length > 0 && boxes.length <= maxBoxes) return boxes;
+      const res = looseCover(grid, { edgeDensity, minFill, coverageTarget, maxBoxes, minBox });
+      if (res.boxes.length > 0 && res.boxes.length <= maxBoxes) {
+        return { boxes: res.boxes, stats: { cell, solidVoxels: grid.solidCount, ...res.stats } };
+      }
     }
     cell *= 1.4;
   }
   // Last resort: a single tight bounding box (always valid, never explodes the count).
   const b = soup.box;
-  return [{ min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] }];
+  const boxes: AABB[] = [{ min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] }];
+  return { boxes, stats: { cell, solidVoxels: 0, coverage: 1, fill: 1, boxCount: 1 } };
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +202,8 @@ function bakeSoup(object: THREE.Object3D): TriSoup {
 }
 
 // ---------------------------------------------------------------------------
-// 2. SOLID voxelize: a voxel is solid where the X-, Y- and Z-axis solid envelopes
-//    all AGREE (intersection). Tight to the surface, robust to non-watertight parts.
+// 2. SOLID voxelize: a voxel is solid where a MAJORITY of the X-, Y-, Z-axis solid
+//    envelopes agree (≥2 of 3 votes). Tight to the surface, robust to leaky parts.
 // ---------------------------------------------------------------------------
 interface Grid {
   nx: number; ny: number; nz: number;
@@ -250,53 +326,127 @@ function dilateOnce(g: Grid): void {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Greedy maximal-box cover over the solid grid.
-//    Scan z→y→x to the first uncovered solid voxel; grow +X while the row stays
-//    solid+uncovered, then +Y over that whole X-span, then +Z over that whole
-//    slab; emit the box, mark covered, repeat. Fixed scan order = deterministic.
+// 3. LOOSE-BOX cover over the solid grid (the edge-density grow).
+//    Seed z→y→x at the first uncovered solid voxel; grow each of the 6 faces
+//    OUTWARD greedily while the boundary SLAB the grow adds is ≥ edgeDensity solid
+//    (an optional global minFill cap also applies); emit the maximal loose box; mark
+//    its solid voxels covered; repeat until coverage ≥ coverageTarget or maxBoxes.
+//    Fixed seed + round-robin face order = deterministic.
 // ---------------------------------------------------------------------------
-function greedyCover(g: Grid, minBox: number): AABB[] {
-  const { nx, ny, nz, solid } = g;
-  const covered = new Uint8Array(solid.length);
+interface CoverOpts { edgeDensity: number; minFill: number; coverageTarget: number; maxBoxes: number; minBox: number; }
+
+function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStats, 'cell' | 'solidVoxels'> } {
+  const { nx, ny, nz, solid, solidCount } = g;
+  const covered = new Uint8Array(solid.length); // solid voxels already claimed by a box
   const idx = (x: number, y: number, z: number) => z * ny * nx + y * nx + x;
-  const isFree = (x: number, y: number, z: number) => solid[idx(x, y, z)] === 1 && covered[idx(x, y, z)] === 0;
+  const maxXm = g.ox + nx * g.cell, maxYm = g.oy + ny * g.cell, maxZm = g.oz + nz * g.cell;
+
   const boxes: AABB[] = [];
-  const maxX = g.ox + nx * g.cell, maxY = g.oy + ny * g.cell, maxZ = g.oz + nz * g.cell;
+  let coveredSolid = 0;
+  // accumulators for the union fill stat (sum over emitted boxes)
+  let unionSolid = 0, unionVoxels = 0;
 
-  for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
-    if (!isFree(x, y, z)) continue;
-
-    // grow +X
-    let ex = x;
-    while (ex + 1 < nx && isFree(ex + 1, y, z)) ex++;
-    // grow +Y while the whole [x..ex] row stays free
-    let ey = y;
-    grow_y: while (ey + 1 < ny) {
-      for (let xx = x; xx <= ex; xx++) if (!isFree(xx, ey + 1, z)) break grow_y;
-      ey++;
+  // # solid voxels inside box [x0..x1]×[y0..y1]×[z0..z1] (inclusive).
+  const solidIn = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number => {
+    let s = 0;
+    for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) {
+      const row = z * ny * nx + y * nx;
+      for (let x = x0; x <= x1; x++) if (solid[row + x]) s++;
     }
-    // grow +Z while the whole [x..ex]×[y..ey] slab stays free
-    let ez = z;
-    grow_z: while (ez + 1 < nz) {
-      for (let yy = y; yy <= ey; yy++) for (let xx = x; xx <= ex; xx++) {
-        if (!isFree(xx, yy, ez + 1)) break grow_z;
+    return s;
+  };
+  // # solid voxels on ONE candidate face slab (the layer we'd add by growing a face).
+  const slabSolid = (ax: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, at: number): number => {
+    // ax: 0=x face,1=y,2=z. `at` is the new index on that axis; the slab is the
+    // full cross-section at that index over the box's other two spans.
+    let s = 0;
+    if (ax === 0) { for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) if (solid[idx(at, y, z)]) s++; }
+    else if (ax === 1) { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (solid[idx(x, at, z)]) s++; }
+    else { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (solid[idx(x, y, at)]) s++; }
+    return s;
+  };
+
+  for (let sz = 0; sz < nz && coveredSolid < solidCount * o.coverageTarget; sz++) {
+    for (let sy = 0; sy < ny; sy++) {
+      for (let sx = 0; sx < nx; sx++) {
+        if (!solid[idx(sx, sy, sz)] || covered[idx(sx, sy, sz)]) continue;
+        if (boxes.length >= o.maxBoxes) break;
+
+        // grow a LOOSE box outward from the seed voxel.
+        let x0 = sx, x1 = sx, y0 = sy, y1 = sy, z0 = sz, z1 = sz;
+        let boxVox = 1, boxSolid = 1; // seed is solid
+
+        // attempt one face-grow; returns true if it grew. ax: axis, dir: -1|+1.
+        // GATE = the density of the BOUNDARY SLAB being added (Jacob's refinement):
+        // accept iff slabSolid/slabCount ≥ edgeDensity. The slab — not the whole box —
+        // is the brake, so a dense bulk can't dilute a sparse edge into acceptance, and
+        // the box stops exactly at the solid boundary in this direction. An optional
+        // global minFill (default off) is a backstop against many borderline slabs.
+        const tryGrow = (ax: number, dir: number): boolean => {
+          let at: number, slabCount: number;
+          if (ax === 0) { at = dir < 0 ? x0 - 1 : x1 + 1; if (at < 0 || at >= nx) return false; slabCount = (y1 - y0 + 1) * (z1 - z0 + 1); }
+          else if (ax === 1) { at = dir < 0 ? y0 - 1 : y1 + 1; if (at < 0 || at >= ny) return false; slabCount = (x1 - x0 + 1) * (z1 - z0 + 1); }
+          else { at = dir < 0 ? z0 - 1 : z1 + 1; if (at < 0 || at >= nz) return false; slabCount = (x1 - x0 + 1) * (y1 - y0 + 1); }
+          const slabSol = slabSolid(ax, x0, y0, z0, x1, y1, z1, at);
+          if (slabSol === 0) return false;                      // never grow into pure void
+          if (slabSol < slabCount * o.edgeDensity) return false; // PRIMARY brake: edge slab density
+          const newVox = boxVox + slabCount;
+          const newSolid = boxSolid + slabSol;
+          if (o.minFill > 0 && newSolid < newVox * o.minFill) return false; // optional global cap
+          // commit the grow
+          if (ax === 0) { if (dir < 0) x0 = at; else x1 = at; }
+          else if (ax === 1) { if (dir < 0) y0 = at; else y1 = at; }
+          else { if (dir < 0) z0 = at; else z1 = at; }
+          boxVox = newVox; boxSolid = newSolid;
+          return true;
+        };
+
+        // round-robin the 6 faces in a fixed order until no face can grow. This keeps
+        // the box near-cubic as it expands rather than racing one axis to the wall,
+        // which yields larger maximal boxes under the fill floor.
+        let grew = true;
+        while (grew) {
+          grew = false;
+          if (tryGrow(0, -1)) grew = true;
+          if (tryGrow(0, +1)) grew = true;
+          if (tryGrow(1, -1)) grew = true;
+          if (tryGrow(1, +1)) grew = true;
+          if (tryGrow(2, -1)) grew = true;
+          if (tryGrow(2, +1)) grew = true;
+        }
+
+        // mark the box's SOLID voxels covered (empty ones it swallowed don't count
+        // toward coverage — they were never solid to begin with).
+        const before = coveredSolid;
+        for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+          const i = idx(x, y, z);
+          if (solid[i] && !covered[i]) { covered[i] = 1; coveredSolid++; }
+        }
+        const gained = coveredSolid - before;
+        // a box that claims no NEW solid voxels (fully overlapped a prior box) is useless.
+        if (gained === 0) { covered[idx(sx, sy, sz)] = 1; continue; }
+
+        // emit as object-local AABB, clamped to the true mesh bound so the outward
+        // rounding / loose padding never sticks out past the model.
+        const aabb: AABB = {
+          min: [g.ox + x0 * g.cell, g.oy + y0 * g.cell, g.oz + z0 * g.cell],
+          max: [Math.min(maxXm, g.ox + (x1 + 1) * g.cell), Math.min(maxYm, g.oy + (y1 + 1) * g.cell), Math.min(maxZm, g.oz + (z1 + 1) * g.cell)],
+        };
+        const dx = aabb.max[0] - aabb.min[0], dy = aabb.max[1] - aabb.min[1], dz = aabb.max[2] - aabb.min[2];
+        if (Math.max(dx, dy, dz) >= o.minBox) {
+          boxes.push(aabb);
+          unionSolid += solidIn(x0, y0, z0, x1, y1, z1);
+          unionVoxels += boxVox;
+        }
       }
-      ez++;
+      if (boxes.length >= o.maxBoxes) break;
     }
-    // mark covered
-    for (let zz = z; zz <= ez; zz++) for (let yy = y; yy <= ey; yy++) for (let xx = x; xx <= ex; xx++) {
-      covered[idx(xx, yy, zz)] = 1;
-    }
-    // emit as object-local AABB (voxel min corner → voxel max corner), clamped to
-    // the true mesh bound so the outward rounding never sticks out past the model.
-    const aabb: AABB = {
-      min: [g.ox + x * g.cell, g.oy + y * g.cell, g.oz + z * g.cell],
-      max: [Math.min(maxX, g.ox + (ex + 1) * g.cell), Math.min(maxY, g.oy + (ey + 1) * g.cell), Math.min(maxZ, g.oz + (ez + 1) * g.cell)],
-    };
-    const dx = aabb.max[0] - aabb.min[0], dy = aabb.max[1] - aabb.min[1], dz = aabb.max[2] - aabb.min[2];
-    if (Math.max(dx, dy, dz) >= minBox) boxes.push(aabb); // drop tiny boxes (knobs)
+    if (boxes.length >= o.maxBoxes) break;
   }
-  return boxes;
+
+  const coverage = solidCount > 0 ? coveredSolid / solidCount : 1;
+  const fill = unionVoxels > 0 ? unionSolid / unionVoxels : 1;
+  return { boxes, stats: { coverage, fill, boxCount: boxes.length } };
 }
 
 // ---------------------------------------------------------------------------

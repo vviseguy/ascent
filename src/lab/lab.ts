@@ -97,10 +97,16 @@ async function boot(): Promise<void> {
       built = ob;
       footprint = ob.footprint;
       const nBoxes = footprint?.boxes.length ?? 0;
+      // box-fit diagnostics (how tightly the boxes hug): coverage of solid voxels +
+      // the union's solid-fill% + cell size, so the edge-density knob is tunable by eye.
+      const fs = ob.fitStats;
+      const fitLine = fs
+        ? ` · <b>${nBoxes} box${nBoxes === 1 ? '' : 'es'}</b> · fill ${(fs.fill * 100).toFixed(0)}% · coverage ${(fs.coverage * 100).toFixed(0)}% · cell ${fs.cell.toFixed(3)}m`
+        : ` · ${nBoxes} collision box${nBoxes === 1 ? '' : 'es'}`;
       hudHtml =
         `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed})</span><br>` +
         `${obj.describe}<br>` +
-        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; · ${nBoxes} collision box${nBoxes === 1 ? '' : 'es'} (?boxes=0 off) · objects: ${objIds.join(' · ')}</span>`;
+        `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt;${fitLine} (?boxes=0 off) · objects: ${objIds.join(' · ')}</span>`;
     } else {
       const id = params.get('element') ?? elIds[0] ?? '';
       const el = elements.get(id);
@@ -159,15 +165,22 @@ async function boot(): Promise<void> {
   scene.add(actor);
 
   // ---- camera: gentle three-quarter orbit framed from the element's radius ----
+  // Frame from the BUILT object's real bounds (not just the authored radius): look at
+  // its vertical CENTRE and pull back enough to fit its full height — so a tall prop
+  // (a bookshelf, a wall) sits centred in frame instead of riding off the top edge.
   const cam = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 100);
-  const R = (built.radius ?? 2) * 2.6;
+  const objBox = new THREE.Box3().setFromObject(built.root);
+  const objCenterY = Number.isFinite(objBox.min.y) ? (objBox.min.y + objBox.max.y) / 2 : 0.5;
+  const objHeight = Number.isFinite(objBox.min.y) ? objBox.max.y - objBox.min.y : 1;
+  // orbit distance: the larger of the authored-radius frame and what the height needs.
+  const R = Math.max((built.radius ?? 2) * 2.6, objHeight * 1.6);
   let angleDeg = 30;
   let timeSec = 2.0;
 
   const place = (): void => {
     const a = (angleDeg * Math.PI) / 180;
-    cam.position.set(Math.cos(a) * R, R * 0.62, Math.sin(a) * R);
-    cam.lookAt(0, Math.min(0.8, (built.radius ?? 2) * 0.3), 0);
+    cam.position.set(Math.cos(a) * R, objCenterY + R * 0.42, Math.sin(a) * R);
+    cam.lookAt(0, objCenterY, 0);
   };
 
   const tickActor = (): void => {
