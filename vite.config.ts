@@ -16,6 +16,7 @@ export default defineConfig({
         main: r('./index.html'),
         lab: r('./lab.html'),
         walltile: r('./walltile.html'),
+        board: r('./board.html'),
       },
     },
   },
