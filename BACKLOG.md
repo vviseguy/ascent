@@ -5,6 +5,12 @@ format). I triage Inbox into the priority sections, work top-down through **Now*
 and move finished items to **Done** with the commit hash. Sources: your playtest notes,
 `docs/GAPS.md` (the intent audit), `docs/PARKING-LOT.md`.
 
+> **This is the single live queue.** The longer-range build sequencing (phases **P0–P5** + the
+> netcode "Two-Browser Grab Proof" keystone) lives in [`docs/archive/ROADMAP.md`](docs/archive/ROADMAP.md);
+> the last full status audit (2026-06-25, pre worldgen-overhaul-commit) is in
+> [`docs/archive/STATUS-2026-06-25.md`](docs/archive/STATUS-2026-06-25.md). Re-triage any still-open
+> items from those into **Inbox** rather than tracking them in two places.
+
 ## Inbox (drop new ideas here)
 
 _(empty — add lines below this header anytime)_

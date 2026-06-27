@@ -8,3 +8,4 @@ coverage/
 *.tsbuildinfo
 lab-shots/
 dist-lab-*/
+tmp/

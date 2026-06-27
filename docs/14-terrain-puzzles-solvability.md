@@ -59,12 +59,17 @@ space. Recommendation: **design + build it separately** after terrain+puzzles, b
 in the *systems it touches* (physics in a tall void, camera framing, fog), not the generation.
 Captured here so it isn't lost.
 
-## 6. Eventual — the 9-cell square (= docs/13 Layer C, your "9 cells per square")
-Each square becomes **3×3 sub-cells**: **1 big center** (floor) + **4 edge** sub-cells (candidate
-walls / doorways) + **4 corner** sub-cells (quarter-columns) — exactly the explicit wall/edge grid
-in docs/13 §C, and the single source for **render tiles + collision** (docs/13 §C-bis). Doors live
-in the edge sub-cells; the puzzle locks above attach to those door slots. Built as the structural
-refactor **after** this terrain/puzzle work proves out.
+## 6. ✅ Done — the wall pipeline (was "the 9-cell square") = docs/13 Layer C
+The "9 cells per square" shipped — but **generalised** into a full layered pipeline:
+`Blueprint → Style → Placement[] → {render, collision}` (`src/floor/{blueprint,wall-style,
+wall-model}.ts`, projected by `src/game/tower.ts`). The board is a uniform grid of **2u KayKit
+modules** at **native scale** (one floor tile = 4u = 2 modules, so corners tile with no fudge);
+**walls own squares** (data layer), realized as the native wall-piece family (straight / corner /
+tee / cross / cap / pillar / doorway). Render and collision consume one `WorldPlacement[]` IR, so
+they match by construction; collision merges collinear modules into minimal run-boxes. Doors are
+`DOORWAY` placements (carry `doorId`); break-gates become a LOW passable `profile`. New wall types
+(partial / arched / windowed / walled-stairs) are **registry/profile rows**, and finer `k`
+sub-module detail drops in without touching the pipeline.
 
 ---
 

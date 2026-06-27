@@ -1,10 +1,14 @@
-# 13 — Dungeon Generation Architecture (layered model — PROPOSAL)
+# 13 — Dungeon Generation Architecture (layered model)
 
-> Status: design PROPOSAL for review. This is the answer to "should walls/scaping be a grid
-> with alternating wall/open lines, plus higher abstractions like a room being a *library*,
-> maybe a tree?" Short answer: **yes to all three — as four distinct layers**, each a clean
-> deterministic data structure the next layer (and the renderer) consume. It *subsumes* the
-> three ideas and is an evolution of the current generator, not a rewrite.
+> Status: **the wall pipeline is IMPLEMENTED end-to-end** as a layered chain:
+> `Blueprint (src/floor/blueprint.ts) → Style (src/floor/wall-style.ts) → Placement[]
+> (src/floor/wall-model.ts) → {render, collision}`. `src/game/tower.ts` projects the Style's
+> abstract `Placement[]` to one **unified IR** (`WorldPlacement[]`) at **native KayKit 4u scale**;
+> BOTH `src/render/dungeon.ts` (KayKit meshes) and the sim collision consume that same IR, so they
+> match by construction. `src/floor/wallgrid.ts` remains the slot/junction classifier the blueprint
+> derives from. Layers A/B/D remain the planned evolution below. Short answer to "should walls be a
+> grid with alternating wall/open lines, plus higher abstractions like a *library* room, maybe a
+> tree?" — **yes to all three — as distinct layers**, each a clean deterministic data structure.
 
 ---
 
@@ -24,6 +28,55 @@ becomes a cheap *projection* of these (back-compat).
 **Why this is the right cut:** each of your three asks lives in its own layer, so they stop
 fighting each other — walls/doors/corners become *first-class entities* (Layer C), themes are
 decided abstractly and realized late (A→D), and solvability/choice is a graph property (A).
+
+---
+
+## What's REALIZED today (the canonical pipeline) vs. tracked debt
+
+> Read this before changing the generator. The four-layer model above is the *design frame*; the
+> code today realizes the **middle** of it cleanly and leaves the top a stub. Don't "fix" the debt
+> items below by accident — they're known and intentional.
+
+**The realized chain (this is the source of truth, not the A/B/C/D sketch):**
+
+```
+Floor graph        src/floor/generate.ts        → Floor (cells, edges, rooms, puzzles)
+  → Blueprint      src/floor/blueprint.ts       → square lattice (CELL/LANE/CORNER, FLOOR/WALL/WALL_POSSIBLE/OPEN)
+  → Style          src/floor/wall-style.ts      → Placement[]  (DefaultStyle auto-tiles squares → pieces)
+  → IR             src/game/tower.ts:buildCellGrid → WorldPlacement[]  (ONE IR, native KayKit 4u)
+  → render         src/render/dungeon.ts        → KayKit meshes      ┐ both off the SAME IR,
+  → collision      src/game/tower.ts:emitWallsFromSlots → AABB solids ┘ so they match by construction
+```
+
+- **Native 4u / 2u modules / "walls own squares".** A KayKit floor tile is **4u**; half a cell = **2u**
+  = exactly one wall module, so corners tile with no fudge. Each lattice square *owns* a wall/junction.
+  Collision decomposes every placement into **1u half-segments and merges collinear runs** into minimal
+  AABBs (`emitWallsFromSlots`). `CELL_SIZE = 4.0` in `tower.ts`.
+- **`profile` (FULL / LOW / GAP) is the 3D axis** — a seam for arched/windowed/low-gate walls. Today only
+  *collision height* varies on it (LOW = a passable lip for BREAK/BUTTON/WEIGHT gates); the render mesh
+  doesn't branch yet.
+- **Extension seams exist but are thin:** `makeStyle(id)` is a Strategy that only ever returns
+  `DefaultStyle` (a ~130-line auto-tiler with one variant rule: WALL_POSSIBLE → BROKEN ~30%). New wall
+  families / themes are meant to be registry rows behind these seams.
+
+**Tracked debt — known, don't trip on it:**
+
+1. **Two lattices for one truth.** `wallgrid.ts` (edge/junction lattice) and `blueprint.ts` (square
+   lattice) encode the same topology twice — `buildBlueprint` literally calls `buildWallGrid` and
+   re-wraps it, and junction classification lives in **both** `wallgrid.ts:classifyJunction` and
+   `wall-style.ts:junction()`. This is **intentional Phase-1 reuse** (the square layer leans on the
+   proven edge layer). The reconciliation: fold the WallGrid *into* the Blueprint so one structure owns
+   classification — do this before adding new wall logic, or the duplication calcifies.
+2. **Layer ⓪ "Program" is a stub.** Rooms-as-graph + roles + puzzle organization are still **tangled
+   inside `generate.ts`** (only `placePuzzles` is extracted). Layers **A** (topology roles), **B** (BSP
+   space), **D** (theme dressing as first-class) are aspirational. Room *themes* exist only render-side
+   (`dungeon.ts`, 7 themes keyed by `roomId % 7`), not as sim/game data.
+3. **`profile` is a hook, not a 3D world.** Everything underneath is per-stratum 2D.
+4. **Coloring is split.** The **lab** colors via `recolor.ts` (authoritative — see `src/lab/CLAUDE.md`),
+   but the **game renderer** (`src/render/dungeon.ts`) still colors via the legacy `themes.ts` /
+   `materials.ts` path. Unifying them needs the recolor tables moved out of `src/lab` (`TODO(publish)`).
+
+The layered model A–D below is still the right *target*; sections C / C-bis describe what shipped.
 
 ---
 
@@ -57,38 +110,58 @@ Realize the graph as rectangles on the cell grid. Two options (pick per taste, s
 Recommendation: **keep dart-throw now; BSP is a drop-in upgrade** if we want tighter, more
 "architected" floors. Output = room rectangles + corridor cells on the grid (unchanged contract).
 
-## C. STRUCTURE — the WALL/EDGE GRID (your alternating grid)
+## C. STRUCTURE — the WALL/EDGE GRID (✅ IMPLEMENTED — `src/floor/wallgrid.ts`)
 
-This is the key addition you intuited. Use a **(2W+1) × (2H+1)** lattice over the W×H cells:
+This is the key addition you intuited, and it shipped. The rigid "9-cell square" framing
+(docs/14 §6 — 1 center + 4 edges + 4 corners) turned out to be just the **k = 1** case of a more
+**general lattice**: a wall/edge grid at subdivision `k` over the W×H cells. For `k = 1` it is the
+classic fence-post grid; a larger `k` subdivides each edge into finer sub-slots (one cell edge can
+then be `wall | doorway | wall`, half-length caps, etc.) without changing any of the logic below —
+the classification reads the four incident edges *whatever the granularity*.
 
 ```
-(even, even)  = FLOOR cell            (the playable squares)
-(odd, even) / (even, odd) = WALL EDGE slot   (lives BETWEEN two cells)
-(odd, odd)    = CORNER POST            (where four edges meet)
+floor cells at the lattice NODES
+WALL-EDGE slot on every line BETWEEN two adjacent cells (and on the outer boundary)
+CORNER POST (a JUNCTION) wherever edge lines cross
 ```
 
-So rows/cols **alternate** floor-lines and wall-lines — exactly your idea. Each slot has STATE,
-*derived* from layers A/B:
+Stored as three dense typed arrays (vEdges / hEdges / posts) rather than a parity-checked
+(2W+1)×(2H+1) array — same information, directly indexable by both consumers. Each slot has STATE,
+*derived* from layers A/B + the climb's open cells:
 
-- **Wall-edge slot** ∈ `SOLID | HALF | DOORWAY | WINDOW | OPEN`
-  - edge between two GRAPH-connected rooms → `DOORWAY` (or `door`/`locked` from the edge type)
-  - edge facing VOID or an unconnected neighbour → `SOLID`/`HALF`
-  - edge interior to one room → `OPEN`
-- **Corner post** ∈ `PILLAR | NONE` — **pillar only at a true CONVEX corner** (two perpendicular
-  SOLID walls meet). A **T-junction** has 3 walls around the post → it's interior, not convex →
-  **no pillar** (this fixes "no corner at T's" *structurally*, not with heuristics).
+- **Wall-edge slot** ∈ `OPEN | DOORWAY | LIP | SOLID`
+  - a **traversal edge always wins over cell type** — a WALK/GAP edge → `OPEN` (or `DOORWAY` at a
+    doorway cell), a BREAK/BUTTON/WEIGHT gate → `LIP` (a low passable bump). This is what keeps
+    every graph route — including the perimeter FALLBACK LAYER's WALK edges through VOID cells —
+    *physically* open, so collision never walls off a path the verifier proved solvable.
+  - otherwise (floor↔void/wall, the boundary, or two UNCONNECTED floor cells) → `SOLID`.
+  - (`HALF` / `WINDOW` from the original sketch are deferred — easy to add as new edge states.)
+- **Corner post = a JUNCTION** ∈ `NONE | CAP | STRAIGHT | CORNER | TEE | CROSS`, named purely from
+  which of its four incident edges are walls (this **generalises** "pillar at a convex corner"):
+  `1` wall = `CAP` (dead-end), `2` collinear = `STRAIGHT`, `2` perpendicular = `CORNER`, `3` =
+  `TEE`, `4` = `CROSS`. T-junctions are now first-class (not "no pillar at a T") — they get a real
+  `wall_Tsplit`. The junction's `dirs` bitmask drives the piece's yaw.
 
 Why this layer earns its keep — it makes the things you keep hitting **first-class + unambiguous**:
-- **Half-walls per side**: a `HALF` slot renders a half-wall on each adjoining room's interior
-  side; a `SOLID` between room↔void renders one. No stacking, no back-faces — it's per-slot.
-- **Doors**: a `DOORWAY` slot with an `openable` flag; at runtime it carries a **hinge angle**
-  (sim state) → the drag-open mechanic (docs/11 §3.4). The leaf hinges on the post.
-- **Corners**: posts decide pillars (see above).
+- **The full wall-piece family**: caps / corners / tees / crossings / columns drop straight out of
+  the junction kind (the renderer places the matching KayKit piece, oriented from `dirs`). The
+  straight runs between junctions are full `wall` pieces; a junction covers the near half of each
+  wall it joins, so the edge fills the far half with a `wall_half` — clean tiling, no overlap.
+- **Doors**: a `DOORWAY` slot (carries a `doorId` when a LockedDoor gates it) — a real gap.
 - **Fog/occlusion**: walls + doors are addressable entities, so "hide the wall between camera and
   player" and "a closed door keeps the next room fogged" operate on slots, cleanly.
 
-The current `wallMask` (per-cell 4-bit) is just a **lossy projection** of this edge grid — we keep
-emitting it for back-compat, but the WallGrid is the source of truth.
+The per-cell `wallMask` (4-bit) is a **lossy projection** of this grid (kept for the fog BFS +
+decoration). The realized pipeline goes one step further than the original sketch: the WallGrid feeds
+the **Blueprint** (which classes each square FLOOR/WALL/WALL_POSSIBLE/OPEN), the **Style** auto-tiles
+it into abstract `Placement[]`, and `tower.ts` projects those to **one `WorldPlacement[]` IR** at
+native 4u — each lattice position is a **2u KayKit module**, so a straight wall is a sequence of 2u
+segments, a turn/branch a `CORNER`/`TEE`/`CROSS`, a dead-end a `CAP`. Collision decomposes every
+placement into **1u half-segments and merges collinear runs** (minimal boxes), and render places the
+matching KayKit mesh — both off the **same** IR, so they match by construction (§C-bis). Each
+placement carries a vertical **`profile`** (FULL / LOW / GAP) — the 3D axis: `WALL_POSSIBLE`
+break-gates become a LOW passable bump (the fallback layer stays crossable), doorways a GAP, and
+partial/railing/arched walls slot in here as new profiles without touching the pipeline.
 
 ### C-bis. Collision derives from the SAME grid (collision matches the visual)
 
