@@ -28,7 +28,7 @@ import {
   type SideSet,
 } from '../floor/wall-tile.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
-import { meshObject, type WorldObject } from './world-object.ts';
+import { meshObject, type WorldObject, type Footprint } from './world-object.ts';
 
 /* --------------------------------- constants --------------------------------- */
 
@@ -53,15 +53,32 @@ function pieceObj(url: string, scale: number): WorldObject {
   }
   return o;
 }
-async function buildPiece(url: string, scale = 1): Promise<THREE.Object3D> {
-  return (await pieceObj(url, scale).build('default', 0)).root;
+async function buildPiece(url: string, scale = 1): Promise<{ root: THREE.Object3D; footprint: Footprint }> {
+  const b = await pieceObj(url, scale).build('default', 0);
+  return { root: b.root, footprint: b.footprint ?? { boxes: [] } };
 }
 async function buildSized(url: string, targetH: number): Promise<THREE.Object3D> {
-  const root = await buildPiece(url, 1);
+  const { root } = await buildPiece(url, 1);
   const bb = new THREE.Box3().setFromObject(root);
   const h = bb.max.y - bb.min.y || 1;
   root.scale.multiplyScalar(targetH / h);
   return root;
+}
+
+/** Green wireframe of a piece's box-fit footprint, at the SAME placement transform as its mesh —
+ *  the SECOND consumer of tilePlacements, so render==collision is shown rather than asserted. */
+function footprintWire(fp: Footprint, p: { x: number; y: number; z: number; yaw: number }): THREE.Group {
+  const g = new THREE.Group();
+  g.position.set(p.x, p.y, p.z);
+  g.rotation.y = p.yaw;
+  for (const b of fp.boxes) {
+    const box = new THREE.Box3(
+      new THREE.Vector3(b.cx - b.hx, b.cy - b.hy, b.cz - b.hz),
+      new THREE.Vector3(b.cx + b.hx, b.cy + b.hy, b.cz + b.hz),
+    );
+    g.add(new THREE.Box3Helper(box, 0x4ade80));
+  }
+  return g;
 }
 
 /* ----------------------------------- scene ----------------------------------- */
@@ -110,15 +127,15 @@ const DEFAULT: WallTile = {
 const clone = (t: WallTile): WallTile => ({ floor: { ...t.floor }, edge: { ...t.edge }, inner: { ...t.inner }, centre: t.centre, wallType: t.wallType });
 const state: WallTile = clone(DEFAULT);
 let showObjects = false;
+let showCollision = false;
 let gen = 0;
 
 function disposeGroup(g: THREE.Group): void {
   g.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (m.isMesh) {
-      m.geometry.dispose();
-      (Array.isArray(m.material) ? m.material : [m.material]).forEach((mm) => mm.dispose());
-    }
+    const m = o as THREE.Mesh & { geometry?: THREE.BufferGeometry };
+    if (m.geometry) m.geometry.dispose();
+    const mat = (o as THREE.Mesh).material;
+    if (mat) (Array.isArray(mat) ? mat : [mat]).forEach((mm) => mm.dispose());
   });
 }
 
@@ -147,11 +164,12 @@ function rebuild(): void {
 async function renderTile(tile: WallTile, myGen: number): Promise<void> {
   // ALL structural placement comes from the one registry function; we just build + apply.
   for (const p of tilePlacements(tile)) {
-    const root = await buildPiece(p.url, p.scale);
+    const { root, footprint } = await buildPiece(p.url, p.scale);
     if (myGen !== gen) return;
     root.position.set(p.x, p.y, p.z);
     root.rotation.y = p.yaw;
     group.add(root);
+    if (showCollision) group.add(footprintWire(footprint, p)); // same source, same transform
   }
   if (showObjects) {
     let barrel = false;
@@ -243,6 +261,8 @@ if (fields) {
 
 const objChk = document.getElementById('objects') as HTMLInputElement | null;
 objChk?.addEventListener('change', () => { showObjects = objChk.checked; rebuild(); });
+const colChk = document.getElementById('collision') as HTMLInputElement | null;
+colChk?.addEventListener('change', () => { showCollision = colChk.checked; rebuild(); });
 
 const PRESETS: Record<string, WallTile> = {
   'straight wall': clone(DEFAULT),
@@ -272,14 +292,18 @@ if (presets) {
 
 type WTWindow = Window & {
   __WT_READY?: boolean;
-  __wtSet?: (p: Partial<WallTile> & { objects?: boolean }) => void;
-  __wtState?: () => { tile: WallTile; label: string; issues: string[]; objects: boolean };
+  __wtSet?: (p: Partial<WallTile> & { objects?: boolean; collision?: boolean }) => void;
+  __wtState?: () => { tile: WallTile; label: string; issues: string[]; objects: boolean; collision: boolean };
 };
 const Wn = window as WTWindow;
 Wn.__wtSet = (p) => {
   if (typeof p.objects === 'boolean') {
     showObjects = p.objects;
     if (objChk) objChk.checked = p.objects;
+  }
+  if (typeof p.collision === 'boolean') {
+    showCollision = p.collision;
+    if (colChk) colChk.checked = p.collision;
   }
   if (p.edge) state.edge = { ...state.edge, ...p.edge };
   if (p.inner) state.inner = { ...state.inner, ...p.inner };
@@ -289,7 +313,7 @@ Wn.__wtSet = (p) => {
   syncControls();
   rebuild();
 };
-Wn.__wtState = () => ({ tile: clone(state), label: label(state), issues: validate(state).map((i) => i.code), objects: showObjects });
+Wn.__wtState = () => ({ tile: clone(state), label: label(state), issues: validate(state).map((i) => i.code), objects: showObjects, collision: showCollision });
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
