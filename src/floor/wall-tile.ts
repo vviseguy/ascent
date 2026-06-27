@@ -50,18 +50,38 @@ export type CentreType = 'wall' | 'barrier';
  */
 export type WallType = 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate';
 
-/** The floor under the tile. `none` = a hole (no floor). Stone is the only built asset today. */
-export type FloorType = 'none' | 'stone';
+/** A floor material at one CORNER of a tile. `none` = a hole at that corner. */
+export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood';
+
+/**
+ * Per-CORNER floor materials. A full tile of one material = all four corners equal; corners
+ * may differ (a dirt↔stone transition), and any corner may be `none` (a partial hole). All
+ * four `none` = a full hole.
+ */
+export interface CornerFloors {
+  nw: FloorMaterial;
+  ne: FloorMaterial;
+  sw: FloorMaterial;
+  se: FloorMaterial;
+}
+
+export const FLOOR_CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
+export type FloorCorner = (typeof FLOOR_CORNERS)[number];
+
+/** The single material if all four corners agree and it isn't `none`, else null (mixed/partial/hole). */
+export function uniformFloor(f: CornerFloors): Exclude<FloorMaterial, 'none'> | null {
+  return f.nw === f.ne && f.ne === f.sw && f.sw === f.se && f.nw !== 'none' ? f.nw : null;
+}
 
 /**
  * The full parameterization of one 4u SQUARE. A wall tile and a plain FLOOR square are the
- * SAME thing: a floor square is just `floor:'stone'` with every connection `none` and
- * `centre:'none'`; a hole is `floor:'none'`. So this one struct covers floor, hole, and any
- * wall/barrier the tile carries on top of its floor.
+ * SAME thing: a floor square is just every connection `none` + `centre:'none'` over a floor;
+ * an all-`none` floor is a hole. So this one struct covers floor, hole, and any wall/barrier
+ * the tile carries on top of its floor.
  */
 export interface WallTile {
-  /** The floor slab (or a hole). Orthogonal to the wall structure above it. */
-  floor: FloorType;
+  /** Per-corner floor materials (or holes). Orthogonal to the wall structure above. */
+  floor: CornerFloors;
   N: Connection;
   E: Connection;
   S: Connection;

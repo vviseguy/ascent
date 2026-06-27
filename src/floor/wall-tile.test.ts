@@ -5,16 +5,22 @@ import {
   classify,
   describeWallTile,
   validateWallTile,
+  uniformFloor,
   type WallTile,
   type Connection,
   type CentreAxis,
   type CentreType,
   type WallType,
+  type FloorMaterial,
+  type CornerFloors,
 } from './wall-tile.ts';
+
+/** All-corners-one-material floor (the common case). */
+const F = (m: FloorMaterial = 'stone'): CornerFloors => ({ nw: m, ne: m, sw: m, se: m });
 
 /** Build a tile with sane defaults; override only the fields a case cares about. */
 const T = (p: Partial<WallTile>): WallTile => ({
-  floor: 'stone',
+  floor: F('stone'),
   N: 'none',
   E: 'none',
   S: 'none',
@@ -129,13 +135,22 @@ describe('wall-tile resolver — the MIXED-type cases (the resolution rule)', ()
 
 describe('wall-tile — floor + validation', () => {
   it('a plain floor square is just an all-none tile with a stone floor', () => {
-    const floorSq = T({ floor: 'stone' });
+    const floorSq = T({ floor: F('stone') });
     expect(classify(floorSq)).toBe('empty');
     expect(validateWallTile(floorSq)).toEqual([]);
+    expect(uniformFloor(floorSq.floor)).toBe('stone');
   });
 
-  it('a hole (floor:none, all-none) is still well-formed', () => {
-    expect(validateWallTile(T({ floor: 'none' }))).toEqual([]);
+  it('a hole (all-none floor) is well-formed; uniformFloor is null', () => {
+    const hole = T({ floor: F('none') });
+    expect(validateWallTile(hole)).toEqual([]);
+    expect(uniformFloor(hole.floor)).toBeNull();
+  });
+
+  it('per-corner floors: a dirt↔stone split is not a uniform tile', () => {
+    const split: CornerFloors = { nw: 'stone', ne: 'stone', sw: 'dirt', se: 'dirt' };
+    expect(uniformFloor(split)).toBeNull();
+    expect(validateWallTile(T({ floor: split }))).toEqual([]);
   });
 
   it('a straight wall is valid', () => {
@@ -172,7 +187,7 @@ describe('wall-tile resolver — totality + invariants over EVERY input', () => 
             for (const centre of AXES)
               for (const centreType of CTYPES)
                 for (const wallType of WT) {
-                  const tile: WallTile = { floor: 'stone', N, E, S, W, centre, centreType, wallType };
+                  const tile: WallTile = { floor: F('stone'), N, E, S, W, centre, centreType, wallType };
                   const a = resolveWallTile(tile);
                   count++;
 
