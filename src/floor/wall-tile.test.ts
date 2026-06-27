@@ -71,11 +71,18 @@ describe('wall-tile resolver — the common WALL entities', () => {
     expect(a.arms.W).toEqual({ type: 'wall', terminal: 'cap' });
   });
 
-  it('corner: two adjacent walls + a both centre → it turns', () => {
+  it('corner: two adjacent walls + a both centre → it turns (with a column)', () => {
     const a = resolveWallTile(T({ N: 'wall', E: 'wall', centre: 'both', centreType: 'wall' }));
     expect(a.case).toBe('corner');
     expect(a.arms.N.terminal).toBe('run');
     expect(a.arms.E.terminal).toBe('run');
+  });
+
+  it('bend: two adjacent walls + a SINGLE-axis centre → a corner with NO column', () => {
+    expect(classify(T({ N: 'wall', E: 'wall', centre: 'EW', centreType: 'wall' }))).toBe('bend');
+    expect(classify(T({ N: 'wall', E: 'wall', centre: 'NS', centreType: 'wall' }))).toBe('bend');
+    // the both-centre version stays the pillared corner
+    expect(classify(T({ N: 'wall', E: 'wall', centre: 'both', centreType: 'wall' }))).toBe('corner');
   });
 
   it('tee: three walls + a both centre', () => {

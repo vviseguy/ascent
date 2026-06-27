@@ -120,7 +120,8 @@ export type WallCase =
   | 'cap' //      one connection
   | 'straight' // two opposite connections + a matching single-axis centre
   | 'caps' //     two connections, no joining centre → independent caps across a gap
-  | 'corner' //   two adjacent connections + a both-axis centre → a turn
+  | 'corner' //   two adjacent connections + a both-axis centre → a turn WITH a column
+  | 'bend' //     two adjacent connections + a single-axis centre → a soft turn, NO column
   | 'tee' //      three connections + a both-axis centre
   | 'cross' //    four connections + a both-axis centre
   | 'custom'; //  mixed types, or a connector/axis that doesn't line up
@@ -195,7 +196,8 @@ export function classify(tile: WallTile): WallCase {
       return 'custom';
     }
     // adjacent pair = a corner candidate
-    if (tile.centre === 'both') return 'corner';
+    if (tile.centre === 'both') return 'corner'; // a turn WITH a column
+    if (tile.centre === 'EW' || tile.centre === 'NS') return 'bend'; // a soft turn, NO column
     if (tile.centre === 'none') return 'caps';
     return 'custom';
   }

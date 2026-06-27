@@ -243,6 +243,7 @@ const PRESETS: Record<string, WallTile> = {
   'straight wall': { ...DEFAULT, floor: allF('stone') },
   'wall + door': { floor: allF('stone'), N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'door' },
   corner: { floor: allF('stone'), N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  'bend (no column)': { floor: allF('stone'), N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'EW', centreType: 'wall', wallType: 'solid' },
   tee: { floor: allF('stone'), N: 'none', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
   cross: { floor: allF('stone'), N: 'wall', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
   column: { floor: allF('stone'), N: 'none', E: 'none', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },

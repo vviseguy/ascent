@@ -16,7 +16,8 @@
 // │  + window   │ wall_archedwindow_open    │  ″                                             │
 // │  + low_gate │ wall_gated                │  ″                                             │
 // │  + hole     │ wall_broken               │  ″                                             │
-// │ corner      │ wall_corner               │ {W,N}→0 {N,E}→π/2 {E,S}→π {S,W}→−π/2            │
+// │ corner      │ wall_corner (with column) │ {W,N}→0 {N,E}→π/2 {E,S}→π {S,W}→−π/2            │
+// │ bend        │ wall_corner_small (no col)│ same yaw; triggered by a SINGLE-axis centre     │
 // │ tee         │ wall_Tsplit               │ open S→0  W→π/2  N→π  E→−π/2                    │
 // │ cross       │ wall_crossing             │ 0                                              │
 // │ cap         │ wall_endcap               │ W→0  S→π/2  E→π  N→−π/2                         │
@@ -24,8 +25,8 @@
 // │ column      │ pillar                    │ 0                                              │
 // │ post        │ barrier_column            │ 0                                              │
 // │ barrier ↑   │ barrier / barrier_corner  │ same yaws as the wall equivalents              │
-// │ custom/mix  │ pillar|barrier_column +   │ centre piece + per-arm half pieces (approx)    │
-// │             │   wall_half / barrier_half│                                                │
+// │ custom/mix  │ pillar|barrier_column +   │ centre piece + per-arm pieces: an arm that MEETS │
+// │             │   wall_half / wall_endcap │ a centre = half, else an END-CAP                │
 // └─────────────┴───────────────────────────┴──────────────────────────────────────────────┘
 // FLOOR (per corner): stone→floor_tile_large · dirt→floor_dirt_large · wood→floor_wood_large.
 //   uniform (all corners equal) → one full tile; mixed → one tile per non-`none` corner.
@@ -53,6 +54,7 @@ const u = (f: string): string => `${DIR}/${f}.gltf.glb`;
 export const PIECE = {
   wall: u('wall'),
   corner: u('wall_corner'),
+  cornerSmall: u('wall_corner_small'), // a corner BEND with no column
   tee: u('wall_Tsplit'),
   cross: u('wall_crossing'),
   cap: u('wall_endcap'),
@@ -150,6 +152,8 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
       return [at(barrier ? PIECE.barrier : wallTypeUrl(tile.wallType), straightYaw(ds))];
     case 'corner':
       return [at(barrier ? PIECE.barrierCorner : PIECE.corner, cornerYaw(ds))];
+    case 'bend':
+      return [at(barrier ? PIECE.barrierCorner : PIECE.cornerSmall, cornerYaw(ds))]; // no column
     case 'tee':
       return barrier ? composeArms(tile) : [at(PIECE.tee, teeYaw(ds))]; // no barrier_Tsplit asset
     case 'cross':
@@ -159,12 +163,22 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
   }
 }
 
-/** Compose a mixed/gap case from a centre piece + per-arm half pieces (orientation approximate). */
+/** Compose a mixed/gap case from a centre piece + per-arm pieces (orientation approximate).
+ *  An arm that MEETS a matching centre is an open `half`; an arm with no centre to meet (the
+ *  resolver marks it `cap`) is an END-CAP, not a half. */
 function composeArms(tile: WallTile): WallPlacement[] {
   const out: WallPlacement[] = [];
+  const a = resolveWallTile(tile);
   if (tile.centre === 'both') out.push({ url: tile.centreType === 'barrier' ? PIECE.barrierColumn : PIECE.pillar, yaw: 0 });
   for (const d of present(tile)) {
-    out.push({ url: tile[d] === 'barrier' ? PIECE.barrierHalf : PIECE.wallHalf, yaw: capYaw(d) });
+    const capped = a.arms[d].terminal === 'cap'; // no centre on this axis → an end-cap
+    const url =
+      tile[d] === 'barrier'
+        ? PIECE.barrierHalf // (the pack ships no barrier end-cap; half is the closest)
+        : capped
+          ? PIECE.cap
+          : PIECE.wallHalf;
+    out.push({ url, yaw: capYaw(d) });
   }
   return out;
 }
