@@ -26,8 +26,9 @@ const css = (hex: number): string => '#' + (hex >>> 0).toString(16).padStart(6, 
 
 /** Short presets, distinct enough to read at a glance. */
 const PRESET_LABEL: Record<Preset, string> = {
-  stone: 'stone', floor: 'floor', wood: 'wood', metal: 'metal', gold: 'gold',
-  cloth: 'cloth', terracotta: 'terracotta', dark: 'dark', plain: 'plain',
+  stone: 'stone', smoothstone: 'smooth stone', floor: 'floor', wood: 'wood', grained: 'dark wood',
+  metal: 'metal', irondark: 'dark iron', gold: 'gold', cloth: 'cloth', terracotta: 'terracotta',
+  dark: 'dark', plain: 'plain',
 };
 
 function chip(hex: number): HTMLElement {

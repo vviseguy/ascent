@@ -156,6 +156,12 @@ export interface FitBoxesOpts {
    *  favour tightness (more, smaller boxes); lower toward 0 for pure largest-coverage. Used by
    *  `random-best` selection AND by `cluster`/`scan` alternate-seed selection. */
   coverageWeight?: number;
+  /** AUTO edge-density: ignore `edgeDensity` and instead SCAN it low→high, picking the LOWEST value
+   *  whose fill reaches `fillTarget` (loosest box set that still hugs that tight). If none reach it,
+   *  the tightest-fill candidate wins. The chosen value is reported in `FitStats.edgeDensity`. */
+  autoEdgeDensity?: boolean;
+  /** Target solid-fill for `autoEdgeDensity` (0..1). Default 0.95 ("just over 95%"). */
+  fillTarget?: number;
 }
 
 // GLOBAL DEFAULTS — tuned to give good footprints on ANY mesh with ZERO per-object knobs.
@@ -181,7 +187,15 @@ const DEFAULTS = {
   beam: 2,
   randomSeed: 1,
   coverageWeight: 0.5,
+  // AUTO edge-density: off by default in the raw fitter; the lab turns it ON. When on, the fit
+  // SCANS edge-density low→high and picks the LOWEST that reaches `fillTarget` (the loosest box set
+  // that still hugs ≥95% tight) — falling back to the tightest-fill candidate if none reach it.
+  autoEdgeDensity: false,
+  fillTarget: 0.95,
 } as const;
+
+/** Edge-density candidates the auto-scan tries, low→high (low = looser/fewer boxes). */
+const AUTO_EDGE_STEPS = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85] as const;
 
 /** Per-fit diagnostics surfaced to the lab HUD (how well the boxes hug). */
 export interface FitStats {
@@ -196,6 +210,8 @@ export interface FitStats {
   fill: number;
   /** # boxes emitted (post sliver-drop). */
   boxCount: number;
+  /** Edge-density actually used (the auto-scan's pick, or the explicit value). */
+  edgeDensity: number;
 }
 
 /** A flat triangle soup baked into ONE object-local space (positions only). */
@@ -235,6 +251,8 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   const beam = opts.beam ?? DEFAULTS.beam;
   const randomSeed = opts.randomSeed ?? DEFAULTS.randomSeed;
   const coverageWeight = opts.coverageWeight ?? DEFAULTS.coverageWeight;
+  const autoEdgeDensity = opts.autoEdgeDensity ?? DEFAULTS.autoEdgeDensity;
+  const fillTarget = opts.fillTarget ?? DEFAULTS.fillTarget;
 
   const soup = bakeSoup(object);
 
@@ -247,8 +265,28 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   const autoCell = clamp(diag / cellDivisor, cellMin, cellMax);
 
   if (soup.count === 0) {
-    return { boxes: [], stats: { cell: opts.cell ?? autoCell, solidVoxels: 0, coverage: 0, fill: 0, boxCount: 0 } };
+    return { boxes: [], stats: { cell: opts.cell ?? autoCell, solidVoxels: 0, coverage: 0, fill: 0, boxCount: 0, edgeDensity } };
   }
+
+  // Cover a grid at one edge-density; null if the box count is empty or blows the backstop.
+  type Cover = ReturnType<typeof looseCover>;
+  const coverAt = (grid: NonNullable<ReturnType<typeof voxelize>>, ed: number): Cover | null => {
+    const res = looseCover(grid, { edgeDensity: ed, edgeWeight, nonOverlap, minFill, coverageTarget, maxBoxes, minBoxSize, seedMode, samples, beam, randomSeed, coverageWeight });
+    return res.boxes.length > 0 && res.boxes.length <= maxBoxes ? res : null;
+  };
+  // AUTO: scan edge-densities low→high; first to reach fillTarget wins (lowest = loosest box set
+  // that still hugs that tight); else the tightest-fill candidate. Returns the cover + chosen ed.
+  const pick = (grid: NonNullable<ReturnType<typeof voxelize>>): { res: Cover; ed: number } | null => {
+    if (!autoEdgeDensity) { const r = coverAt(grid, edgeDensity); return r ? { res: r, ed: edgeDensity } : null; }
+    let best: { res: Cover; ed: number } | null = null;
+    for (const ed of AUTO_EDGE_STEPS) {
+      const r = coverAt(grid, ed);
+      if (!r) continue;
+      if (r.stats.fill >= fillTarget) return { res: r, ed }; // lowest ed meeting the bar → done
+      if (!best || r.stats.fill > best.res.stats.fill) best = { res: r, ed };
+    }
+    return best; // none reached the bar → tightest fill we got
+  };
 
   // Start at the (auto or explicit) cell; coarsen (×1.4) only if the box count blows the
   // far backstop — size, not count, is the normal terminator. `groundSeal` falls back to the
@@ -258,9 +296,9 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   for (let attempt = 0; attempt < 9; attempt++) {
     const grid = voxelize(soup, cell, dilate, groundSeal);
     if (grid && grid.solidCount > 0) {
-      const res = looseCover(grid, { edgeDensity, edgeWeight, nonOverlap, minFill, coverageTarget, maxBoxes, minBoxSize, seedMode, samples, beam, randomSeed, coverageWeight });
-      if (res.boxes.length > 0 && res.boxes.length <= maxBoxes) {
-        return { boxes: res.boxes, stats: { cell, solidVoxels: grid.solidCount, ...res.stats } };
+      const chosen = pick(grid);
+      if (chosen) {
+        return { boxes: chosen.res.boxes, stats: { cell, solidVoxels: grid.solidCount, edgeDensity: chosen.ed, ...chosen.res.stats } };
       }
     }
     cell *= 1.4;
@@ -268,7 +306,7 @@ export function fitBoxesWithStats(object: THREE.Object3D, opts: FitBoxesOpts = {
   // Last resort: a single tight bounding box (always valid, never explodes the count).
   const b = soup.box;
   const boxes: AABB[] = [{ min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] }];
-  return { boxes, stats: { cell, solidVoxels: 0, coverage: 1, fill: 1, boxCount: 1 } };
+  return { boxes, stats: { cell, solidVoxels: 0, coverage: 1, fill: 1, boxCount: 1, edgeDensity } };
 }
 
 /** The SOLID voxel grid the fitter sees, for the lab's voxel-visualization overlay (?voxels=1).
@@ -590,7 +628,7 @@ function dilateOnce(g: Grid): void {
 // ---------------------------------------------------------------------------
 interface CoverOpts { edgeDensity: number; edgeWeight: number; nonOverlap: boolean; minFill: number; coverageTarget: number; maxBoxes: number; minBoxSize: number; seedMode: SeedMode; samples: number; beam: number; randomSeed: number; coverageWeight: number; }
 
-function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStats, 'cell' | 'solidVoxels'> } {
+function looseCover(g: Grid, o: CoverOpts): { boxes: AABB[]; stats: Omit<FitStats, 'cell' | 'solidVoxels' | 'edgeDensity'> } {
   const { nx, ny, nz, solid, solidCount } = g;
   const covered = new Uint8Array(solid.length); // solid voxels already claimed by a box (coverage stat)
   // CLAIMED tracks every voxel (solid OR empty) inside a placed box's AABB. Under nonOverlap

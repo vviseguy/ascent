@@ -40,6 +40,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { LabElement, LabElementBuild } from './element.ts';
 import type { WorldObject, WorldObjectBuild, Footprint, WorldObjectBuildOpts } from './world-object.ts';
 import { buildObjectPicker, type PickerPack, type PickerGroup, type PickerEntry } from './object-picker.ts';
@@ -47,6 +48,9 @@ import { fitBoxesWithStats, aabbToFootprintBox, voxelGridForViz, lastStitchInfo,
 import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-controls.ts';
 import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catalog.ts';
 import { buildRecolorLegend } from './recolor-legend.ts';
+import { buildTextureSettings } from './texture-settings.ts';
+import { buildApproveButton } from './approve.ts';
+import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam } from './texture-catalog.ts';
 
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
 // canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
@@ -221,6 +225,21 @@ function disposeVoxelOverlay(o: THREE.Object3D): void {
   (inst.material as THREE.Material | undefined)?.dispose();
 }
 
+/** Free a previous build's BAKED material + its baked DataTextures (so a live texture-rebuild doesn't
+ *  leak GPU memory). Geometry is NOT disposed — it's shared with the cached GLB template (SkeletonUtils
+ *  clone shares geometry by reference); the tiling textures are shared (texture-catalog lib) too. */
+function disposeBuiltMaterials(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mat = m.material as THREE.MeshStandardMaterial | undefined;
+    if (!mat) return;
+    mat.map?.dispose(); // baked albedo DataTexture (per build)
+    mat.roughnessMap?.dispose(); // baked ORM DataTexture (== metalnessMap, per build)
+    mat.dispose();
+  });
+}
+
 async function boot(): Promise<void> {
   // BUILD-TIME clock: from boot() through the FIRST render (GLB load + box-fit + render),
   // surfaced in the HUD timing readout alongside the per-fit box-fit time.
@@ -243,6 +262,10 @@ async function boot(): Promise<void> {
   const buildOpts: WorldObjectBuildOpts = rawColoring
     ? { raw: true }
     : (Number.isFinite(tintAll) ? { tintAll } : {});
+  // TEXTURE CONFIG (which texture + surface per type) + RELIEF: parse the URL into the shared config
+  // BEFORE the first build, so a shared/screenshotted ?tex=…&relief=… link bakes correctly on load.
+  setConfig(configFromParam(params.get('tex')));
+  setRelief(reliefFromParam(params.get('relief')));
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -300,6 +323,13 @@ async function boot(): Promise<void> {
   key.shadow.camera.right = key.shadow.camera.top = 6;
   scene.add(key);
   scene.add(new THREE.HemisphereLight(0x8899cc, 0x33301f, 0.8));
+
+  // IBL ENVIRONMENT — metalness is a REFLECTION property: with nothing to reflect, metal surfaces go
+  // dark/flat grey and read as stone. A neutral room env (no asset needed) gives them something to
+  // reflect so they read as metal. Modest intensity so matte stone/wood isn't washed out.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.55;
 
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(7, 48),
@@ -459,7 +489,7 @@ async function boot(): Promise<void> {
     const fs = lastFitStats;
     const n = fs?.boxCount ?? footprint?.boxes.length ?? 0;
     const fitLine = fs
-      ? `<b>${n} box${n === 1 ? '' : 'es'}</b> · fill ${(fs.fill * 100).toFixed(0)}% · coverage ${(fs.coverage * 100).toFixed(0)}% · cell ${fs.cell.toFixed(3)}m`
+      ? `<b>${n} box${n === 1 ? '' : 'es'}</b> · fill ${(fs.fill * 100).toFixed(0)}% · coverage ${(fs.coverage * 100).toFixed(0)}% · ed ${(fs.edgeDensity * 100).toFixed(0)}% · cell ${fs.cell.toFixed(3)}m`
       : `${n} collision box${n === 1 ? '' : 'es'}`;
     const buildMs = buildShownMs ?? performance.now() - buildStart;
     const timing = `<b style="color:#cfe3ff">fit ${lastFitMs.toFixed(0)}ms</b> · build ${buildMs.toFixed(0)}ms`;
@@ -473,19 +503,19 @@ async function boot(): Promise<void> {
   };
 
   if (objId !== null && objHudPrefix !== null) {
-    const root = built.root;
     const fitState = readFitStateFromParams(params);
     // Re-fit the displayed object with the current control state; update overlay + HUD + timing.
+    // Reads built.root LIVE (not a captured ref) so it works after a texture rebuild swaps the root.
     const refit = (state = fitState): void => {
       const t0 = performance.now();
       const opts = fitStateToOpts(state, seed);
-      const { boxes, stats } = fitBoxesWithStats(root, opts);
+      const { boxes, stats } = fitBoxesWithStats(built.root, opts);
       lastFitMs = performance.now() - t0;
       lastFitStats = stats;
       footprint = { boxes: boxes.map(aabbToFootprintBox) };
       W.__labFootprint = footprint;
       setOverlay(footprint);
-      setVoxelOverlay(root, opts); // refresh the solid-voxel diagnostic (?voxels=1) for this fit
+      setVoxelOverlay(built.root, opts); // refresh the solid-voxel diagnostic (?voxels=1) for this fit
       if (hud) hud.innerHTML = composeObjHud();
       renderOnce();
     };
@@ -494,6 +524,50 @@ async function boot(): Promise<void> {
     buildShownMs = performance.now() - buildStart; // freeze the total build time at first fit/render
     if (hud) hud.innerHTML = composeObjHud();
     buildFitControls({ container: document.body, initial: fitState, onChange: (s) => refit(s) });
+
+    // ---- TEXTURE SETTINGS: re-bake the object LIVE when a type's texture/surface changes ----
+    // A change mutates the shared config (texture-catalog); we rebuild the object (re-runs the
+    // recolor bake, which reads the config), swap it into the scene, re-fit, and persist to ?tex=.
+    const obj = objects.get(objId)!;
+    const variant = params.get('variant') ?? obj.variants[0] ?? '';
+    let rebuilding = false;
+    const rebuildObject = async (): Promise<void> => {
+      if (rebuilding) return; // coalesce overlapping rebuilds (debounce already throttles)
+      rebuilding = true;
+      try {
+        const next = await obj.build(variant, seed, buildOpts);
+        scene.remove(built.root);
+        disposeBuiltMaterials(built.root); // free the previous bake's textures (geometry is shared)
+        built = next;
+        footprint = next.footprint;
+        scene.add(built.root);
+        refit(); // re-fit boxes on the new root (also renders)
+      } finally {
+        rebuilding = false;
+      }
+      const tex = configToParam(getConfig());
+      const rel = reliefToParam(getRelief());
+      const u = new URLSearchParams(location.search);
+      if (tex) u.set('tex', tex); else u.delete('tex');
+      if (rel) u.set('relief', rel); else u.delete('relief');
+      history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
+    };
+    buildTextureSettings({ container: document.body, onChange: () => { void rebuildObject(); } });
+
+    // ---- APPROVE & SAVE: freeze this object's auto-fit + materials to the published store ----
+    // Reads the LIVE fit/material state on click (post-refit), POSTs to the dev middleware.
+    buildApproveButton({
+      container: document.getElementById('lab-controls') ?? document.body,
+      objectId: objId,
+      getState: () => ({
+        footprint,
+        stats: lastFitStats,
+        seedMode: fitState.seedMode,
+        autoEdge: fitState.autoEdge,
+        recolor: (built as WorldObjectBuild).recolor,
+        present: (built as WorldObjectBuild).presentSwatches,
+      }),
+    });
   }
 
   // ---- CONTENT PICKER (both modes): TEXT-ONLY double-nested clickable list ----
@@ -523,7 +597,7 @@ async function boot(): Promise<void> {
   // back. State PERSISTS in the URL (?ui=0) via replaceState, so it survives a reload / the
   // coloring + boxes navigations instead of being lost. The button itself always stays visible.
   {
-    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend'];
+    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend', 'texture-settings'];
     const btn = document.createElement('button');
     Object.assign(btn.style, {
       position: 'fixed', right: '10px', top: '10px', zIndex: '30', cursor: 'pointer',
