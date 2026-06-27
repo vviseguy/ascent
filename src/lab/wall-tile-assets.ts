@@ -2,17 +2,20 @@
 // src/lab/wall-tile-assets.ts — the ARCHITECTURAL ELEMENT REGISTRY (9-cell model).
 // ============================================================================
 //
-// Maps a WallTile (src/floor/wall-tile.ts) onto REAL KayKit Dungeon Remastered meshes by
-// COMPOSING per-arm pieces — adjacent same-type cells visually collapse into longer walls.
-// No custom boxes. Orientation reuses the game renderer's proven yaw conventions.
+// THE single placement authority: `tilePlacements(tile)` turns a WallTile
+// (src/floor/wall-tile.ts) into a flat list of REAL KayKit Dungeon Remastered mesh
+// placements — floor + walls + centre column, each `{url, x, y, z, yaw, scale}`. The
+// renderer/collision just builds each url and applies the transform; no placement maths
+// anywhere else. No custom boxes. Orientation reuses the game renderer's proven yaws.
 //
-// PER ARM (a direction's inner + edge cell):
-//   reaches centre AND edge → a half-wall (wall_half / barrier_half) centre→edge (open to join)
+// COMPOSITION (per arm = a direction's inner + edge cell):
+//   reaches centre AND edge → a half-wall (wall_half / barrier_half) centre→edge
 //   reaches centre only      → a capped half from centre (wall_half_endcap) — an inner stub
-//   reaches edge only        → a capped half at the edge, facing out (the "edge cap")
-// CENTRE column (additive): wall → pillar, barrier → barrier_column, none → nothing.
-// FULL STRAIGHT LINE + wallType: one spanning opening piece (arch/window/gated/broken).
-// FLOOR (per corner): stone→floor_tile_large · dirt→floor_dirt_large · wood→floor_wood_large.
+//   reaches edge only        → a capped half at the edge, facing out (the edge cap)
+//   a clean FULL corner (2 adjacent full arms, nothing else) → ONE mitered wall_corner
+//   a full straight LINE + wallType → one spanning opening piece (arch/window/gated/broken)
+// CENTRE column is ADDITIVE: wall → pillar, barrier → barrier_column.
+// FLOOR (per corner): uniform → one full tile; mixed → a quarter per non-none corner.
 //
 // NOTE: arm yaw/offset constants (armYaw / EDGE) are tuned against the live view.
 // ============================================================================
@@ -38,7 +41,6 @@ export const PIECE = {
   half: u('wall_half'),
   halfCap: u('wall_half_endcap'),
   corner: u('wall_corner'), // a full MITERED corner (clean bend, reaches both edges)
-  cornerSmall: u('wall_corner_small'),
   barrierCorner: u('barrier_corner'),
   arch: u('wall_arched'),
   window: u('wall_archedwindow_open'),
@@ -55,6 +57,8 @@ export const PIECE = {
 
 const Q = Math.PI / 2;
 const DV: Record<Dir, readonly [number, number]> = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
+/** corner → (x,z) centre of that floor quarter. */
+const CORNER_POS: Record<FloorCorner, readonly [number, number]> = { nw: [-1, -1], ne: [1, -1], sw: [-1, 1], se: [1, 1] };
 /** How far an edge-cap is pushed toward the tile boundary (tile half-extent 2u). Tunable. */
 const EDGE = 1.6;
 
@@ -82,21 +86,31 @@ const wallTypeUrl = (wt: WallType): string =>
           ? PIECE.broken
           : PIECE.wall;
 
-export interface WallPlacement {
+/** One mesh to place: a url + a full transform. The only thing the renderer/collision consumes. */
+export interface Placement {
   url: string;
-  yaw: number;
   x: number;
+  y: number;
   z: number;
+  yaw: number;
+  scale: number;
 }
 
-/** Compose the KayKit pieces that realize a tile's structure. */
-export function wallPieces(tile: WallTile): WallPlacement[] {
-  const out: WallPlacement[] = [];
-  const skip = new Set<Dir>();
+const at = (url: string, yaw = 0, x = 0, z = 0, scale = 1): Placement => ({ url, x, y: 0, z, yaw, scale });
 
-  // a FULL corner (exactly two adjacent full-wall arms, nothing else) → one MITERED piece
-  // instead of two half-walls overlapping jaggedly at the bend. The centre column (if any)
-  // is added on top, so `bend` = clean corner, `corner` = clean corner + a pillar.
+/** The centre column, if any. */
+function centreColumn(tile: WallTile): Placement[] {
+  if (tile.centre === 'wall') return [at(PIECE.pillar)];
+  if (tile.centre === 'barrier') return [at(PIECE.barrierColumn)];
+  return [];
+}
+
+/** The wall/barrier/column pieces realizing a tile's structure. */
+function wallPlacements(tile: WallTile): Placement[] {
+  const out: Placement[] = [];
+
+  // a FULL corner (exactly two adjacent full-wall arms, nothing else) → one MITERED piece +
+  // the additive centre column. (bend = clean corner; corner = clean corner + pillar.)
   const fulls = DIRS.filter((d) => { const a = armOf(tile, d); return a.reachesCentre && a.reachesEdge; });
   const extra = DIRS.filter((d) => !fulls.includes(d) && (tile.inner[d] !== 'none' || tile.edge[d] !== 'none'));
   if (tile.wallType === 'solid' && fulls.length === 2 && extra.length === 0) {
@@ -104,20 +118,18 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
     const opposite = (a === 'N' && b === 'S') || (a === 'E' && b === 'W');
     if (!opposite) {
       const barrier = armOf(tile, a).type === 'barrier';
-      const pieces: WallPlacement[] = [{ url: barrier ? PIECE.barrierCorner : PIECE.corner, yaw: cornerYaw([a, b]), x: 0, z: 0 }];
-      if (tile.centre === 'wall') pieces.push({ url: PIECE.pillar, yaw: 0, x: 0, z: 0 });
-      else if (tile.centre === 'barrier') pieces.push({ url: PIECE.barrierColumn, yaw: 0, x: 0, z: 0 });
-      return pieces;
+      return [at(barrier ? PIECE.barrierCorner : PIECE.corner, cornerYaw([a, b])), ...centreColumn(tile)];
     }
   }
 
   // a full straight wall LINE carrying an opening → one spanning piece (skip those arms)
+  const skip = new Set<Dir>();
   if (tile.wallType !== 'solid') {
     if (fullWallLine(tile, 'EW')) {
-      out.push({ url: wallTypeUrl(tile.wallType), yaw: 0, x: 0, z: 0 });
+      out.push(at(wallTypeUrl(tile.wallType), 0));
       skip.add('E').add('W');
     } else if (fullWallLine(tile, 'NS')) {
-      out.push({ url: wallTypeUrl(tile.wallType), yaw: Q, x: 0, z: 0 });
+      out.push(at(wallTypeUrl(tile.wallType), Q));
       skip.add('N').add('S');
     }
   }
@@ -129,22 +141,15 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
     const isB = a.type === 'barrier';
     const [dx, dz] = DV[d];
     if (a.reachesCentre && a.reachesEdge) {
-      // full arm: a half-wall from the centre out to the edge (open, joins neighbour)
-      out.push({ url: isB ? PIECE.barrierHalf : PIECE.half, yaw: armYaw(d), x: 0, z: 0 });
+      out.push(at(isB ? PIECE.barrierHalf : PIECE.half, armYaw(d))); // full arm, centre→edge
     } else if (a.reachesCentre) {
-      // inner stub: a capped half from the centre, finishing before the edge
-      out.push({ url: isB ? PIECE.barrierHalf : PIECE.halfCap, yaw: armYaw(d), x: 0, z: 0 });
+      out.push(at(isB ? PIECE.barrierHalf : PIECE.halfCap, armYaw(d))); // inner stub
     } else {
-      // edge cap: a capped half sitting at the boundary, facing out
-      out.push({ url: isB ? PIECE.barrierHalf : PIECE.halfCap, yaw: capYaw(d), x: dx * EDGE, z: dz * EDGE });
+      out.push(at(isB ? PIECE.barrierHalf : PIECE.halfCap, capYaw(d), dx * EDGE, dz * EDGE)); // edge cap
     }
   }
 
-  // additive centre column
-  if (tile.centre === 'wall') out.push({ url: PIECE.pillar, yaw: 0, x: 0, z: 0 });
-  else if (tile.centre === 'barrier') out.push({ url: PIECE.barrierColumn, yaw: 0, x: 0, z: 0 });
-
-  return out;
+  return [...out, ...centreColumn(tile)];
 }
 
 /* --------------------------------- floor ------------------------------------- */
@@ -155,20 +160,24 @@ const FLOOR_URL: Record<Exclude<FloorMaterial, 'none'>, string> = {
   wood: PIECE.floorWood,
 };
 
-export interface FloorPlacement {
-  url: string;
-  /** `'full'` = one tile over the whole square; otherwise a quarter at that corner. */
-  corner: FloorCorner | 'full';
-}
-
-export function floorPieces(tile: WallTile): FloorPlacement[] {
+/** The floor tile(s): one full tile when uniform, else a quarter per non-`none` corner. */
+function floorPlacements(tile: WallTile): Placement[] {
   const f = tile.floor;
   const uni = uniformFloor(f);
-  if (uni) return [{ url: FLOOR_URL[uni], corner: 'full' }];
-  const out: FloorPlacement[] = [];
+  if (uni) return [at(FLOOR_URL[uni])];
+  const out: Placement[] = [];
   for (const c of FLOOR_CORNERS) {
     const m = f[c];
-    if (m !== 'none') out.push({ url: FLOOR_URL[m], corner: c });
+    if (m === 'none') continue;
+    const [x, z] = CORNER_POS[c];
+    out.push(at(FLOOR_URL[m], 0, x, z, 0.5));
   }
   return out;
+}
+
+/* --------------------------------- the API ----------------------------------- */
+
+/** THE single placement function — every mesh this tile renders (floor first, then walls). */
+export function tilePlacements(tile: WallTile): Placement[] {
+  return [...floorPlacements(tile), ...wallPlacements(tile)];
 }

@@ -27,7 +27,7 @@ import {
   type FloorCorner,
   type SideSet,
 } from '../floor/wall-tile.ts';
-import { wallPieces, floorPieces } from './wall-tile-assets.ts';
+import { tilePlacements } from './wall-tile-assets.ts';
 import { meshObject, type WorldObject } from './world-object.ts';
 
 /* --------------------------------- constants --------------------------------- */
@@ -37,7 +37,6 @@ const SEGS: Seg[] = ['none', 'wall', 'barrier'];
 const CENTRES: Centre[] = ['none', 'wall', 'barrier'];
 const WTS: WallType[] = ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'];
 const FLOOR_MATS: FloorMaterial[] = ['stone', 'dirt', 'wood', 'none'];
-const CORNER_POS: Record<FloorCorner, readonly [number, number]> = { nw: [-1, -1], ne: [1, -1], sw: [-1, 1], se: [1, 1] };
 
 const TORCH = 'models/kaykit_dungeon_remastered/torch_mounted.gltf.glb';
 const BARREL = 'models/kaykit_dungeon_remastered/barrel_small.gltf.glb';
@@ -146,21 +145,12 @@ function rebuild(): void {
 }
 
 async function renderTile(tile: WallTile, myGen: number): Promise<void> {
-  for (const fp of floorPieces(tile)) {
-    const root = await buildPiece(fp.url, fp.corner === 'full' ? 1 : 0.5);
+  // ALL structural placement comes from the one registry function; we just build + apply.
+  for (const p of tilePlacements(tile)) {
+    const root = await buildPiece(p.url, p.scale);
     if (myGen !== gen) return;
-    if (fp.corner !== 'full') {
-      const [x, z] = CORNER_POS[fp.corner];
-      root.position.set(x, 0, z);
-    }
-    group.add(root);
-  }
-  for (const wp of wallPieces(tile)) {
-    const root = await buildPiece(wp.url, 1);
-    if (myGen !== gen) return;
-    root.rotation.y = wp.yaw;
-    root.position.x = wp.x;
-    root.position.z = wp.z;
+    root.position.set(p.x, p.y, p.z);
+    root.rotation.y = p.yaw;
     group.add(root);
   }
   if (showObjects) {
