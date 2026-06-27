@@ -35,8 +35,12 @@
 /** A material family a swatch belongs to — what a theme keys its remap on. */
 export type SwatchRole =
   | 'stone'
+  | 'trim'   // the DARK slate swatch — pillar/wall BASE & CAP (and dressed edging). KayKit
+             //   authors these with a distinct dark grey, so giving it its own role lets a
+             //   theme texture the plinth/capital differently from the shaft (probe-confirmed).
+  | 'floor'  // no swatch defaults here — a `greyAs` TARGET for floor tiles (cobble, not wall stone)
   | 'wood'
-  | 'metal'  // no swatch defaults here (see header) — kept for per-swatch theme overrides
+  | 'metal'  // no swatch defaults here (see header) — a `greyAs` target for metal props (blades)
   | 'gold'
   | 'dark'   // near-black (charcoal / black iron)
   | 'light'  // near-white / cream / parchment
@@ -60,7 +64,7 @@ export interface Swatch {
 
 /** The known names — a string union so theme per-swatch overrides are typo-checked. */
 export type SwatchName =
-  // greys (all role `stone`) — the dungeon shell + the neutral band's range
+  // greys — the dungeon shell + neutral band (all role `stone`, EXCEPT stoneDark = `trim`)
   | 'stoneDark' | 'darkSteel' | 'steel' | 'ironGrey' | 'neutralGrey' | 'stoneWarm' | 'neutralLight'
   | 'charcoal'
   | 'woodClay' | 'woodRed' | 'woodTan'
@@ -76,7 +80,9 @@ export type SwatchName =
  */
 export const PALETTE: Record<SwatchName, Swatch> = {
   // --- GREYS → stone: the dungeon shell (walls/columns/stairs/floors) + neutral band. ---
-  stoneDark: { name: 'stoneDark', hex: 0x4a5155, role: 'stone' }, // dark slate carved blocks (Δ≈7 on walls)
+  // stoneDark is the BASE & CAP of pillars/walls (probe: bottom+top bands) → its own `trim`
+  // role so a theme can texture the plinth/capital distinctly from the shaft.
+  stoneDark: { name: 'stoneDark', hex: 0x4a5155, role: 'trim' }, // dark slate — pillar/wall base+cap
   darkSteel: { name: 'darkSteel', hex: 0x6a7277, role: 'stone' }, // cool dark grey — heavy on walls/stairs shadow
   steel: { name: 'steel', hex: 0x7a8d9d, role: 'stone' }, // bluer grey
   ironGrey: { name: 'ironGrey', hex: 0x818c91, role: 'stone' }, // PRIMARY shell grey (also prop "metal" — see header)

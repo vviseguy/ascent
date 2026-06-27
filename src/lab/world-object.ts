@@ -25,8 +25,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { fitBoxesWithStats, aabbToFootprintBox, type FitStats } from './box-fit.ts';
-import { retexture, type RetextureRule } from './retexture.ts';
-import { DungeonMaterials } from '../render/materials.ts';
+import { presentSwatchHexes, type RetextureRule } from './retexture.ts';
+import { applyRecolor, ensureTilingTextures, type ResolvedSwatch } from './recolor.ts';
 
 /** A collision box in OBJECT-LOCAL space (centre + half-extents, metres). */
 export interface FootprintBox {
@@ -89,6 +89,10 @@ export interface WorldObjectBuild {
   footprint?: Footprint;
   /** Box-fit diagnostics (coverage / fill% / box count) for the lab HUD. */
   fitStats?: FitStats;
+  /** The resolved per-swatch recolor table for this object (for the lab legend). */
+  recolor?: ResolvedSwatch[];
+  /** Atlas swatch hexes this model actually uses (for the legend's "present" markers). */
+  presentSwatches?: ReadonlySet<number>;
   /** Optional per-frame animation/reactivity (actors = nearby world-space player positions). */
   update?: (timeSec: number, actors: readonly THREE.Vector3[]) => void;
 }
@@ -99,13 +103,15 @@ export type WorldObjectLevel = 'object' | 'grouping' | 'room';
  * Optional build inputs that apply ACROSS objects (vs. the per-object variant).
  * Today: a global THEME (themes.ts) — a palette→material remap layered UNDER the
  * object's own variant rules (variant wins per-swatch). Procedural objects ignore it
- * (they don't use the KayKit atlas); only mesh-based objects honour it.
+ * (they don't use the KayKit atlas); only mesh-based objects honour it. The theme is
+ * compiled PER-OBJECT here (not by the caller) so the grey cluster can resolve to metal
+ * on metal props (a sword) but stone on the shell — see themes.compileTheme.
  */
 export interface WorldObjectBuildOpts {
-  /** Compiled theme rules (themes.ts compileTheme().rules) to apply pack-wide. */
-  themeRules?: RetextureRule[];
-  /** The theme's colour-match tolerance (sRGB). Overrides the object's own when set. */
-  themeTolerance?: number;
+  /** Skip recolor and show the ORIGINAL KayKit atlas (the "Raw atlas" coloring mode). */
+  raw?: boolean;
+  /** DEBUG (?tintall=<hex>): force every swatch to this colour — a self-test that the bake runs. */
+  tintAll?: number;
 }
 
 export interface WorldObject {
@@ -134,10 +140,9 @@ export interface WorldObject {
 // directly — KayKit has no door-leaf mesh.
 // ----------------------------------------------------------------------------
 
-/** One shared loader + per-URL template cache + one shared PBR material set. */
+/** One shared loader + per-URL template cache (recolor builds the material per object). */
 const _loader = new GLTFLoader();
 const _templates = new Map<string, Promise<THREE.Object3D>>();
-let _materials: DungeonMaterials | null = null;
 
 function loadTemplate(url: string): Promise<THREE.Object3D> {
   let p = _templates.get(url);
@@ -157,38 +162,27 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
     level: spec.level,
     variants: variantNames,
     async build(variant: string, _seed: number, opts?: WorldObjectBuildOpts): Promise<WorldObjectBuild> {
-      const v = variant in spec.variants ? variant : (variantNames[0] ?? '');
-      const template = await loadTemplate(spec.meshUrl);
+      void variant; // variants are dormant under the recolor system (kept for URL/back-compat)
+      const [template] = await Promise.all([loadTemplate(spec.meshUrl), ensureTilingTextures()]);
       // own copy per build (skeleton-safe even if the GLB has none)
       const model = cloneSkeleton(template);
 
-      // ensure shadows + a unique material per build so re-skin never mutates the template
-      model.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        m.castShadow = true; m.receiveShadow = true;
-        if (Array.isArray(m.material)) m.material = m.material.map((x) => x.clone());
-        else if (m.material) m.material = (m.material as THREE.Material).clone();
-      });
+      // SWATCH SAMPLE FIRST — presentSwatchHexes reads each triangle's ORIGINAL atlas colour, so it
+      // MUST run on the RAW model: applyRecolor below replaces every material's map with a baked
+      // DataTexture (image = {data,width,height}, not a drawable source), which would make the
+      // sampler's drawImage throw. (See retexture.ts presentSwatchHexes' own contract note.)
+      const present = presentSwatchHexes(model); // which swatches this model uses (legend markers)
 
-      // MERGE the global THEME (if any) UNDER this object's variant rules: the theme
-      // remaps swatch families pack-wide; the variant's own rules override the SAME
-      // swatch (keyed by `from`) for this object's special parts (e.g. the chest's
-      // gold straps still win over the theme's metal). One retexture pass for both.
-      const variantRules = spec.variants[v] ?? [];
-      const themeRules = opts?.themeRules ?? [];
-      const byFrom = new Map<number, RetextureRule>();
-      for (const r of themeRules) byFrom.set(r.from, r);
-      for (const r of variantRules) byFrom.set(r.from, r); // variant wins on exact-colour ties
-      const rules = [...byFrom.values()];
-      if (rules.length) {
-        if (!_materials && rules.some((r) => r.to.pbr)) { _materials = new DungeonMaterials(); await _materials.load(); }
-        const rtxOpts: { materials?: DungeonMaterials; tolerance?: number } = {};
-        if (_materials) rtxOpts.materials = _materials;
-        // theme tolerance wins when a theme is active; else the object's own.
-        const tol = themeRules.length ? opts?.themeTolerance : spec.retextureTolerance;
-        if (tol !== undefined) rtxOpts.tolerance = tol;
-        await retexture(model, rules, rtxOpts);
+      // RECOLOR: the WHOLE coloring system (recolor.ts). Per-pixel, in one shader: each pixel's
+      // atlas colour → nearest swatch → that swatch's mapped tint × the baked gradient shade, with
+      // its surface (rough/metal). Sets shadows + the material on every mesh. `resolved` (the
+      // per-swatch table for this object) is returned for the lab legend. Null if no atlas.
+      // RAW mode skips recolor → the original KayKit flat-atlas look (just ensure shadows).
+      let resolved: ResolvedSwatch[] | null = null;
+      if (opts?.raw) {
+        model.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      } else {
+        resolved = applyRecolor(model, spec.meshUrl, 'position', opts?.tintAll);
       }
 
       // wrap in a scaled group, then DROP to y=0 (base on the ground, like LabElement)
@@ -209,7 +203,7 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       // this radius for the orbit distance.
       const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y, d = bb.max.z - bb.min.z;
       const radius = 0.5 * Math.hypot(w, h, d) || 1.5;
-      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats };
+      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats, presentSwatches: present, ...(resolved ? { recolor: resolved } : {}) };
     },
   };
 }

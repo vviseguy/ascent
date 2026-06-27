@@ -1,52 +1,84 @@
 // ============================================================================
-// src/lab/object-picker.ts — the OBJECT PICKER (TEXT-ONLY grouped side LIST).
+// src/lab/object-picker.ts — the content PICKER (TEXT-ONLY, double-nested dropdowns).
 // ============================================================================
 //
-// Shown in object mode (?object=…): a dark HUD LIST down the LEFT side, GROUPED by
-// CATEGORY (Structure · Furniture · Containers · Decor · Featured · Procedural · …)
-// under small text headers. One ROW per WorldObject = just the object's NAME — NO
-// rendered thumbnail, NO GLB loading on page load. A GLB is requested ONLY when an
-// object is actually picked (i.e. when the page navigates to ?object=<id>). This is
-// the load-time fix: the list is plain text and instant.
+// A dark HUD LIST down the LEFT side, DOUBLE-NESTED into collapsible dropdowns:
+//   level 1  =  PACK     (KayKit Dungeon · KayKit Furniture · … · Procedural)
+//   level 2  =  GROUPING (Structure · Furniture · Containers · …)
+//   level 3  =  one ROW per entry = just its NAME
+// Built with native <details>/<summary> so collapse/expand needs no custom JS state and
+// stays keyboard-accessible. Everything starts COLLAPSED except the branch holding the
+// current entry, which is opened and scrolled into view.
 //
-// Clicking a row navigates to ?object=<id> while PRESERVING the current
-// &variant / &seed / &boxes params, so you can flip between objects without losing
-// your view settings. The current object's row is highlighted. The list scrolls if
-// it is taller than the viewport.
+// It is text-only — NO rendered thumbnails, NO GLB loading on page load. A model loads
+// ONLY when an entry is picked (the page navigates to ?object=<id> / ?element=<id>). Rows
+// PRESERVE the current &seed/&boxes (+ &variant for objects), so you flip between assets
+// without losing your view settings. The current row is highlighted.
 //
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================
 
 import type { WorldObject } from './world-object.ts';
 
-/** One category section: a header label + the ids (in display order) under it. */
+/** Whether a row opens a WorldObject (?object=) or a LabElement (?element=). */
+export type PickerKind = 'object' | 'element';
+
+/** One clickable entry = a name + its id + what kind of thing it opens. */
+export interface PickerEntry {
+  id: string;
+  name: string;
+  kind: PickerKind;
+}
+
+/** A level-2 grouping: a header label + its entries (in display order). */
 export interface PickerGroup {
-  /** The header text (e.g. "Structure"). */
   label: string;
-  /** Object ids in this group, in display order. */
-  ids: string[];
+  entries: PickerEntry[];
+}
+
+/** A level-1 pack: a header label + its groupings (in display order). */
+export interface PickerPack {
+  label: string;
+  groups: PickerGroup[];
 }
 
 export interface ObjectPickerOpts {
   /** Where to mount the strip (typically document.body). */
   container: HTMLElement;
-  /** All known WorldObjects, keyed by id (for names + variant-preservation checks). */
-  objects: Map<string, WorldObject>;
-  /** The grouped rows to render, in section order. */
-  groups: PickerGroup[];
-  /** The currently shown object id (highlighted). */
-  currentId: string;
-  /** Current URL params, so a click can PRESERVE variant/seed/boxes. */
+  /** The nested packs → groups → entries to render, in display order. */
+  packs: PickerPack[];
+  /** The currently shown entry id (highlighted + its branch opened), or null. */
+  currentId: string | null;
+  /** Current URL params, so a click can PRESERVE seed/boxes (+ variant for objects). */
   params: URLSearchParams;
+  /** All known WorldObjects (to drop a stale &variant when switching to an object that lacks it). */
+  objects: Map<string, WorldObject>;
+}
+
+/** Build the href for an entry: switch object/element id, preserve view params. */
+function hrefFor(entry: PickerEntry, params: URLSearchParams, objects: Map<string, WorldObject>): string {
+  const next = new URLSearchParams(params);
+  if (entry.kind === 'object') {
+    next.set('object', entry.id);
+    next.delete('element');
+    // keep &variant only if the target object HAS it — else drop so it falls back to its first.
+    const keptVariant = next.get('variant');
+    const obj = objects.get(entry.id);
+    if (keptVariant && obj && !obj.variants.includes(keptVariant)) next.delete('variant');
+  } else {
+    next.set('element', entry.id);
+    next.delete('object');
+    next.delete('variant'); // elements have no variants
+  }
+  return `${location.pathname}?${next.toString()}`;
 }
 
 /**
- * Mount the TEXT-ONLY grouped picker list. Synchronous + instant: no WebGL, no GLB
- * loads — just DOM. (A GLB loads only after a row is clicked and the page reloads
- * on the new ?object=<id>.)
+ * Mount the TEXT-ONLY nested picker. Synchronous + instant: no WebGL, no GLB loads — just
+ * DOM. (A model loads only after a row is clicked and the page reloads on the new id.)
  */
 export function buildObjectPicker(opts: ObjectPickerOpts): void {
-  const { container, objects, groups, currentId, params } = opts;
+  const { container, packs, currentId, params, objects } = opts;
 
   // ---- the list shell (dark HUD, left side, vertical, scrolls if tall) ----
   const strip = document.createElement('div');
@@ -59,7 +91,7 @@ export function buildObjectPicker(opts: ObjectPickerOpts): void {
     display: 'flex',
     flexDirection: 'column',
     gap: '1px',
-    width: '178px',
+    width: '208px',
     maxHeight: 'calc(100vh - 24px)',
     overflowY: 'auto',
     padding: '8px',
@@ -70,69 +102,87 @@ export function buildObjectPicker(opts: ObjectPickerOpts): void {
     boxShadow: '0 4px 18px rgba(0,0,0,.45)',
   } as Partial<CSSStyleDeclaration>);
 
-  for (const group of groups) {
-    if (group.ids.length === 0) continue;
+  for (const pack of packs) {
+    const packEntries = pack.groups.reduce((n, g) => n + g.entries.length, 0);
+    if (packEntries === 0) continue;
+    const packHasCurrent = currentId !== null && pack.groups.some((g) => g.entries.some((e) => e.id === currentId));
 
-    // ---- a small text section header ----
-    const header = document.createElement('div');
-    header.textContent = group.label;
-    Object.assign(header.style, {
-      font: '600 10px/1.4 system-ui',
-      letterSpacing: '.08em',
-      textTransform: 'uppercase',
-      color: 'rgba(150,165,205,.85)',
-      padding: '8px 6px 3px',
-      marginTop: '2px',
-      borderTop: '1px solid rgba(120,130,170,.14)',
-      position: 'sticky',
-      top: '0',
-      background: 'rgba(10,10,22,.92)',
+    // ---- level 1: the pack dropdown ----
+    const packDetails = document.createElement('details');
+    if (packHasCurrent) packDetails.open = true;
+    const packSummary = document.createElement('summary');
+    Object.assign(packSummary.style, {
+      font: '700 11px/1.5 system-ui',
+      letterSpacing: '.04em',
+      color: 'rgba(196,208,240,.95)',
+      padding: '6px 6px 6px 4px',
+      cursor: 'pointer',
+      userSelect: 'none',
+      borderTop: '1px solid rgba(120,130,170,.16)',
+      borderRadius: '6px',
     } as Partial<CSSStyleDeclaration>);
-    strip.appendChild(header);
+    packSummary.innerHTML = `${pack.label} <span style="opacity:.45;font-weight:500">${packEntries}</span>`;
+    packDetails.appendChild(packSummary);
 
-    // ---- one clickable NAME row per object (text only) ----
-    for (const id of group.ids) {
-      const obj = objects.get(id);
-      const current = id === currentId;
+    for (const group of pack.groups) {
+      if (group.entries.length === 0) continue;
+      const groupHasCurrent = currentId !== null && group.entries.some((e) => e.id === currentId);
 
-      const row = document.createElement('a');
-      // PRESERVE variant/seed/boxes; switch only the object id (keep variant only if the
-      // target object HAS it — otherwise drop it so it falls back to that object's first).
-      const next = new URLSearchParams(params);
-      next.set('object', id);
-      const keptVariant = next.get('variant');
-      if (keptVariant && obj && !obj.variants.includes(keptVariant)) next.delete('variant');
-      row.href = `${location.pathname}?${next.toString()}`;
-      row.title = obj ? `${obj.name} (${id})` : id;
-      if (current) row.dataset['current'] = '1';
-      Object.assign(row.style, {
-        display: 'block',
-        width: '100%',
-        boxSizing: 'border-box',
-        padding: '4px 8px',
-        borderRadius: '7px',
-        textDecoration: 'none',
+      // ---- level 2: the grouping dropdown ----
+      const groupDetails = document.createElement('details');
+      if (groupHasCurrent) groupDetails.open = true;
+      Object.assign(groupDetails.style, { marginLeft: '8px' } as Partial<CSSStyleDeclaration>);
+      const groupSummary = document.createElement('summary');
+      Object.assign(groupSummary.style, {
+        font: '600 10px/1.4 system-ui',
+        letterSpacing: '.08em',
+        textTransform: 'uppercase',
+        color: 'rgba(150,165,205,.8)',
+        padding: '5px 6px 4px',
         cursor: 'pointer',
-        font: '12px/1.25 system-ui',
-        color: current ? '#cfe3ff' : '#c2c8da',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        background: current ? 'rgba(78,161,255,.18)' : 'transparent',
-        border: current ? '1px solid rgba(120,180,255,.85)' : '1px solid transparent',
+        userSelect: 'none',
       } as Partial<CSSStyleDeclaration>);
-      row.textContent = obj ? obj.name : id;
-      if (!current) {
-        row.addEventListener('mouseenter', () => { row.style.background = 'rgba(120,130,170,.16)'; });
-        row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+      groupSummary.innerHTML = `${group.label} <span style="opacity:.5;font-weight:400">${group.entries.length}</span>`;
+      groupDetails.appendChild(groupSummary);
+
+      // ---- level 3: one clickable NAME row per entry (text only) ----
+      for (const entry of group.entries) {
+        const current = entry.id === currentId;
+        const row = document.createElement('a');
+        row.href = hrefFor(entry, params, objects);
+        row.title = `${entry.name} (${entry.id})`;
+        if (current) row.dataset['current'] = '1';
+        Object.assign(row.style, {
+          display: 'block',
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '4px 8px 4px 14px',
+          borderRadius: '7px',
+          textDecoration: 'none',
+          cursor: 'pointer',
+          font: '12px/1.25 system-ui',
+          color: current ? '#cfe3ff' : '#c2c8da',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          background: current ? 'rgba(78,161,255,.18)' : 'transparent',
+          border: current ? '1px solid rgba(120,180,255,.85)' : '1px solid transparent',
+        } as Partial<CSSStyleDeclaration>);
+        row.textContent = entry.name;
+        if (!current) {
+          row.addEventListener('mouseenter', () => { row.style.background = 'rgba(120,130,170,.16)'; });
+          row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+        }
+        groupDetails.appendChild(row);
       }
-      strip.appendChild(row);
+      packDetails.appendChild(groupDetails);
     }
+    strip.appendChild(packDetails);
   }
 
   container.appendChild(strip);
 
-  // Scroll the current row into view (the list can be long once the KayKit pack lands).
+  // Scroll the current row into view (the list is long once every pack lands).
   const active = strip.querySelector('a[data-current="1"]') as HTMLElement | null;
   active?.scrollIntoView({ block: 'center' });
 }

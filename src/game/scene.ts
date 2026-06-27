@@ -157,7 +157,9 @@ export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?:
   // generate + compile the tower
   const floors = [];
   for (let s = 0; s < numStrata; s++) {
-    floors.push(generateFloor({ gridSize: GAME_GRID_SIZE, openness: 0.35, guaranteedRoutes: 2, seed, stratumIndex: s }));
+    // openness 0.40 = "40% edges": ~40% of interior seams get an extra connection, so the
+    // now-SOLID Layer-C walls don't read as a claustrophobic maze (more doorways/openings).
+    floors.push(generateFloor({ gridSize: GAME_GRID_SIZE, openness: 0.40, guaranteedRoutes: 2, seed, stratumIndex: s }));
   }
   const groundY = fromInt(0);
   const killPlaneY = fromInt(-10);

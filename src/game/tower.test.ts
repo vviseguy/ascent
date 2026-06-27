@@ -23,14 +23,12 @@ function tower(seed: bigint, numStrata = 5, gridSize = 5) {
   return compileTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) });
 }
 
-describe('tower footprint is clearly larger than the original', () => {
-  it('CELL_SIZE makes a 5x5 grid >= ~22 units across (>= 2.2x the original 15u)', () => {
+describe('tower footprint is the native KayKit scale', () => {
+  it('CELL_SIZE equals the KayKit floor-tile size (4u) so pieces tile cleanly', () => {
     const cs = toFloat(CELL_SIZE);
-    expect(cs).toBeGreaterThanOrEqual(4.5 - 1e-6);
-    const across = cs * 5; // game's 5-wide grid
-    expect(across).toBeGreaterThanOrEqual(22); // target ~22-24u
-    // area ratio vs original 15x15
-    expect((across * across) / (15 * 15)).toBeGreaterThanOrEqual(2.2);
+    // native scale 1.0: a floor cell = one 4u KayKit floor tile = exactly 2 wall-modules (2u),
+    // so corners/halves tile without the 0.5u fudge the old 4.5 cell introduced.
+    expect(cs).toBeCloseTo(4.0, 6);
   });
 });
 
@@ -45,7 +43,7 @@ describe('cellGrid layout accessor (renderer tile placement)', () => {
       expect(g.width).toBe(5);
       expect(g.height).toBe(5);
       expect(g.cells.length).toBe(25);
-      expect(RAW(g.cellSize)).toBeCloseTo(4.5, 6);
+      expect(RAW(g.cellSize)).toBeCloseTo(4.0, 6);
       // surfaceY equals the stratum's walkable base
       expect(g.surfaceY).toBe(t.stratumBaseY[idx]);
       // row-major index == row*width + col, and matches the cell's own col/row
@@ -112,5 +110,56 @@ describe('cellGrid layout accessor (renderer tile placement)', () => {
     expect(t.stratumBaseY.length).toBe(5);
     expect(t.entryXZ.length).toBe(5);
     expect(t.stairs.length).toBe(4);
+  });
+});
+
+describe('Layer-C WallGrid exposed on the cellGrid (the render/collision contract)', () => {
+  it('every stratum carries a wallGrid with correctly-sized slot arrays', () => {
+    const t = tower(0x5a17ed_1234n, 5);
+    for (const g of t.cellGrid!) {
+      const W = g.width, H = g.height;
+      expect(g.wallGrid.width).toBe(W);
+      expect(g.wallGrid.height).toBe(H);
+      expect(g.wallGrid.vEdges.length).toBe((W + 1) * H);
+      expect(g.wallGrid.hEdges.length).toBe(W * (H + 1));
+      expect(g.wallGrid.posts.length).toBe((W + 1) * (H + 1));
+    }
+  });
+
+  it('wallPlacements (the unified IR) is populated with valid pieces/variants/profiles', () => {
+    const t = tower(0x5a17ed_1234n, 5);
+    const pieces = new Set(['STRAIGHT', 'CORNER', 'TEE', 'CROSS', 'CAP', 'PILLAR', 'DOORWAY']);
+    const variants = new Set(['PLAIN', 'BROKEN', 'ARCHED', 'GATED', 'WINDOW']);
+    const profiles = new Set(['FULL', 'LOW', 'GAP']);
+    const g = t.cellGrid![0]!;
+    expect(g.wallPlacements.length).toBeGreaterThan(0);
+    for (const wp of g.wallPlacements) {
+      expect(pieces.has(wp.piece)).toBe(true);
+      expect(variants.has(wp.variant)).toBe(true);
+      expect(profiles.has(wp.profile)).toBe(true);
+      expect(wp.axis === 'X' || wp.axis === 'Z').toBe(true);
+      // DOORWAY → GAP profile; everything else FULL or LOW.
+      if (wp.piece === 'DOORWAY') expect(wp.profile).toBe('GAP');
+      else expect(wp.profile === 'GAP').toBe(false);
+      // no puzzles placed by generateFloor → no locked doors.
+      expect(wp.doorId).toBe(-1);
+    }
+  });
+
+  it('a cell-square wall placement lands on its cell center (native-4u lattice projection)', () => {
+    const t = tower(11n, 3, 8);
+    const g = t.cellGrid![0]!;
+    // CELL_SIZE-spaced, origin-centered: cell (col,row) center is (col-offX)*cs / (row-offZ)*cs.
+    const cs = RAW(g.cellSize);
+    const offX = ((g.width - 1) / 2) | 0;
+    const offZ = ((g.height - 1) / 2) | 0;
+    // Every placement's x,z must land on the 2u lattice (cell centers OR half-cell lines).
+    const halfStep = cs / 2;
+    for (const wp of g.wallPlacements) {
+      const gx = (RAW(wp.x) - (0 - offX) * cs) / halfStep; // lattice steps from cell-0 center
+      const gz = (RAW(wp.z) - (0 - offZ) * cs) / halfStep;
+      expect(Math.abs(gx - Math.round(gx))).toBeLessThan(1e-4);
+      expect(Math.abs(gz - Math.round(gz))).toBeLessThan(1e-4);
+    }
   });
 });

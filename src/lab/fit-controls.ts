@@ -93,7 +93,7 @@ export function buildFitControls(opts: FitControlsOpts): void {
   Object.assign(panel.style, {
     position: 'fixed',
     right: '10px',
-    top: '10px',
+    top: '46px', // leaves the top-right corner for the hide-UI button
     width: '210px',
     color: '#bcd',
     font: '11px/1.4 system-ui',

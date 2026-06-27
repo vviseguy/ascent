@@ -2,6 +2,12 @@
 // src/lab/retexture.ts — COLOR-KEYED RETEXTURE (re-skin one palette swatch).
 // ============================================================================
 //
+// ⚠ LEGACY for the lab. Lab assets are now colored by recolor.ts (per-pixel, gradient-
+// preserving) — see src/lab/CLAUDE.md (authoritative). This file is kept for: the GAME path
+// (src/render/dungeon.ts via themes.ts), the `RetextureRule`/`MaterialSpec` types still used by
+// MeshObjectSpec.variants, and `presentSwatchHexes` (the legend's "present" sampler). Don't add
+// new lab coloring logic here.
+//
 // THE USER'S EXACT ASK: "change ONLY the things that are one colour, to another
 // material/metalness." KayKit dungeon meshes are UV-mapped onto a single shared
 // PALETTE ATLAS — a grid of flat vertical-gradient SWATCHES (grey stone, brown wood,
@@ -27,6 +33,7 @@
 
 import * as THREE from 'three';
 import { DungeonMaterials, type SurfaceKind } from '../render/materials.ts';
+import { SWATCHES } from './palette.ts';
 
 /** What a matched swatch becomes: a flat albedo, OR a tiling PBR class, + surface knobs. */
 export interface MaterialSpec {
@@ -52,10 +59,22 @@ export interface RetextureRule {
 }
 
 export interface RetextureOpts {
-  /** Max sRGB distance (0..~441) for a triangle to count as matching a rule. Default 70. */
+  /**
+   * Max sRGB distance (0..~441) for a triangle to count as matching a rule (default 70). THIS IS
+   * THE WHOLE MODEL: each triangle is coloured SOLELY by its previous atlas colour — it takes the
+   * material of the nearest rule within `tolerance`, otherwise it keeps its original atlas colour.
+   * Nothing reassigns or dissolves it afterwards, so distinct-coloured parts stay distinct (a
+   * banner's grey pegs → stone, its red flag → cloth) and true accents the theme doesn't map (a
+   * green bottle) keep their colour. A theme passes a generous tolerance so the structural greys
+   * all land on stone; a variant-only re-skin passes a tight one to recolour just its target part.
+   */
   tolerance?: number;
   /** Shared DungeonMaterials (so PBR sets load once); created+loaded if omitted. */
   materials?: DungeonMaterials;
+  /** How PBR materials tile: 'classic' (default) = single-plane world UV + normal map
+   *  (cohesive/sharp — the boxy shell + flat props); 'triplanar' = 3-axis blend (round
+   *  props: barrels/coins, no single-plane stretch). Choose per object (see isCurvedProp). */
+  projection?: 'classic' | 'triplanar';
 }
 
 /** A cache of atlas image → sampler, keyed by the texture's uuid (atlas is shared). */
@@ -108,18 +127,25 @@ function srgbDist(a: [number, number, number], r: number, g: number, b: number):
   return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
-/** Turn a MaterialSpec into a MeshStandardMaterial (flat albedo or tiling PBR). */
-function specToMaterial(spec: MaterialSpec, mats?: DungeonMaterials): THREE.MeshStandardMaterial {
-  let mat: THREE.MeshStandardMaterial;
+/** Turn a MaterialSpec into a MeshStandardMaterial (flat albedo or tiling PBR).
+ *  `projection` picks how the PBR tiles: 'classic' = single-plane world UV + normal map
+ *  (cohesive, sharp on flat/boxy faces — the dungeon shell & flat props); 'triplanar' =
+ *  3-axis blend (no stretch on round faces — barrels/coins). See materials.ts get/getProp. */
+function specToMaterial(spec: MaterialSpec, mats?: DungeonMaterials, projection: 'classic' | 'triplanar' = 'classic'): THREE.MeshStandardMaterial {
+  // PBR path: return a SHARED cached material from DungeonMaterials — NEVER clone (a clone of a
+  // material whose onBeforeCompile injected the world-UV shader reuses the cached program and
+  // skips the injection → the projection collapses and the surface reads as bare faceted
+  // geometry). Untinted → get()/getProp(); tinted → getTinted() builds the variant fresh.
   if (spec.pbr && mats) {
-    const base = mats.get(spec.pbr);
-    mat = base ? (base.clone() as THREE.MeshStandardMaterial)
-               : new THREE.MeshStandardMaterial({ color: spec.color ?? 0x888888 });
-  } else {
-    mat = new THREE.MeshStandardMaterial({ color: spec.color ?? 0x888888 });
+    const needsOverride = spec.color !== undefined || spec.roughness !== undefined || spec.metalness !== undefined || spec.emissive !== undefined;
+    const base = needsOverride
+      ? mats.getTinted(spec.pbr, projection, spec)
+      : (projection === 'triplanar' ? mats.getProp(spec.pbr) : mats.get(spec.pbr));
+    if (base) return base;
   }
-  if (spec.color !== undefined && !spec.pbr) mat.color.setHex(spec.color);
-  if (spec.color !== undefined && spec.pbr) mat.color.setHex(spec.color); // tint the PBR set
+  // flat albedo (no pbr, or materials unavailable)
+  const mat = new THREE.MeshStandardMaterial({ color: spec.color ?? 0x888888 });
+  if (spec.color !== undefined) mat.color.setHex(spec.color);
   if (spec.roughness !== undefined) mat.roughness = spec.roughness;
   if (spec.metalness !== undefined) mat.metalness = spec.metalness;
   if (spec.emissive !== undefined) { mat.emissive = new THREE.Color(spec.emissive); mat.emissiveIntensity = spec.emissiveIntensity ?? 1; }
@@ -150,8 +176,19 @@ export async function retexture(
     await mats.load();
   }
 
-  const ruleMats = rules.map((r) => specToMaterial(r.to, mats));
-  const created: THREE.Material[] = [...ruleMats];
+  // One material per DISTINCT spec (rules with the same `to` share an instance) — so a mesh
+  // whose triangles all resolve to one material (the whole dungeon shell: every grey swatch →
+  // the same stone/floor material) is detected as single-material and keeps its ORIGINAL
+  // geometry (see the fast path below) instead of being rebuilt.
+  const projection = opts.projection ?? 'classic';
+  const matBySpec = new Map<string, THREE.MeshStandardMaterial>();
+  const ruleMats = rules.map((r) => {
+    const key = JSON.stringify(r.to);
+    let m = matBySpec.get(key);
+    if (!m) { m = specToMaterial(r.to, mats, projection); matBySpec.set(key, m); }
+    return m;
+  });
+  const created: THREE.Material[] = [...matBySpec.values()];
   const meshes: THREE.Mesh[] = [];
   object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.geometry) meshes.push(m); });
 
@@ -166,7 +203,9 @@ export async function retexture(
     const index = geo.getIndex();
     const triCount = index ? index.count / 3 : pos.count / 3;
 
-    // classify each triangle → rule index (or -1 = keep original)
+    // Classify each triangle SOLELY by its previous atlas colour → the nearest rule WITHIN `tol`
+    // (else -1 = keep the original atlas material). No reassignment/dissolution afterwards, so a
+    // part's material is a pure function of its own colour — distinct parts stay distinct.
     const triRule = new Int8Array(triCount).fill(-1);
     if (sampler && uv) {
       const tmp = new THREE.Vector2();
@@ -177,7 +216,6 @@ export async function retexture(
         let cu = 0, cv = 0;
         for (const i of [ia, ib, ic]) { tmp.fromBufferAttribute(uv, i); cu += tmp.x; cv += tmp.y; }
         const [r, g, b] = sampler.sample(cu / 3, cv / 3);
-        // nearest rule within tolerance
         let best = -1, bestD = tol;
         for (let ri = 0; ri < rules.length; ri++) {
           const c = rules[ri]!.from;
@@ -188,7 +226,22 @@ export async function retexture(
       }
     }
 
-    // Build a non-indexed geometry, triangles SORTED by group: rule0, rule1, …, original.
+    // FAST PATH — one material covers the whole mesh → keep the ORIGINAL geometry, don't
+    // rebuild it. Rebuilding to non-indexed groups subtly changes shading (the floor's relief
+    // then reads as faceted hexagons instead of the cobble normal-map detail); a single-material
+    // mesh (the entire dungeon SHELL) never needs splitting, so we just assign the material and
+    // keep the model's original normals/UVs = the cohesive classic look.
+    let single: THREE.Material | null | undefined;
+    let isSingle = true;
+    for (let t = 0; t < triCount; t++) {
+      const ri = triRule[t]!;
+      const m = ri < 0 ? orig : ruleMats[ri]!;
+      if (single === undefined) single = m;
+      else if (single !== m) { isSingle = false; break; }
+    }
+    if (isSingle && single) { mesh.material = single; continue; }
+
+    // MULTI-MATERIAL — split into per-material groups on a rebuilt non-indexed geometry.
     // Group order: ruleMats[0..n-1] then the original material last.
     const order: number[] = []; // triangle indices grouped
     const groupSizes = new Array(rules.length + 1).fill(0);
@@ -232,4 +285,42 @@ export async function retexture(
     mesh.material = matArray.length === 1 ? matArray[0]! : matArray;
   }
   return created;
+}
+
+/**
+ * Sample every textured triangle's centroid colour and return the SET of palette swatch hexes the
+ * model actually uses — so the lab legend can show WHICH colours are present in the current model
+ * (not the whole 26-swatch palette). Call on the RAW model BEFORE retexture (re-skinned triangles
+ * lose their atlas map). Same sampler + nearest-swatch match the theme uses, so it stays in sync.
+ */
+export function presentSwatchHexes(object: THREE.Object3D): Set<number> {
+  const present = new Set<number>();
+  const tmp = new THREE.Vector2();
+  object.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    const sampler = samplerFor((Array.isArray(mat) ? mat[0] : mat)?.map ?? null);
+    const uv = mesh.geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    if (!sampler || !uv) return;
+    const index = mesh.geometry.getIndex();
+    const pos = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const triCount = index ? index.count / 3 : pos.count / 3;
+    for (let t = 0; t < triCount; t++) {
+      let cu = 0, cv = 0;
+      for (let j = 0; j < 3; j++) {
+        const vi = index ? index.getX(t * 3 + j) : t * 3 + j;
+        tmp.fromBufferAttribute(uv, vi); cu += tmp.x; cv += tmp.y;
+      }
+      const [r, g, b] = sampler.sample(cu / 3, cv / 3);
+      let best = SWATCHES[0]!.hex, bestD = Infinity;
+      for (const sw of SWATCHES) {
+        const c = sw.hex;
+        const d = srgbDist([(c >> 16) & 255, (c >> 8) & 255, c & 255], r, g, b);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      present.add(best);
+    }
+  });
+  return present;
 }

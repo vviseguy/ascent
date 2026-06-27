@@ -316,9 +316,17 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
   const topZ = rawF(st.topZ);
   const runLen = rawF(st.run);
   const rowZ = (y: number): number => (y - ((fl0.height - 1) / 2 | 0)) * CS;
+  const colX = (x: number): number => (x - ((fl0.width - 1) / 2 | 0)) * CS;
+  // Approach the stair up its BOUNDARY column (st.cols[0] hugs the grid edge), whose seams are
+  // the perimeter FALLBACK LAYER's WALK edges — guaranteed OPEN through the now-real Layer-C
+  // walls. The old path walked the seam BETWEEN the two stair columns and jammed against an
+  // interior wall once collision became solid. From the run foot we step east onto the stair
+  // centerline (those stair cells are forced-OPEN), then straight up the treads.
+  const boundX = colX(st.cols[0]);
   const wps: readonly (readonly [number, number])[] = [
-    [centerX, rowZ(0)], // slide west to the stair column at the entry row
-    [centerX, entryZ - 0.4], // north to the run's low (entry) end, lined up on center
+    [boundX, rowZ(0)], // slide along the entry row to the stair's boundary column
+    [boundX, entryZ - 0.4], // north up the boundary column (perimeter, OPEN) to the run foot
+    [centerX, entryZ - 0.4], // east onto the stair centerline (stair cells are OPEN)
     [centerX, topZ], // STRAIGHT UP the treads to the top tread (auto step-up, no jump)
     [centerX, topZ + CS * 0.6], // step +Z off the top tread onto the exit-row slab
   ];

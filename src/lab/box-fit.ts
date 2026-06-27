@@ -416,9 +416,14 @@ function voxelize(soup: TriSoup, cell: number, dilate: number, groundSeal: boole
     rasterizeTriangle(A, B, C, shell, nx, ny, nz, ox, oy, oz, cell);
   }
 
-  // (b) DILATE the shell by 1 to seal sub-voxel cracks (so the flood can't leak through).
-  const shellGrid: Grid = { nx, ny, nz, cell, ox, oy, oz, solid: shell, solidCount: 0 };
-  dilateOnce(shellGrid);
+  // (b) DILATE the shell by 1 ONLY in the leak-tolerant fallback (groundSeal = stitch failed),
+  // to seal sub-voxel cracks so the flood can't leak through. A WATERTIGHT (stitched) mesh is
+  // already closed (the dense rasterization marks every crossed voxel), so dilating there just
+  // inflates the SOLID by a full voxel EVERYWHERE — skip it on the normal (watertight) path.
+  if (groundSeal) {
+    const shellGrid: Grid = { nx, ny, nz, cell, ox, oy, oz, solid: shell, solidCount: 0 };
+    dilateOnce(shellGrid);
+  }
 
   // (c) FLOOD the exterior: BFS from the boundary through EMPTY (non-shell) voxels. For a WATERTIGHT
   // (stitched) mesh, seed ALL SIX faces — the closed shell blocks the flood, so the interior fills

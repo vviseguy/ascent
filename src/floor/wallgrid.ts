@@ -52,8 +52,33 @@ import { cellId, edgeKey } from './types.ts';
  */
 export type EdgeState = 'OPEN' | 'DOORWAY' | 'LIP' | 'SOLID';
 
-/** State of a CORNER POST: a pillar only at a TRUE convex corner, else nothing. */
-export type PostState = 'NONE' | 'PILLAR';
+/**
+ * The JUNCTION at a corner POST — what the four edge slots meeting there form. Derived from
+ * which of the post's incident edges (N/E/S/W) are walls (SOLID|LIP). This generalises the old
+ * "pillar at a convex corner" into the full junction family the KayKit kit (and any tileset)
+ * needs — caps, corners, tees, crossings — and is the same classification at ANY lattice
+ * subdivision (it reads the four incident edges, whatever the granularity).
+ *   - NONE     : no walls meet here.
+ *   - CAP      : exactly one wall ends here (a dead-end → wall_endcap).
+ *   - STRAIGHT : two collinear walls pass through (no junction piece; the runs meet flush).
+ *   - CORNER   : two perpendicular walls turn here (an L → wall_corner).
+ *   - TEE      : three walls meet (a T → wall_Tsplit; the open side is the 4th direction).
+ *   - CROSS    : all four walls meet (a + → wall_crossing).
+ */
+export type JunctionKind = 'NONE' | 'CAP' | 'STRAIGHT' | 'CORNER' | 'TEE' | 'CROSS';
+
+/** Wall-direction bits at a post (which sides carry a wall). Matches the cell wallMask order. */
+export const DIR_E = 1; // +X (east)
+export const DIR_W = 2; // -X (west)
+export const DIR_N = 4; // +Z (north)
+export const DIR_S = 8; // -Z (south)
+
+/** A classified corner post: the junction kind + the wall-direction bitmask that produced it. */
+export interface Junction {
+  kind: JunctionKind;
+  /** Which directions carry a wall (DIR_E|DIR_W|DIR_N|DIR_S). Drives the piece's yaw. */
+  dirs: number;
+}
 
 /** Which side of a cell a vertical/horizontal slot is on (for the accessors). */
 export type Side = 'east' | 'west' | 'north' | 'south';
@@ -71,8 +96,8 @@ export interface WallGrid {
   vEdges: EdgeState[];
   /** Horizontal (N/S) wall lines, length W*(H+1), index = col + row*W, row ∈ [0,H]. */
   hEdges: EdgeState[];
-  /** Corner posts, length (W+1)*(H+1), index = pcol + prow*(W+1). */
-  posts: PostState[];
+  /** Corner posts (junctions), length (W+1)*(H+1), index = pcol + prow*(W+1). */
+  posts: Junction[];
 }
 
 /** Options for {@link buildWallGrid}. */
@@ -111,9 +136,37 @@ export function edgeAt(g: WallGrid, side: Side, col: number, row: number): EdgeS
   }
 }
 
-/** The corner-post slot at fence-post corner (pcol,prow), pcol ∈ [0,W], prow ∈ [0,H]. */
-export function postAt(g: WallGrid, pcol: number, prow: number): PostState {
+/** The junction at fence-post corner (pcol,prow), pcol ∈ [0,W], prow ∈ [0,H]. */
+export function postAt(g: WallGrid, pcol: number, prow: number): Junction {
   return g.posts[postIndex(g.width, pcol, prow)]!;
+}
+
+/**
+ * Classify the junction at post (pcol,prow): read the FOUR incident edge slots (the wall lines
+ * leaving the post N/E/S/W), mark each that is a wall (SOLID|LIP), and name the shape. Pure
+ * lattice logic — works at any subdivision. Off-grid incident slots count as no-wall.
+ */
+export function classifyJunction(g: WallGrid, pcol: number, prow: number): Junction {
+  const W = g.width, H = g.height;
+  const isWall = (s: EdgeState | undefined): boolean => s === 'SOLID' || s === 'LIP';
+  let dirs = 0;
+  // E (+X): the hEdge leaving the post eastward = south face of cell (pcol,prow).
+  if (pcol < W && isWall(g.hEdges[pcol + prow * W])) dirs |= DIR_E;
+  // W (-X): south face of cell (pcol-1,prow).
+  if (pcol >= 1 && isWall(g.hEdges[(pcol - 1) + prow * W])) dirs |= DIR_W;
+  // N (+Z): the vEdge leaving the post northward = west face of cell (pcol,prow).
+  if (prow < H && isWall(g.vEdges[pcol + prow * (W + 1)])) dirs |= DIR_N;
+  // S (-Z): west face of cell (pcol,prow-1).
+  if (prow >= 1 && isWall(g.vEdges[pcol + (prow - 1) * (W + 1)])) dirs |= DIR_S;
+
+  const n = (dirs & 1) + ((dirs >> 1) & 1) + ((dirs >> 2) & 1) + ((dirs >> 3) & 1);
+  let kind: JunctionKind;
+  if (n === 0) kind = 'NONE';
+  else if (n === 1) kind = 'CAP';
+  else if (n === 2) kind = (dirs === (DIR_E | DIR_W) || dirs === (DIR_N | DIR_S)) ? 'STRAIGHT' : 'CORNER';
+  else if (n === 3) kind = 'TEE';
+  else kind = 'CROSS';
+  return { kind, dirs };
 }
 
 /* --------------------------------- builder ----------------------------------- */
@@ -127,11 +180,15 @@ export function postAt(g: WallGrid, pcol: number, prow: number): PostState {
  *
  *   1. boundary line (a cell is off-grid)         → SOLID (the outer safe shell)
  *   2. either cell forced-open (hole/stair)        → OPEN  (the climb stays clear)
- *   3. either cell is VOID/WALL (non-floor)        → SOLID
- *   4. both floor, by the graph edge between them:
+ *   3. a TRAVERSAL EDGE joins the two cells (any cell type — an edge always wins):
  *        WALK | GAP   → DOORWAY if a flanking cell is a DOORWAY cell, else OPEN
  *        BREAK|BUTTON|WEIGHT → LIP
- *        (no edge)    → SOLID  (two floor cells the generator left unconnected = a wall)
+ *   4. NO edge between them                         → SOLID (floor↔void/wall, or two
+ *                                                    UNCONNECTED floor cells = a real wall)
+ *
+ * Putting the edge check (3) ahead of the cell-type check is what keeps every graph route —
+ * including the perimeter FALLBACK LAYER's WALK edges, which thread through VOID cells —
+ * physically passable, so collision never walls off a path the verifier proved solvable.
  *
  * Posts are PILLAR only at a true convex corner (see {@link convexCornerAt}).
  */
@@ -164,19 +221,25 @@ export function buildWallGrid(floor: Floor, opts: WallGridOpts = {}): WallGrid {
 
     const a = cellId(W, aCol, aRow);
     const b = cellId(W, bCol, bRow);
-    if (openCells.has(a) || openCells.has(b)) return 'OPEN'; // 2. climb stays open
-
     const aFloor = isFloor(aCol, aRow);
     const bFloor = isFloor(bCol, bRow);
-    if (!aFloor || !bFloor) return 'SOLID'; // 3. floor ↔ void/wall
+    // 2. a FLOOR cell on the climb (hole/stair footprint) keeps its seams OPEN.
+    if ((aFloor && openCells.has(a)) || (bFloor && openCells.has(b))) return 'OPEN';
 
-    // 4. both floor — classify by the traversal edge (if any) between them.
+    // 3. a TRAVERSAL EDGE makes the seam PASSABLE regardless of cell type. This is what keeps
+    //    the floor's GUARANTEED ROUTES physically open — including the perimeter FALLBACK
+    //    LAYER, whose WALK edges run along the boundary through cells the layout may have
+    //    typed VOID. If we walled those, collision would block a graph-traversable path that
+    //    the (laterally-blind) route-check can't see is blocked — exactly what broke the real
+    //    climb. So an edge always wins over the cell type.
     const kind = edgeKinds.get(edgeKey(a, b));
     if (kind === 'WALK' || kind === 'GAP') {
       return (isDoorway(aCol, aRow) || isDoorway(bCol, bRow)) ? 'DOORWAY' : 'OPEN';
     }
     if (kind === 'BREAK' || kind === 'BUTTON' || kind === 'WEIGHT') return 'LIP';
-    return 'SOLID'; // no edge between two floor cells → an interior wall
+
+    // 4. no traversal edge → a wall: floor↔void/wall, or two UNCONNECTED floor cells.
+    return 'SOLID';
   };
 
   // vEdges: the line on the WEST of column `col` (between cell col-1 and cell col), all rows.
@@ -193,51 +256,31 @@ export function buildWallGrid(floor: Floor, opts: WallGridOpts = {}): WallGrid {
       hEdges[hIndex(W, col, row)] = slot(col, row - 1, col, row);
     }
   }
-  // posts: a pillar at each fence-post corner where the floor footprint turns a convex corner.
-  const posts: PostState[] = new Array((W + 1) * (H + 1));
+  // posts: classify the JUNCTION at each fence-post corner from its incident wall slots (so the
+  // renderer/collision can pick caps/corners/tees/crossings). Needs the edges built first.
+  const posts: Junction[] = new Array((W + 1) * (H + 1));
+  const g: WallGrid = { width: W, height: H, vEdges, hEdges, posts };
   for (let prow = 0; prow <= H; prow++) {
     for (let pcol = 0; pcol <= W; pcol++) {
-      posts[postIndex(W, pcol, prow)] = convexCornerAt(isFloor, pcol, prow) ? 'PILLAR' : 'NONE';
+      posts[postIndex(W, pcol, prow)] = classifyJunction(g, pcol, prow);
     }
   }
 
-  return { width: W, height: H, vEdges, hEdges, posts };
+  return g;
 }
 
 /** Shared empty set so the no-opts path allocates nothing. */
 const EMPTY_SET: ReadonlySet<number> = new Set<number>();
 
 /**
- * Is the fence-post corner (pcol,prow) a TRUE convex corner where a pillar belongs?
- * The corner is shared by the four cells (pcol-1,prow-1) (pcol,prow-1) (pcol-1,prow)
- * (pcol,prow). Count how many are FLOOR (off-grid = not floor):
- *   - 1 floor  → inner corner (an L),   3 floor → outer corner (an L)  → PILLAR
- *   - 2 floor on a DIAGONAL (two areas kissing at the point)            → PILLAR
- *   - 2 adjacent (a straight wall run), 0 (open void) or 4 (open floor) → no post
- * This is the renderer's old `convexCorner` test, promoted here as the single source so the
- * renderer stops re-deriving it (and removes its spurious posts at T-junctions structurally).
- */
-export function convexCornerAt(
-  isFloor: (col: number, row: number) => boolean,
-  pcol: number, prow: number,
-): boolean {
-  const sw = isFloor(pcol - 1, prow - 1);
-  const se = isFloor(pcol, prow - 1);
-  const nw = isFloor(pcol - 1, prow);
-  const ne = isFloor(pcol, prow);
-  const n = (sw ? 1 : 0) + (se ? 1 : 0) + (nw ? 1 : 0) + (ne ? 1 : 0);
-  if (n === 1 || n === 3) return true;             // L (inner / outer convex corner)
-  if (n === 2 && sw === ne && se === nw && sw !== se) return true; // diagonal kiss
-  return false;                                     // straight run / T / open / solid
-}
-
-/**
  * Project a cell's wall-edge slots back to the legacy 4-bit `wallMask` the renderer's fog
  * BFS + decoration still read (bit 1=+X east, 2=-X west, 4=+Z north, 8=-Z south). A side is
- * "walled" (bit set) when its slot is SOLID or LIP (a break-gate reads as a wall to fog,
- * matching the old behaviour); OPEN/DOORWAY clear the bit. Non-floor and forced-open cells
- * have no wallMask (0), exactly as the old compiler's `buildCellGrid` guarded — so this
- * projection is byte-identical to the pre-WallGrid wallMask (proven in wallgrid.test.ts).
+ * "walled" (bit set) when its slot is SOLID or LIP (a break-gate reads as a wall to fog);
+ * OPEN/DOORWAY clear the bit. Non-floor and forced-open cells have no wallMask (0). Matches
+ * the pre-WallGrid wallMask for every floor↔floor seam; it differs only where a traversal
+ * edge now keeps a floor↔VOID seam OPEN (the perimeter fallback) — a deliberate fix so the
+ * mask, the render, and the collision all agree the seam is passable (proven in
+ * wallgrid.test.ts against an independent reimplementation of the same rule).
  */
 export function wallMaskFor(
   g: WallGrid, col: number, row: number,

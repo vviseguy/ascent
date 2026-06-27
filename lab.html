@@ -7,8 +7,10 @@
     <style>
       html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; }
       #lab { position: fixed; inset: 0; }
+      /* top bar, sitting to the RIGHT of the left-edge content picker (≈218px wide) so they
+         never overlap; fit-controls live at top-right, leaving the HUD the top-centre. */
       #hud {
-        position: fixed; left: 10px; top: 10px; color: #aab; font: 12px/1.5 system-ui;
+        position: fixed; left: 236px; right: 232px; top: 10px; color: #aab; font: 12px/1.5 system-ui;
         background: rgba(10,10,22,.6); padding: 8px 12px; border-radius: 8px; pointer-events: none;
       }
     </style>

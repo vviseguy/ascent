@@ -28,8 +28,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat, fromRaw } from '../sim/fixed/fixed.ts';
-import type { StratumCellGrid, CellTile, StairInfo } from '../game/tower.ts';
+import type { StratumCellGrid, CellTile, StairInfo, WorldPlacement } from '../game/tower.ts';
 import { DungeonMaterials, classifySurface } from './materials.ts';
+// SHARED VIEW ENGINE (candidate to relocate to src/render/ later): recolor.ts is the lab's
+// per-pixel, gradient-preserving asset-coloring engine — a pure view utility with no lab-app
+// dependencies (it imports only three + palette.ts). The game consumes it directly so the
+// in-game dungeon and the lab use the SAME coloring engine and can't drift apart (the old
+// per-triangle retexture/theme path is gone). See src/lab/CLAUDE.md (authoritative).
+import { applyRecolor } from '../lab/recolor.ts';
+import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
 
 const DIR = 'models/kaykit_dungeon/';
 /** The KayKit tiles we use (CC0, downloaded to public/models/kaykit_dungeon/). */
@@ -37,6 +44,10 @@ const TILES: Record<string, string> = {
   floor: 'floor_tile_large.glb',
   wall: 'wall.glb',
   wallHalf: 'wall_half.glb',
+  wallCorner: 'wall_corner.glb',
+  wallTee: 'wall_Tsplit.glb',
+  wallCross: 'wall_crossing.glb',
+  wallEndcap: 'wall_endcap.glb',
   doorway: 'wall_doorway.glb',
   pillar: 'pillar.glb',
   stairs: 'stairs.glb',
@@ -137,6 +148,36 @@ interface CellRec {
   mats: THREE.Material[];
 }
 
+// ---- JUNCTION-PIECE YAW (measured KayKit native orientations) ----------------------------
+// Three.js rotation.y is CCW about +Y; a piece's local +X maps to world (cos θ, 0, −sin θ).
+// All values verified against the GLB bounds: wall_corner joins W(−X)+N(+Z) at θ=0; wall_Tsplit
+// has its crossbar on W+E with the stem to N (open side S) at θ=0; wall_endcap points +X at θ=0.
+
+/** Yaw for `wall_corner` (native joins West+North) given the two perpendicular wall dirs. */
+function cornerYaw(dirs: number): number {
+  if (dirs === (DIR_W | DIR_N)) return 0;
+  if (dirs === (DIR_N | DIR_E)) return Math.PI / 2;
+  if (dirs === (DIR_E | DIR_S)) return Math.PI;
+  return -Math.PI / 2; // S | W
+}
+
+/** Yaw for `wall_Tsplit` (native open side = South) given the 3 wall dirs (open = the 4th). */
+function teeYaw(dirs: number): number {
+  const open = 15 & ~dirs;
+  if (open === DIR_S) return 0;
+  if (open === DIR_W) return Math.PI / 2;
+  if (open === DIR_N) return Math.PI;
+  return -Math.PI / 2; // open E
+}
+
+/** Yaw for `wall_endcap` (native points +X, capping a wall extending West) given the wall dir. */
+function capYaw(dirs: number): number {
+  if (dirs === DIR_W) return 0;
+  if (dirs === DIR_S) return Math.PI / 2;
+  if (dirs === DIR_E) return Math.PI;
+  return -Math.PI / 2; // N
+}
+
 export class Dungeon {
   readonly group = new THREE.Group();
   private readonly tpl = new Map<string, THREE.Object3D>();
@@ -151,6 +192,12 @@ export class Dungeon {
   private stairInfos: StairInfo[] = [];
   /** Real tiling CC0 PBR materials (stone/wood/metal/gold) assigned by mesh class. */
   private readonly materials = new DungeonMaterials();
+  /** When true (?raw / ?theme=raw|none), skip recolor and show the ORIGINAL flat KayKit atlas —
+   *  recolor's "Raw atlas" mode, mirrored from the lab (lab.ts `?raw=1`). */
+  private rawColoring = false;
+  /** DEBUG A/B (?shell=classic): texture the shell the OLD way — one fixed PBR material per
+   *  surface KIND (classifySurface → get()), no per-pixel recolor. For comparison. */
+  private classicShell = false;
   /** Shared opaque BLACK material for the fog cubes (the "black liquid shadow" fill). */
   private readonly fogMat = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
   /** Index from a packed (stratum,row,col) key → CellRec, for the reachable-cell BFS. */
@@ -162,26 +209,79 @@ export class Dungeon {
 
   /** Preload all tile templates (await before building / before the loop). */
   async load(): Promise<void> {
-    // REAL MATERIALS (issue 6 / boss #1): load the CC0 tiling PBR sets first, then assign
-    // them to every mesh by material CLASS so walls read as stone, chests/tables as wood,
-    // swords/coins as metal/gold — replacing KayKit's flat gradient-atlas swatches.
+    // REAL MATERIALS: load the CC0 tiling PBR sets first (the FLAME path + ?shell=classic use them).
     await this.materials.load();
+    // COLORING ENGINE — the game now re-skins the whole KayKit pack with the LAB's recolor engine
+    // (lab/recolor.ts), the SAME per-pixel, gradient-preserving coloring the lab uses, so the
+    // in-game dungeon matches the lab and can't drift when the lab's authoring changes. recolor
+    // resolves the look as a pure function of each model's URL via a base→folder→object cascade
+    // (see recolor.ts) — there is no multi-scheme selection, so the dungeon has ONE canonical look.
+    //
+    // TODO(publish): recolor's mapping tables (ROLE_PRESET / FOLDER_OVERRIDES / OBJECT_OVERRIDES in
+    // recolor.ts + SWATCHES in palette.ts) are still imported from src/lab. When a baked theme
+    // manifest is emitted (e.g. a *.generated.ts of the compiled mapping), read THAT here instead
+    // of importing the lab tables, and reintroduce ?theme=<scheme> if multiple schemes are baked.
+    const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+    // ?raw / ?theme=raw|none → show the original flat KayKit atlas (recolor's "Raw atlas" mode,
+    // mirrors the lab's ?raw=1). recolor has no color SCHEMES, so other ?theme= values are inert.
+    const themeParam = params.get('theme');
+    this.rawColoring = params.get('raw') === '1' || themeParam === 'raw' || themeParam === 'none';
+    this.classicShell = params.get('shell') === 'classic';
     const loader = new GLTFLoader();
     const loaded = await Promise.all(Object.entries(TILES).map(async ([k, file]) => {
       const g = await loader.loadAsync(DIR + file);
-      g.scene.traverse((o) => this.applyMaterial(k, o as THREE.Mesh));
+      await this.themeTemplate(k, file, g.scene);
       return [k, g.scene] as const;
     }));
     for (const [k, scene] of loaded) this.tpl.set(k, scene);
+  }
+
+  /** Tiles with live flames keep the emissive applyMaterial path so the torch/candle glow
+   *  (which feeds bloom = the dungeon's cheap lighting) survives the re-skin. */
+  private static readonly FLAME_TILES = new Set(['torch', 'candle', 'candleTriple', 'shelfCandles']);
+
+  /**
+   * Re-skin one KayKit template with the LAB's recolor engine (lab/recolor.ts) — the SAME
+   * per-pixel, gradient-preserving coloring the lab uses, invoked exactly as world-object.ts does:
+   * `applyRecolor(scene, meshUrl, 'position')`. recolor identifies each atlas pixel's SWATCH, keeps
+   * its baked Lightness (the gradient/shading), and swaps Hue+Sat to the swatch's mapped tint with a
+   * baked roughness/metalness map — so the whole pack reskins uniformly off one cascade, with NO
+   * geometry splitting (hence no speckle to collapse, no per-triangle tolerance). The look is a pure
+   * function of the model's URL: recolor's folder/object cascade (kaykit_dungeon → bed_decorated, …)
+   * resolves greys-as-bedding/iron etc. itself, so the game passes the model URL and nothing else.
+   *
+   * FLAME tiles (torch/candle) instead keep the emissive applyMaterial path so their orange glow
+   * (which feeds bloom = the dungeon's cheap lighting) survives the re-skin. ?shell=classic and
+   * ?raw fall back to the PBR-by-class / original-atlas looks for A/B comparison.
+   */
+  private async themeTemplate(tileKey: string, url: string, scene: THREE.Object3D): Promise<void> {
+    if (Dungeon.FLAME_TILES.has(tileKey)) {
+      scene.traverse((o) => this.applyMaterial(tileKey, o as THREE.Mesh));
+      return;
+    }
+    if (this.classicShell) { // ?shell=classic — the OLD per-kind PBR look (A/B comparison)
+      scene.traverse((o) => this.applyMaterial(tileKey, o as THREE.Mesh));
+      return;
+    }
+    if (this.rawColoring) { // ?raw / ?theme=raw — keep the original flat KayKit atlas, just shadows
+      scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      return;
+    }
+    // RECOLOR (the whole coloring system). Pass the FULL model URL (models/kaykit_dungeon/<file>)
+    // so recolor's folder/object cascade resolves; 'position' = the same swatch-id method the lab
+    // uses. recolor assigns the baked material on every mesh + sets shadows. If the model has no
+    // atlas (returns null), fall back to PBR-by-class so the piece is never left untextured.
+    const resolved = applyRecolor(scene, DIR + url, 'position');
+    if (!resolved) scene.traverse((o) => this.applyMaterial(tileKey, o as THREE.Mesh));
+    return Promise.resolve();
   }
 
   /**
    * REAL MATERIALS: swap a KayKit mesh's flat gradient-atlas material for a genuine
    * tiling PBR material picked by SurfaceKind (stone/floor/wood/metal/gold). 'flame'
    * surfaces (torches/candles) KEEP their KayKit material but get boosted to emissive so
-   * they glow + feed bloom (cheap "lighting"). The mesh's original UVs are ignored — the
-   * PBR material projects world-space UVs, so the texture tiles at a physical scale and
-   * never smears. Deterministic + view-only (no sim contact).
+   * they glow + feed bloom (cheap "lighting"). Used for FLAME tiles, ?shell=classic, and as the
+   * fallback when a model has no recolor atlas (so a piece is never left untextured).
    */
   private applyMaterial(tileKey: string, mesh: THREE.Mesh): void {
     if (!mesh.isMesh) return;
@@ -224,22 +324,9 @@ export class Dungeon {
         const c = byRC.get(row * grid.width + col);
         return !!c && c.type !== 'VOID' && c.type !== 'WALL';
       };
-      const corners = new Set<string>(); // dedupe pillars at shared corner points
-      const wallEdges = new Set<string>(); // dedupe walls: one piece per shared edge
-      const doorEdges = new Set<string>(); // edges that are through-doorways (never walled over)
-      // PASS 0: collect every DOORWAY edge first, so a neighbouring cell's wallMask can never
-      // wall over an opening (a door must go all the way through — coordinator structural ask).
-      for (const c of grid.cells) {
-        if (c.type !== 'DOORWAY') continue;
-        const cx = toFloat(fromRaw(c.cx)), cz = toFloat(fromRaw(c.cz));
-        const m = c.wallMask;
-        // a doorway cell's OPEN sides (cleared bits) that connect into a room are the openings.
-        // we mark every edge of a doorway cell that faces a floor neighbour as a door edge.
-        for (const [bit, ex, ez] of [[1, h, 0], [2, -h, 0], [4, 0, h], [8, 0, -h]] as const) {
-          if (m & bit) continue; // a walled side of the doorway cell is not an opening
-          doorEdges.add(this.edgeKey(cx + ex, cz + ez));
-        }
-      }
+      // WALLS / DOORWAYS / PILLARS are no longer inferred per-cell here — they come from the
+      // unified wall IR (grid.wallPlacements) in a dedicated pass below (buildWallsFromSlots),
+      // the SAME pieces collision consumes, so render matches collision by construction (docs/13 §C-bis).
       for (const c of grid.cells) {
         if (c.type === 'VOID') continue;
         const cx = toFloat(fromRaw(c.cx)), cz = toFloat(fromRaw(c.cz));
@@ -250,61 +337,10 @@ export class Dungeon {
         // (KayKit STAIRS are placed in a dedicated pass below from the sim's exact StairInfo,
         //  not per-cell — see placeStairsExact, so the model lines up with the collision.)
 
-        // WALLS — one piece per shared edge (no stacked/back-to-back walls), inset onto THIS
-        // cell's interior side so it never straddles into the neighbour and leaves a clean
-        // flat surface for props on the room side. Doorways stay a FULL-thickness opening
-        // spanning the whole edge (passable + see-through); other cells never wall over a
-        // doorway edge. (Coordinator structural ask.) wallMask: 1=+X 2=-X 4=+Z 8=-Z.
+        // Torch placement still keys off the per-cell wallMask (a projection of the slots): a
+        // walled cell is a good spot for an emissive torch. Walls themselves are placed later
+        // from grid.wallPlacements (buildWallsFromSlots).
         const m = c.wallMask;
-        const isDoor = c.type === 'DOORWAY';
-        // inset distance: half the wall's scaled depth, so the wall's OUTER face lands on the
-        // cell-edge boundary and its body sits inside this cell.
-        const inset = 0.5 * scale;
-        // side: [bit, edge dx, edge dz, rotation, occlude-axis, neighbour dcol, neighbour drow]
-        const sides: ReadonlyArray<readonly [number, number, number, number, 'X' | 'Z', number, number]> = [
-          [1, h, 0, Math.PI / 2, 'X', 1, 0],    // east edge at +X
-          [2, -h, 0, Math.PI / 2, 'X', -1, 0],  // west edge at -X
-          [4, 0, h, 0, 'Z', 0, 1],              // north edge at +Z
-          [8, 0, -h, 0, 'Z', 0, -1],            // south edge at -Z
-        ];
-        for (const [bit, ex, ez, rot, axis, dc, dr] of sides) {
-          const edgeX = cx + ex, edgeZ = cz + ez;
-          const key = this.edgeKey(edgeX, edgeZ);
-          const inX = ex === 0 ? 0 : -Math.sign(ex) * inset;
-          const inZ = ez === 0 ? 0 : -Math.sign(ez) * inset;
-          if ((m & bit) !== 0) {
-            // SOLID wall on this side. Skip if it would wall over a doorway opening, or if a
-            // neighbour cell already owns this shared edge (dedupe → no stacked walls).
-            if (doorEdges.has(key) && !isDoor) continue;
-            if (wallEdges.has(key)) continue;
-            wallEdges.add(key);
-            this.placeWall(cg, edgeX + inX, sy, edgeZ + inZ, rot, scale, axis, mats);
-          } else if (isDoor && isFloor(c.col + dc, c.row + dr)) {
-            // OPEN side of a DOORWAY cell facing a room: a FULL-thickness arch frame centered
-            // on the edge — a clean see-through opening the player passes through. Deduped so
-            // the two cells sharing the opening place exactly one arch (door leaf: the KayKit
-            // pack ships no standalone door leaf, so the opening is left clear per spec).
-            if (wallEdges.has(key)) continue;
-            wallEdges.add(key);
-            this.place(cg, 'doorway', edgeX, sy, edgeZ, rot, scale, mats);
-          }
-        }
-
-        // CORNER PILLARS at TRUE convex corners only (issue 4). At each of the cell's four
-        // grid-corner points, look at the 4 cells around that point: a pillar belongs there
-        // only where the floor/solid split forms an L (a convex turn) — exactly 1 or 3 of
-        // the 4 cells are floor, OR they are diagonal (two rooms kissing at a corner). A
-        // straight wall (2 adjacent floor) or open/closed (0/4 floor) gets NO pillar, which
-        // is what removes the spurious posts at T-junctions and mid-runs.
-        const tryCorner = (bx: number, bz: number): void => {
-          if (!this.convexCorner(c.col, c.row, bx, bz, isFloor)) return;
-          const px = cx + bx * h, pz = cz + bz * h;
-          const key = `${Math.round(px * 8)},${Math.round(pz * 8)}`;
-          if (corners.has(key)) return;
-          corners.add(key);
-          this.place(cg, 'pillar', px, sy, pz, 0, scale, mats); // full scale → full wall height (issue 3)
-        };
-        if (!c.stair && !c.hole) { tryCorner(1, 1); tryCorner(1, -1); tryCorner(-1, 1); tryCorner(-1, -1); }
 
         // a deterministic scatter of torches (emissive → lighting) on walled cells
         if (m !== 0 && this.hash(c.col, c.row, 17) % 11 === 0) {
@@ -352,6 +388,10 @@ export class Dungeon {
         this.cellIndex.set(this.cellKey(grid.stratum, c.col, c.row), rec);
       }
 
+      // WALLS / DOORWAYS / PILLARS from the unified wall IR (after both cell passes so every host
+      // CellRec exists). One mesh per placement — inherently deduped, no edge-key sets.
+      this.buildWallsFromSlots(grid, scale, cs, sy);
+
       // KAYKIT STAIRS (issue 7 / boss #2): place each staircase from the sim's EXACT
       // StairInfo so the model lines up with the collision treads + the ascent hole. One
       // model per StairInfo on THIS stratum. The stair model is parented to the stair-foot
@@ -371,6 +411,117 @@ export class Dungeon {
       this.group.add(sub);
       this.strata.push({ surfaceY: sy, group: sub });
     }
+  }
+
+  /**
+   * Place walls / doorways / junction pieces from the UNIFIED IR (`grid.wallPlacements`) — the
+   * SAME pieces the collision compiler reads (tower.ts emitWallsFromSlots), at the SAME world
+   * positions, so render == masonry by construction (docs/13 §C-bis). One mesh per placement.
+   *
+   * The world is now NATIVE KayKit scale (CELL_SIZE=4 → scale = cs/4 = 1) and each lattice step
+   * is HALF a cell = 2u = exactly one KayKit wall module. So every placement maps to one native
+   * piece centred on its lattice-square centre (x,z):
+   *   - STRAIGHT → `wall_half` (the 2u module). Native span is local x∈[0,2] (anchored at the
+   *     LOW end, not centred), so we offset it back 1u along its run to CENTRE it on (x,z) — see
+   *     `recenterHalf`. axis 'X' (E-W, runs along X) → yaw 0; axis 'Z' (N-S) → yaw π/2. Registered
+   *     for the occlusion cutaway (per-wall material clone) like the old `placeWall`.
+   *   - CORNER/TEE/CROSS/CAP → the matching junction piece, yaw from the `dirs` bitmask via the
+   *     `cornerYaw`/`teeYaw`/`capYaw` helpers (CROSS is symmetric → yaw 0). These are already
+   *     centred on origin natively, so they land on (x,z) with no offset.
+   *   - PILLAR → `pillar` (centred post).
+   *   - DOORWAY → `doorway` (the arch). `wall_doorway` runs along local X natively, so it shares
+   *     the STRAIGHT yaw convention (axis 'X' → 0, axis 'Z' → π/2) and stays parallel to the
+   *     STRAIGHT modules in its run. profile GAP means "no collider", but the arch MESH is still
+   *     drawn (only the collision side skips it).
+   *
+   * PROFILE: 'LOW' renders the same piece for now (a later registry row will swap a low/partial
+   * asset); 'GAP' only occurs on DOORWAY (still drawn). VARIANT 'BROKEN' renders the plain module
+   * for now — the kit's `wall_broken.glb` is a 4u CENTRED wall, not the 2u LOW-anchored module a
+   * STRAIGHT needs, so it can't drop in without re-anchoring; it's a later registry row.
+   *
+   * Each piece is parented to a floor cell's group (nearest walkable cell to (x,z), via
+   * `placementHost`) so it reveals / culls / fades with that cell's fog. View-only — no offset
+   * into the sim. NOTE: junction YAW is keyed to the measured KayKit native orientations; if a
+   * piece reads rotated in-game, flip the corresponding *Yaw helper.
+   */
+  private buildWallsFromSlots(grid: StratumCellGrid, scale: number, _cs: number, sy: number): void {
+    for (const wp of grid.wallPlacements) {
+      const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
+      const host = this.placementHost(grid, x, z);
+      if (!host) continue; // a perimeter line beside a VOID cell — no floor cell to host/reveal it.
+      switch (wp.piece) {
+        case 'STRAIGHT': {
+          // run along X (axis 'X', yaw 0) or Z (axis 'Z', yaw π/2). `wall_half` is anchored at its
+          // LOW end (local x∈[0,2]); recenter it 1u back along the run so it straddles (x,z).
+          const yaw = wp.axis === 'X' ? 0 : Math.PI / 2;
+          const [ox, oz] = this.recenterHalf(yaw, scale);
+          // WallRec.axis is the FACE convention ('X' = faces ±X / spans Z), which is the OPPOSITE
+          // of WorldPlacement.axis (the RUN direction): a wall running along X faces ±Z → 'Z'.
+          const faceAxis: 'X' | 'Z' = wp.axis === 'X' ? 'Z' : 'X';
+          this.placeWall(host.group, 'wallHalf', x + ox, sy, z + oz, yaw, scale, faceAxis, host.mats);
+          break;
+        }
+        case 'CORNER':
+          this.place(host.group, 'wallCorner', x, sy, z, cornerYaw(wp.dirs), scale, host.mats);
+          break;
+        case 'TEE':
+          this.place(host.group, 'wallTee', x, sy, z, teeYaw(wp.dirs), scale, host.mats);
+          break;
+        case 'CROSS':
+          this.place(host.group, 'wallCross', x, sy, z, 0, scale, host.mats);
+          break;
+        case 'CAP':
+          this.place(host.group, 'wallEndcap', x, sy, z, capYaw(wp.dirs), scale, host.mats);
+          break;
+        case 'PILLAR':
+          this.place(host.group, 'pillar', x, sy, z, 0, scale, host.mats);
+          break;
+        case 'DOORWAY': {
+          // the arch runs parallel to its STRAIGHT neighbours → same yaw convention as STRAIGHT
+          // (wall_doorway runs along local X natively). Always drawn, even for profile GAP.
+          const yaw = wp.axis === 'X' ? 0 : Math.PI / 2;
+          this.place(host.group, 'doorway', x, sy, z, yaw, scale, host.mats);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * World (dx,dz) that re-centres a `wall_half` (native span local x∈[0,2], so its midpoint is at
+   * local +X=1) onto its lattice-square centre. We shift the mesh by −1·scale along the world
+   * direction of its local +X axis — which, for a yaw θ, is (cos θ, −sin θ) in (x,z) (the file's
+   * convention: local +X → world (cos θ, 0, −sin θ)). So the offset is (−scale·cos θ, +scale·sin θ).
+   */
+  private recenterHalf(yaw: number, scale: number): [number, number] {
+    return [-scale * Math.cos(yaw), scale * Math.sin(yaw)];
+  }
+
+  /**
+   * The nearest WALKABLE cell to a wall placement at (x,z) — to host the piece so it fog-reveals
+   * with that cell. A placement sits on a lattice-square centre that may be a cell centre OR a
+   * cell-face line (half a cell off), so we invert the grid centering (cell col center =
+   * (col − ⌊(W-1)/2⌋)·cs) to the containing cell, then probe it + its 8 neighbours and pick the
+   * nearest walkable one. Returns null when no walkable cell is adjacent (a perimeter VOID seam).
+   */
+  private placementHost(grid: StratumCellGrid, x: number, z: number): CellRec | null {
+    const cs = toFloat(fromRaw(grid.cellSize));
+    const cHalfCols = (grid.width - 1) >> 1;
+    const cHalfRows = (grid.height - 1) >> 1;
+    const c0 = Math.round(x / cs + cHalfCols);
+    const r0 = Math.round(z / cs + cHalfRows);
+    let best: CellRec | null = null;
+    let bestD = Infinity;
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const rec = this.cellIndex.get(this.cellKey(grid.stratum, c0 + dc, r0 + dr));
+        if (!rec || !rec.walkable) continue;
+        const ddx = x - rec.cx, ddz = z - rec.cz;
+        const d = ddx * ddx + ddz * ddz;
+        if (d < bestD) { bestD = d; best = rec; }
+      }
+    }
+    return best;
   }
 
   /**
@@ -408,29 +559,6 @@ export class Dungeon {
     return best;
   }
 
-  // --------------------------------------------------------------------------
-  // CORNER detection (issue 4)
-  // --------------------------------------------------------------------------
-
-  /**
-   * Is the grid-corner point at offset (bx,bz) of cell (col,row) — bx,bz ∈ {-1,+1} —
-   * a TRUE convex corner where a pillar belongs? Examine the 4 cells touching that point
-   * and count how many are FLOOR. A convex corner is exactly 1 floor (inner corner) or
-   * exactly 3 floor (outer corner), or a diagonal 2 (two areas kissing). A straight wall
-   * run (2 adjacent floor), fully open (4) or fully solid (0) is NOT a corner — that is
-   * what kills the false pillars at T-junctions and along straight walls.
-   */
-  private convexCorner(col: number, row: number, bx: number, bz: number, isFloor: (c: number, r: number) => boolean): boolean {
-    // the 4 cells around the corner point: this cell + its two edge-neighbours + the diagonal
-    const a = isFloor(col, row);
-    const b = isFloor(col + bx, row);
-    const d = isFloor(col, row + bz);
-    const e = isFloor(col + bx, row + bz);
-    const n = (a ? 1 : 0) + (b ? 1 : 0) + (d ? 1 : 0) + (e ? 1 : 0);
-    if (n === 1 || n === 3) return true;          // L (inner / outer convex corner)
-    if (n === 2 && a === e && b === d && a !== b) return true; // diagonal kiss (two convex corners)
-    return false;                                  // straight run / T-junction / open / solid
-  }
 
   // --------------------------------------------------------------------------
   // STAIRS (issue 7 / boss #2) — EXACT placement from the sim's StairInfo
@@ -773,44 +901,37 @@ export class Dungeon {
   }
 
   /**
-   * Place a solid cell-edge wall using the KayKit `wall_half` piece and register it for the
-   * occlusion cutaway (issue 1). `wall_half` is anchored at one end (local x ∈ [0,2]); we
-   * scale it ×2 along its length and shift back so it covers the full cell edge centered on
-   * (x,z) — a single one-cell-owned piece (no stacked/straddling walls), inset by the caller
-   * so its body sits on the room side and presents a flat surface for props.
+   * Place a cell-edge wall piece (`tile`: a full `wall` or a `wallHalf`) and register it for the
+   * occlusion cutaway. Both are placed by their NATIVE origin at (x,z): `wall` is centred (spans
+   * the full 4u edge under uniform `scale`), `wallHalf` is anchored at the slot centre and extends
+   * toward +localX (so the caller's yaw points it at the FAR half). No ×2 stretch / recenter — we
+   * now use the real native pieces, so the mesh lands exactly on its collider centerline.
    */
-  private placeWall(target: THREE.Group, x: number, y: number, z: number, rotY: number, scale: number, axis: 'X' | 'Z', mats: THREE.Material[]): void {
-    const t = this.tpl.get('wallHalf');
+  private placeWall(target: THREE.Group, tile: string, x: number, y: number, z: number, rotY: number, scale: number, axis: 'X' | 'Z', mats: THREE.Material[]): void {
+    const t = this.tpl.get(tile);
     if (!t) return;
     const o = t.clone(true);
     o.position.set(x, y, z);
     o.rotation.y = rotY;
-    // scale ×2 along the wall length (native 2 → full 4-unit edge) then recenter the anchor.
-    o.scale.set(scale * 2, scale, scale);
-    // the piece extends from its origin toward +localX; after rotY it points along the edge.
-    // recenter: move back by one native unit (2 * scale) along the edge direction.
-    const edgeDir = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
-    o.position.addScaledVector(edgeDir, -2 * scale);
+    o.scale.setScalar(scale);
     // CLONE this wall's material so the OCCLUSION CUTAWAY can fade THIS wall's opacity
-    // independently (the shared PBR stone material is reused across every wall, so we must
-    // give each occluding wall its own instance to drive). View-only.
+    // independently (the shared recolor material is reused across every wall, so we must give each
+    // occluding wall its own instance to drive). Handle a material ARRAY defensively (recolor
+    // assigns a single material per mesh, but a source GLB could carry several). View-only.
+    const cloneMat = (m: THREE.Material): THREE.Material => {
+      const cl = m.clone();
+      cl.userData = { ...cl.userData, occ: true };
+      cl.transparent = true;
+      mats.push(cl);
+      return cl;
+    };
     o.traverse((mn) => {
       const mesh = mn as THREE.Mesh;
-      const mm = mesh.material as THREE.Material | undefined;
-      if (mm) {
-        const cl = mm.clone();
-        cl.userData = { ...cl.userData, occ: true };
-        cl.transparent = true;
-        mesh.material = cl;
-        mats.push(cl);
-      }
+      const mm = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mm)) mesh.material = mm.map(cloneMat);
+      else if (mm) mesh.material = cloneMat(mm);
     });
     target.add(o);
     this.walls.push({ obj: o, x, z, axis, occ: 1 });
-  }
-
-  /** A stable key for a shared cell-EDGE midpoint (world x,z) so two cells dedupe to one wall. */
-  private edgeKey(x: number, z: number): string {
-    return `${Math.round(x * 8)},${Math.round(z * 8)}`;
   }
 }

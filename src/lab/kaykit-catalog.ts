@@ -1,181 +1,165 @@
 // ============================================================================
-// src/lab/kaykit-catalog.ts — the FREE KayKit dungeon pack, auto-cataloged.
+// src/lab/kaykit-catalog.ts — the free KayKit asset packs, auto-cataloged.
 // ============================================================================
 //
-// One module that turns EVERY free KayKit dungeon GLB in
-// public/models/kaykit_dungeon/ into a WorldObject so the lab can browse the
-// whole pack without 60+ hand-written object files. Each entry is a `meshObject`
-// (world-object.ts) with:
-//   - meshUrl   = the GLB
-//   - one `default` variant with NO retexture rules → keep the model's OWN
-//     materials (the pack already ships its atlas; we don't re-skin here)
-//   - level: 'object', scale 0.5 (KayKit native units → game metres, matching the
-//     6 hand-made meshObjects), footprint auto-fitted by box-fit (zero tuning)
-//   - a tidy display NAME + a CATEGORY derived from the filename
+// Turns EVERY free KayKit model (all CC0, from github.com/KayKit-Game-Assets) into a
+// browseable `meshObject` (world-object.ts) WITHOUT hand-writing ~900 object files. The
+// per-pack file lists come from the GENERATED manifest (kaykit-packs.generated.ts, written
+// by scripts/fetch-kaykit.mjs) so this stays a static literal (tree-shakeable, no FS at
+// boot) yet always in sync with what is on disk.
 //
-// SKIPPED: the 6 GLBs already covered by hand-authored objects/*.ts
-// (table_long, barrel_large, chest_gold, wall, shelves, bed_frame) so the picker
-// never shows a duplicate. lab.ts MERGES this catalog with objects/*.ts, with the
-// hand-made files winning on any id collision.
+// A PACK REGISTRY (PACKS) drives the lab's DOUBLE-NESTED side list: level 1 = pack, level 2
+// = grouping. Each PackDef knows its on-disk folder, the model extension it ships, a uniform
+// scale, and a `categoryOf` that buckets a file into a grouping. Each catalog entry:
+//   - meshUrl = models/<dir>/<file><ext>   (file may carry a subfolder, e.g. hexagon's
+//     `tiles/base/hex_grass`, or a `.gltf` infix, e.g. remastered's `banner_blue` → .gltf.glb)
+//   - one `default` variant with NO retexture → keep the pack's OWN atlas (each pack ships
+//     its own texture; we don't re-skin here)
+//   - level 'object', footprint auto-fitted by box-fit (zero per-object tuning)
+//   - a tidy display NAME + a CATEGORY derived from the filename / subfolder
 //
-// IDS: catalog ids are prefixed `kk-<filename>` so they can never collide with a
-// hand-made objects/<id>.ts file (and read clearly in the URL ?object=kk-…).
+// SKIPPED (dungeon pack only): the 6 legacy GLBs already covered by hand-authored
+// objects/*.ts (table_long, barrel_large, chest_gold, wall, shelves, bed_frame) so the
+// picker never shows a duplicate. lab.ts MERGES this catalog with objects/*.ts (hand-made
+// files win) and folds the 6 hand-made dungeon objects into the Dungeon pack's groups.
+//
+// IDS: `kk-<packId>-<slug>` so they can never collide with a hand-made objects/<id>.ts file
+// nor across packs, and read clearly in the URL (?object=kk-furniture-armchair).
 //
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================
 
 import { meshObject, type WorldObject } from './world-object.ts';
+import { PACK_FILES } from './kaykit-packs.generated.ts';
 
-/** The side-list categories, in display order. Catalog entries land in these;
- *  the lab adds a "Featured" + "Procedural" group for the hand-made objects. */
-export type Category = 'Structure' | 'Furniture' | 'Containers' | 'Decor';
-
-/** Display order for the catalog categories (the picker renders headers in this order). */
-export const CATALOG_CATEGORY_ORDER: Category[] = ['Structure', 'Furniture', 'Containers', 'Decor'];
-
-/** The KayKit GLBs already covered by hand-made objects/*.ts — never re-catalog these. */
-const COVERED_BY_HANDMADE = new Set([
-  'table_long', // → objects/table.ts
-  'barrel_large', // → objects/barrel.ts
-  'chest_gold', // → objects/treasure-chest.ts
-  'wall', // → objects/wall.ts
-  'shelves', // → objects/bookshelf.ts
-  'bed_frame', // → objects/bed.ts
-]);
-
-/**
- * The full file list of public/models/kaykit_dungeon/*.glb (basename, no ext).
- * Kept as a literal list (rather than a runtime dir scan) so the catalog is
- * static + tree-shakeable and the build never depends on the filesystem at boot.
- * Mirror this if the pack changes; the helper below derives name + category.
- */
-const GLB_FILES = [
-  'banner_blue', 'banner_red',
-  'barrel_large', 'barrel_small', 'barrel_small_stack',
-  'barrier', 'barrier_corner',
-  'bed_decorated', 'bed_frame',
-  'bottle_A_green', 'bottle_B_brown',
-  'box_large', 'box_small', 'box_stacked',
-  'candle_lit', 'candle_triple',
-  'chair',
-  'chest', 'chest_gold',
-  'coin_stack_large', 'coin_stack_medium',
-  'column',
-  'crates_stacked',
-  'floor_dirt_large', 'floor_foundation_allsides', 'floor_tile_grate',
-  'floor_tile_large', 'floor_tile_small', 'floor_tile_small_decorated', 'floor_wood_large',
-  'keyring_hanging',
-  'pillar', 'pillar_decorated',
-  'plate_stack',
-  'rubble_half', 'rubble_large',
-  'shelf_large', 'shelf_small', 'shelf_small_candles', 'shelves',
-  'stairs', 'stairs_narrow', 'stairs_walled', 'stairs_wide',
-  'sword_shield',
-  'table_long', 'table_long_tablecloth', 'table_medium', 'table_small',
-  'torch', 'torch_lit', 'torch_mounted',
-  'wall', 'wall_Tsplit', 'wall_arched', 'wall_archedwindow_open', 'wall_broken',
-  'wall_corner', 'wall_corner_small', 'wall_crossing', 'wall_doorway',
-  'wall_doorway_sides', 'wall_endcap', 'wall_gated', 'wall_half',
-  'wall_pillar', 'wall_window_open',
-] as const;
-
-/**
- * Bucket a GLB into a category from its filename prefix. Ordered most-specific to
- * least so e.g. `shelf_*` (Furniture) is decided before a generic fallback.
- */
-function categoryOf(file: string): Category {
-  // STRUCTURE: the built shell of the dungeon — walls, floors, stairs, pillars, barriers.
-  if (
-    file.startsWith('wall') ||
-    file.startsWith('floor') ||
-    file.startsWith('stairs') ||
-    file.startsWith('pillar') ||
-    file === 'column' ||
-    file.startsWith('barrier')
-  ) {
-    return 'Structure';
-  }
-  // FURNITURE: things placed in a room you sit/sleep/work at.
-  if (
-    file.startsWith('table') ||
-    file === 'chair' ||
-    file.startsWith('bed') ||
-    file.startsWith('shelf') ||
-    file === 'shelves' ||
-    file.startsWith('bench')
-  ) {
-    return 'Furniture';
-  }
-  // CONTAINERS: holdable storage props.
-  if (
-    file.startsWith('barrel') ||
-    file.startsWith('crate') ||
-    file.startsWith('box') ||
-    file.startsWith('chest')
-  ) {
-    return 'Containers';
-  }
-  // DECOR: everything else (candles, banners, bottles, plates, coins, books, swords,
-  // rubble, keyrings, torches, rugs). The catch-all so no GLB is ever left out.
-  return 'Decor';
+/** One asset pack: its on-disk folder, the extension its models ship, a uniform import
+ *  scale, the display order of its groupings, and how a file maps to a grouping. */
+export interface PackDef {
+  /** Stable pack id (matches a PACK_FILES key + the id prefix). */
+  id: string;
+  /** Display label for the level-1 dropdown. */
+  label: string;
+  /** Folder under public/models/. */
+  dir: string;
+  /** Model file extension (meshUrl = models/<dir>/<file><ext>). */
+  ext: string;
+  /** Uniform scale: KayKit native units → game metres. */
+  scale: number;
+  /** Grouping display order (the picker renders level-2 dropdowns in this order; any
+   *  grouping not listed here is appended alphabetically). */
+  categories: readonly string[];
+  /** Bucket a manifest file (possibly with a subfolder / `.gltf` infix) into a grouping. */
+  categoryOf(file: string): string;
 }
 
-/** Pretty display name from a filename: split on `_`, Title-Case, keep single
- *  uppercase letters (A/B model suffixes) as-is. e.g. `wall_archedwindow_open` →
- *  "Wall Archedwindow Open"; `bottle_A_green` → "Bottle A Green". */
+/** The 6 legacy-dungeon GLBs already covered by hand-made objects/*.ts — never re-catalog. */
+const COVERED_BY_HANDMADE = new Set([
+  'table_long', 'barrel_large', 'chest_gold', 'wall', 'shelves', 'bed_frame',
+]);
+
+// ---- file → model token / display name -------------------------------------------------
+
+/** The clean model token for a manifest file: drop any leading subfolder and a `.gltf`
+ *  infix (Dungeon Remastered ships `<name>.gltf.glb`, listed as `<name>.gltf`). */
+function cleanKey(file: string): string {
+  const last = file.slice(file.lastIndexOf('/') + 1);
+  return last.replace(/\.gltf$/i, '');
+}
+
+/** Pretty display name from a file: clean it, split on `_`, Title-Case, keep single
+ *  uppercase letters (A/B model suffixes) as-is. `bottle_A_green` → "Bottle A Green". */
 function nameOf(file: string): string {
-  return file
+  return cleanKey(file)
     .split('_')
-    .map((part) => {
-      if (part.length === 0) return part;
-      if (part.length === 1) return part.toUpperCase(); // A / B variant letters
-      return part.charAt(0).toUpperCase() + part.slice(1);
-    })
+    .map((p) => (p.length === 0 ? p : p.length === 1 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1)))
     .join(' ');
 }
 
-/** Catalog id for a GLB (prefixed so it can't collide with a hand-made objects/<id>.ts). */
-export function catalogId(file: string): string {
-  return `kk-${file}`;
+/** URL-safe, collision-free id: includes subfolders so two same-named files in different
+ *  subfolders stay distinct (e.g. hexagon `buildings/blue/...` vs `buildings/red/...`). */
+function idOf(packId: string, file: string): string {
+  const slug = file.replace(/\.gltf$/i, '').replace(/[^a-z0-9_]+/gi, '-').toLowerCase();
+  return `kk-${packId}-${slug}`;
 }
 
-/** The category of a catalog entry by its id (so the lab can group without re-deriving). */
-const _categoryById = new Map<string, Category>();
+// ---- grouping schemes ------------------------------------------------------------------
 
-/** Build the one WorldObject for a GLB: a single `default` variant, no re-skin,
- *  scale 0.5, auto-fit footprint — the model's own materials, untouched. */
-function catalogObject(file: string): WorldObject {
-  return meshObject({
-    meshUrl: `models/kaykit_dungeon/${file}.glb`,
-    name: nameOf(file),
-    describe: `KayKit dungeon pack mesh (${file}.glb), shown with its own materials. Footprint auto-fitted by box-fit.`,
-    level: 'object',
-    scale: 0.5, // KayKit native units → game metres (matches the hand-made meshObjects)
-    variants: {
-      default: [], // no retexture rules → keep the GLB's authored materials
-    },
-  });
+/** Dungeon family (legacy + remastered): the original Structure/Furniture/Containers/Decor. */
+function dungeonCategory(file: string): string {
+  const k = cleanKey(file);
+  if (/^(wall|floor|stair|pillar|barrier|arch|gate|foundation|scaffold|door)/.test(k) || k === 'column') return 'Structure';
+  if (/^(table|chair|bed|shelf|shelves|bench|throne|stool)/.test(k)) return 'Furniture';
+  if (/^(barrel|crate|box|chest|sack)/.test(k)) return 'Containers';
+  return 'Decor';
 }
 
-/**
- * The generated catalog: { id → WorldObject } for every KayKit GLB NOT already
- * covered by a hand-made objects/*.ts. Categories are recorded alongside in
- * `kaykitCategories` so the picker can group rows.
- */
+/** Hexagon: the pack already buckets by subfolder (buildings / decoration / tiles). */
+function hexagonCategory(file: string): string {
+  const top = file.split('/')[0] ?? '';
+  return top ? top.charAt(0).toUpperCase() + top.slice(1) : 'Misc';
+}
+
+/** Shared keyword categorizer for the prop packs (furniture/halloween/restaurant/city/
+ *  prototype/spacebase). Ordered most-specific first; unmatched → 'Decor' (catch-all so no
+ *  model is ever dropped). Substring match on the cleaned, lowercased token. */
+const GENERIC_RULES: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['Lighting', ['candle', 'torch', 'lantern', 'lamp', 'brazier', 'chandelier', 'sconce', 'light']],
+  ['Furniture', ['table', 'chair', 'stool', 'bench', 'bed', 'couch', 'sofa', 'armchair', 'cabinet',
+    'shelf', 'desk', 'dresser', 'wardrobe', 'drawer', 'counter', 'sink', 'stove', 'oven', 'fridge',
+    'rug', 'pillow', 'cushion', 'pictureframe', 'mirror', 'clock', 'bookcase', 'curtain', 'cactus']],
+  ['Containers', ['barrel', 'crate', 'box', 'chest', 'basket', 'sack', 'bucket', 'jar', 'pot', 'pan',
+    'plate', 'bowl', 'cup', 'mug', 'bottle', 'lid', 'can', 'cargo', 'container', 'dumpster', 'pallet', 'trash', 'bin']],
+  ['Vehicles', ['car', 'truck', 'van', 'bus', 'vehicle', 'cart', 'wagon', 'boat', 'ship', 'lander', 'rover']],
+  ['Nature', ['tree', 'bush', 'shrub', 'grass', 'flower', 'rock', 'stone', 'log', 'mushroom', 'fern', 'vine', 'pumpkin', 'web']],
+  ['Structure', ['wall', 'floor', 'stair', 'pillar', 'column', 'barrier', 'arch', 'fence', 'gate',
+    'foundation', 'roof', 'ground', 'path', 'road', 'bridge', 'tile', 'hex', 'building', 'tower',
+    'tunnel', 'module', 'platform', 'post', 'door', 'pavement', 'scaffold', 'windturbine', 'structure', 'terrain', 'base']],
+];
+function genericCategory(file: string): string {
+  const k = cleanKey(file).toLowerCase();
+  for (const [cat, kws] of GENERIC_RULES) if (kws.some((w) => k.includes(w))) return cat;
+  return 'Decor';
+}
+
+const PROP_ORDER = ['Structure', 'Furniture', 'Containers', 'Lighting', 'Vehicles', 'Nature', 'Decor'] as const;
+const DUNGEON_ORDER = ['Structure', 'Furniture', 'Containers', 'Decor'] as const;
+
+// ---- the pack registry (display order: Dungeon → Space Base) ----------------------------
+
+export const PACKS: readonly PackDef[] = [
+  { id: 'dungeon', label: 'KayKit Dungeon', dir: 'kaykit_dungeon', ext: '.glb', scale: 0.5, categories: DUNGEON_ORDER, categoryOf: dungeonCategory },
+  { id: 'dungeon_remastered', label: 'KayKit Dungeon (Remastered)', dir: 'kaykit_dungeon_remastered', ext: '.glb', scale: 0.5, categories: DUNGEON_ORDER, categoryOf: dungeonCategory },
+  { id: 'furniture', label: 'KayKit Furniture', dir: 'kaykit_furniture', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+  { id: 'halloween', label: 'KayKit Halloween', dir: 'kaykit_halloween', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+  { id: 'restaurant', label: 'KayKit Restaurant', dir: 'kaykit_restaurant', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+  { id: 'hexagon', label: 'KayKit Medieval Hexagon', dir: 'kaykit_hexagon', ext: '.gltf', scale: 1, categories: ['Buildings', 'Decoration', 'Tiles'], categoryOf: hexagonCategory },
+  { id: 'city', label: 'KayKit City Builder', dir: 'kaykit_city', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+  { id: 'prototype', label: 'KayKit Prototype', dir: 'kaykit_prototype', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+  { id: 'spacebase', label: 'KayKit Space Base', dir: 'kaykit_spacebase', ext: '.gltf', scale: 1, categories: PROP_ORDER, categoryOf: genericCategory },
+];
+
+// ---- the generated catalog -------------------------------------------------------------
+
+/** id → WorldObject for every catalog model (every pack, minus the handmade-covered 6). */
 export const kaykitObjects: Record<string, WorldObject> = {};
-/** id → Category for every entry in `kaykitObjects` (for the grouped side list). */
-export const kaykitCategories: Record<string, Category> = {};
+/** id → packId (for the level-1 grouping). */
+export const objectPack: Record<string, string> = {};
+/** id → grouping label (for the level-2 grouping). */
+export const objectCategory: Record<string, string> = {};
 
-for (const file of GLB_FILES) {
-  if (COVERED_BY_HANDMADE.has(file)) continue;
-  const id = catalogId(file);
-  const cat = categoryOf(file);
-  kaykitObjects[id] = catalogObject(file);
-  kaykitCategories[id] = cat;
-  _categoryById.set(id, cat);
-}
-
-/** Look up a catalog entry's category (undefined for a non-catalog id). */
-export function categoryForId(id: string): Category | undefined {
-  return _categoryById.get(id);
+for (const pack of PACKS) {
+  for (const file of PACK_FILES[pack.id] ?? []) {
+    if (pack.id === 'dungeon' && COVERED_BY_HANDMADE.has(cleanKey(file))) continue;
+    const id = idOf(pack.id, file);
+    kaykitObjects[id] = meshObject({
+      meshUrl: `models/${pack.dir}/${file}${pack.ext}`,
+      name: nameOf(file),
+      describe: `${pack.label} mesh (${cleanKey(file)}), shown with its own materials. Footprint auto-fitted by box-fit.`,
+      level: 'object',
+      scale: pack.scale,
+      variants: { default: [] }, // no retexture rules → keep the model's authored materials
+    });
+    objectPack[id] = pack.id;
+    objectCategory[id] = pack.categoryOf(file);
+  }
 }

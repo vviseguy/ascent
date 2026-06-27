@@ -62,32 +62,29 @@
 // already proves correct. Pure function of (floors, params): deterministic.
 // ============================================================================
 
-import { type Fixed, fromInt, fromFloatConst, toRaw, add, mul, sub } from '../sim/fixed/fixed.ts';
+import { type Fixed, fromInt, fromFloatConst, fromRaw, toRaw, add, mul, sub } from '../sim/fixed/fixed.ts';
 import { type AABB, type Terrain, makeBox } from '../sim/collide/terrain.ts';
 import { type Floor, type CellType, cellXY, cellId, edgeKey } from '../floor/types.ts';
-import {
-  type WallGrid, type EdgeState, type PostState,
-  buildWallGrid, wallMaskFor, postAt,
-} from '../floor/wallgrid.ts';
+import { type WallGrid, buildWallGrid, wallMaskFor } from '../floor/wallgrid.ts';
+import { type Placement, type PieceKind, type Variant, classAt, DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wall-model.ts';
+import { buildBlueprint } from '../floor/blueprint.ts';
+import { makeStyle } from '../floor/wall-style.ts';
 
 /**
- * World size of one floor cell (meters). Tuned 3 -> 4 -> 4.5 to enlarge every stratum's
- * playable footprint. At the game's 5x5 grid the floor spans 5*CELL_SIZE across:
- *   - original 3.0  -> 15.0 u  (225 u^2)
- *   - prior    4.0  -> 20.0 u  (400 u^2, 1.78x)
- *   - now      4.5  -> 22.5 u  (506 u^2, ~2.25x the original)
- * giving crews ~2.25x the original area to move and route around (the user's "make it
- * clearly bigger" ask). A larger grid (renderer-driven later) scales linearly from here.
+ * World size of one floor cell (meters) = the KayKit floor tile's NATIVE 4u (render scale 1.0,
+ * since the renderer scales pieces by cellSize/4). 4u is exactly 2 wall-modules (the 2u half-
+ * wall), so corners/half-walls tile cleanly — the old 4.5 cell was 2.25 modules and left a 0.5u
+ * fudge at every turn. Walls are the native 1u-thick KayKit pieces, centered on the shared tile
+ * edge; the collision box (WALL_T, thinner) sits on that same line inside the mesh.
  *
  * INVARIANT this must preserve: the STRAIGHT stair's run length along Z
- * (STEPS_TOTAL*TREAD = 12*0.9 = 10.8 u) must fit inside the stair's Z footprint. The
- * run climbs from the interior toward the +Z exit edge across ceil(10.8/4.5) ≈ 3 cell
- * rows; at GAME_GRID_SIZE (height 8) there is ample depth, and its VERTICAL math is
- * untouched (RISE, FLOOR_HEIGHT, STEPS_TOTAL all unchanged) — the Anchor route-check
- * stays valid. Kept on a 0.5 grid (fromFloatConst, exact in Q16.16) so no float
+ * (STEPS_TOTAL*TREAD = 12*0.9 = 10.8 u) must fit inside the stair's Z footprint. The run climbs
+ * across ceil(10.8/4.0) = 3 cell rows; at GAME_GRID_SIZE there is ample depth, and the VERTICAL
+ * stair math (RISE, FLOOR_HEIGHT, STEPS_TOTAL) is untouched — the Anchor climb (prove:game PROOF
+ * 7/8) re-confirms it at 4u. Kept on a 0.5 grid (fromFloatConst, exact in Q16.16) so no float
  * divergence leaks into the sim.
  */
-export const CELL_SIZE: Fixed = fromFloatConst(4.5);
+export const CELL_SIZE: Fixed = fromFloatConst(4.0);
 /**
  * The square grid size (cells per side) the game compiles every stratum at. The ONE
  * source of truth for the floor footprint — scene.ts (buildTower) and the proofs
@@ -123,7 +120,11 @@ export const FLOOR_HEIGHT: Fixed = fromInt(6);
 const SLAB: Fixed = fromFloatConst(0.5);
 /** Height of the low lip on a BREAK/BUTTON/WEIGHT seam (meters). */
 const LIP: Fixed = fromFloatConst(0.6);
-/** Perimeter wall thickness (meters) — sits OUTSIDE the cell footprint. */
+/** Wall collision thickness (meters). Kept THIN (0.4) and centered on the shared 4u-tile edge:
+ *  it sits inside the 1u wall mesh, on the same line, so the hitbox aligns with the mesh without
+ *  overhanging the adjacent floor tiles' cores (a 1u box would exceed the route-check's 0.4
+ *  footprint-shrink and read the floor as ceilinged, breaking the climb). Position == mesh; the
+ *  thinner box just doesn't eat into the 4u cells. */
 const WALL_T: Fixed = fromFloatConst(0.4);
 
 // ---- stair tuning (authoring constants) -------------------------------------
@@ -243,37 +244,35 @@ export interface CellTile {
 }
 
 /**
- * One WALL-EDGE slot projected to world coordinates (Layer C — src/floor/wallgrid.ts). This
- * is the SHARED CONTRACT both consumers read so render + collision match by construction
- * (docs/13 §C-bis): the renderer draws a wall mesh on SOLID / an arch on DOORWAY; the
- * collision compiler emits a full wall box on SOLID, a low lip on LIP, and nothing on
- * DOORWAY (a real gap). Each slot is one shared cell-edge line (deduped by construction —
- * one entry per seam). OPEN slots are omitted entirely. Coords are raw Q16.16 world units.
+ * One wall PIECE placed in the world — the unified IR that BOTH render and collision consume, so
+ * they match by construction (no per-target re-derivation). Produced by projecting the Style's
+ * `Placement[]` (lattice squares) to native-4u world: each lattice position is one 2u module, so a
+ * STRAIGHT is a 2u wall segment, a CORNER/TEE/CROSS/CAP a junction, a DOORWAY a gap. `dirs` drives
+ * the junction yaw; `axis` the straight orientation. The targets map (piece, variant) → asset/box
+ * via a small registry, so new wall types (partial / arched / windowed / walled-stairs) are
+ * registry rows, not pipeline changes. Coords raw Q16.16.
  */
-export interface WallSeg {
-  /** 'X' = an east/west wall (faces ±X, spans Z); 'Z' = a north/south wall (faces ±Z, spans X). */
+export interface WorldPlacement {
+  piece: PieceKind;
+  variant: Variant;
+  /**
+   * Vertical PROFILE — the 3D axis of the generalization, derived from the blueprint class:
+   *  - FULL : a full-height wall (a WALL square — floor↔void / boundary / unconnected).
+   *  - LOW  : a low passable bump (a WALL_POSSIBLE square — a break/button/weight gate; this is
+   *           what keeps the floor's fallback layer physically passable).
+   *  - GAP  : no collider (a DOORWAY — a real opening).
+   * Partial walls / railings reuse LOW; arched/windowed walls will add a banded profile here.
+   */
+  profile: 'FULL' | 'LOW' | 'GAP';
+  /** World X / Z of the lattice square center (raw Q16.16). */
+  x: number;
+  z: number;
+  /** Junction wall-direction bitmask (DIR_*) for CORNER/TEE/CROSS/CAP/PILLAR; 0 for runs. */
+  dirs: number;
+  /** Run axis for STRAIGHT/DOORWAY: 'X' = east/west wall, 'Z' = north/south. */
   axis: 'X' | 'Z';
-  /** Slot state — SOLID | DOORWAY | LIP (OPEN slots are not emitted). */
-  state: EdgeState;
-  /** World X of the slot line center (raw Q16.16). */
-  x: number;
-  /** World Z of the slot line center (raw Q16.16). */
-  z: number;
-  /** Length of the slot along its run (raw Q16.16) — one CELL_SIZE. */
-  len: number;
-  /** The two cells the slot separates (cellId), or -1 on the off-grid (boundary) side. */
-  cellA: number;
-  cellB: number;
-  /** Lock id if a LockedDoor gates this seam, else -1 (lets collision plug the doorway). */
+  /** Lock id if this DOORWAY is gated by a LockedDoor, else -1. */
   doorId: number;
-}
-
-/** One CORNER POST projected to world coordinates — a pillar at a true convex corner. */
-export interface PostPt {
-  state: PostState;
-  /** World X / Z of the corner point (raw Q16.16). */
-  x: number;
-  z: number;
 }
 
 /**
@@ -295,16 +294,17 @@ export interface StratumCellGrid {
   /** Dense row-major tiles, length width*height, index = row*width + col. */
   cells: CellTile[];
   /**
-   * Layer C — the explicit WALL/EDGE GRID (coordinate-free slot states) this stratum's
-   * walls/doors/posts derive from. The per-cell `CellTile.wallMask` is a lossy projection
-   * of this (kept for the renderer's fog/decoration); `wallSegs`/`posts` are the world-
-   * projected forms the renderer + collision compiler consume directly. See WallGrid.
+   * Layer C — the explicit WALL/EDGE GRID (coordinate-free slot states). The blueprint derives
+   * from it; the per-cell `CellTile.wallMask` is a lossy projection kept for the renderer's fog
+   * BFS + decoration. See WallGrid.
    */
   wallGrid: WallGrid;
-  /** World-projected wall-edge slots (SOLID/DOORWAY/LIP; OPEN omitted) — the shared contract. */
-  wallSegs: WallSeg[];
-  /** World-projected corner pillars (PILLAR only). */
-  posts: PostPt[];
+  /**
+   * The UNIFIED wall IR: the Blueprint→Style `Placement[]` projected to native-4u world pieces.
+   * BOTH render and collision consume THIS, so they match by construction and new wall types are
+   * just registry rows. See WorldPlacement.
+   */
+  wallPlacements: WorldPlacement[];
 }
 
 export interface CompiledTower {
@@ -361,23 +361,6 @@ function cellCenter(floor: Floor, cell: number): { x: Fixed; z: Fixed } {
   return { x: ox, z: oz };
 }
 
-/**
- * Build a fast edge-kind lookup for one floor: numeric edgeKey → EdgeKind string.
- * The old per-seam linear scan of floor.edges was O(edges) per query, making compile
- * quadratic in cell count (≈135ms at 30×30). This map makes each seam query O(1), so
- * compile scales ~linearly with the grid. Map is used for LOOKUP ONLY (never iterated
- * for output), so it introduces no Map-iteration-order determinism hazard.
- */
-function buildEdgeKindMap(floor: Floor): Map<number, string> {
-  const m = new Map<number, string>();
-  for (const e of floor.edges) m.set(edgeKey(e.a, e.b), e.kind);
-  return m;
-}
-
-/** Does an edge between two adjacent cells exist? Returns its kind, or null. O(1) via map. */
-function edgeKindBetween(edgeKinds: ReadonlyMap<number, string>, a: number, b: number): string | null {
-  return edgeKinds.get(edgeKey(a, b)) ?? null;
-}
 
 /**
  * The two adjacent EXIT-ROW columns a stratum's stair occupies. All top-row cells
@@ -484,11 +467,10 @@ export function compileTower(
     const stairCells = hasStair
       ? stairFootprintCells(idx, floor.width, floor.height)
       : new Set<number>();
-    const skipLipCells = new Set<number>([...holeCells, ...stairCells]);
-
-    // O(1) edge-kind lookup for this floor (built once; replaces a per-seam linear
-    // scan that made compile quadratic in cell count — see buildEdgeKindMap).
-    const edgeKinds = buildEdgeKindMap(floor);
+    // --- the LAYOUT grid + Layer-C wall/edge slots for THIS stratum (built FIRST: it is now
+    //     the single source of truth the collision below AND the renderer both consume) ---
+    const grid = buildCellGrid(floor, idx, baseY, holeCells, stairCells);
+    cellGrid[idx] = grid;
 
     // a solid slab tile under every cell (the walkable floor of this stratum),
     // EXCEPT the exit opening above the stratum-below's stair.
@@ -501,43 +483,20 @@ export function compileTower(
       ));
     }
 
-    // seam treatment: between horizontally/vertically adjacent cells, a non-WALK,
-    // non-existent edge gets a low lip (you can cross but it's a speed bump); a GAP
-    // edge gets nothing (open chasm — flattened for now, see H2). WALK edges are
-    // flush. Lips touching stair/hole cells are skipped (never obstruct the climb).
-    for (let c = 0; c < floor.cells.length; c++) {
-      const { x: cx, y: cy } = cellXY(floor.width, c);
-      for (const [dx, dy] of [[1, 0], [0, 1]] as const) {
-        const nx = cx + dx, ny = cy + dy;
-        if (nx >= floor.width || ny >= floor.height) continue;
-        const nb = ny * floor.width + nx;
-        if (skipLipCells.has(c) || skipLipCells.has(nb)) continue;
-        const kind = edgeKindBetween(edgeKinds, c, nb);
-        if (kind === 'WALK' || kind === 'GAP') continue; // flush or open chasm
-        // no edge OR a break/button/weight gate → a low lip wall on the seam
-        const a = cellCenter(floor, c);
-        const b = cellCenter(floor, nb);
-        const mx = mul(add(a.x, b.x), fromFloatConst(0.5));
-        const mz = mul(add(a.z, b.z), fromFloatConst(0.5));
-        const t = fromFloatConst(0.2);
-        solids.push(makeBox(
-          sub(mx, dx ? t : half), baseY, sub(mz, dy ? t : half),
-          add(mx, dx ? t : half), add(baseY, LIP), add(mz, dy ? t : half),
-        ));
-      }
-    }
+    // --- WALLS / DOORWAYS / PILLARS straight off the Layer-C slots (collision == the visual,
+    //     docs/13 §C-bis). This REPLACES the old perimeter ring + per-seam lips: a SOLID slot
+    //     becomes a full-height thin wall, a LIP slot a low passable bump (break/button/weight
+    //     gate — the fallback-layer shortcut), a DOORWAY a real gap (no collider), a PILLAR a
+    //     corner post. Every boundary slot is SOLID, so the per-stratum walls stack into the
+    //     same gap-free safe shell the ring used to provide. The stairwell/ascent-hole cells
+    //     are forced OPEN in the WallGrid, so no wall ever obstructs the climb. ---
+    emitWallsFromSlots(solids, grid, baseY, half);
 
     // --- the stair up to the next stratum ---
     if (hasStair) stairs.push(emitStair(solids, floor, idx, baseY, half));
 
-    // --- perimeter wall ring (full band height; rings stack into a shell) ---
-    emitWallRing(solids, floor, baseY, half);
-
     const ec = cellCenter(floor, floor.entry);
     entryXZ[idx] = { x: toRaw(ec.x), z: toRaw(ec.z) };
-
-    // --- read-only LAYOUT grid for the renderer (KayKit tile placement) ---
-    cellGrid[idx] = buildCellGrid(floor, idx, baseY, holeCells, stairCells);
 
     // --- puzzle bodies (locked doors / keys / rugs) for scene.ts to spawn ---
     emitPuzzleSpawns(puzzleSpawns, floor, idx, baseY);
@@ -557,18 +516,18 @@ export function compileTower(
 }
 
 /**
- * Build the read-only LAYOUT grid for one stratum off the Layer-C WallGrid (the single
- * source of truth for walls/doors/posts — src/floor/wallgrid.ts). Pure function of the
- * Floor graph + the same CELL_SIZE the collision uses, so a tile/wall placed at (cx,cz)
- * sits exactly on the slab the sim collides against.
+ * Build the read-only LAYOUT grid for one stratum: the floor cells + the UNIFIED wall IR
+ * (Blueprint → Style → Placement[] → native-4u world pieces). Pure function of the Floor graph
+ * + CELL_SIZE, so a wall placed at (x,z) lands exactly on the slab the sim collides against.
  *
- *   - `wallGrid`  : the abstract slot lattice, derived once from the floor + the climb's
- *                   open cells (hole ∪ stair seams stay OPEN).
- *   - `wallMask`  : per cell, a lossy projection of the slots (kept for the renderer's fog
- *                   BFS + decoration) — byte-identical to the old per-cell computation
- *                   (proven by wallgrid.test.ts's render-parity oracle).
- *   - `wallSegs`/`posts` : the world-projected slots both the renderer and the collision
- *                   compiler consume directly (so render + collision match by construction).
+ *   - `wallGrid`       : the abstract slot lattice (src/floor/wallgrid.ts), derived once from
+ *                        the floor + the climb's open cells (hole ∪ stair seams stay OPEN). The
+ *                        blueprint derives from it.
+ *   - `wallMask`       : per cell, a lossy projection of the slots, kept for the renderer's fog
+ *                        BFS + decoration.
+ *   - `wallPlacements` : the projected Blueprint→Style `Placement[]` — the SINGLE IR both the
+ *                        renderer and the collision compiler consume (render == collision by
+ *                        construction; new wall types are registry rows, not pipeline changes).
  */
 function buildCellGrid(
   floor: Floor,
@@ -611,59 +570,52 @@ function buildCellGrid(
     });
   }
 
-  // --- world projection of the slots (tower.ts owns CELL_SIZE / the grid centering) ---
+  // --- native-4u world projection (tower.ts owns CELL_SIZE / the grid centering: cell col
+  //     center = (col - cHalfCols)*CS; the lattice step is half a cell = 2u = one wall module). ---
   const CS = CELL_SIZE;
   const half = mul(CS, fromFloatConst(0.5));
-  // the grid is centered like cellCenter(): cell col center = (col - cHalfCols)*CS.
   const cHalfCols = (W - 1) / 2 | 0;
   const cHalfRows = (H - 1) / 2 | 0;
-  const colCenterX = (col: number): Fixed => mul(sub(fromInt(col), fromInt(cHalfCols)), CS);
-  const rowCenterZ = (row: number): Fixed => mul(sub(fromInt(row), fromInt(cHalfRows)), CS);
-  // a wall LINE sits on a cell face: half a cell off the adjacent cell's center.
-  const vLineX = (col: number): Fixed => sub(colCenterX(col), half); // west face of column `col`
-  const hLineZ = (row: number): Fixed => sub(rowCenterZ(row), half); // south face of row `row`
 
-  // doorId lookup for slots a LockedDoor gates (lets collision plug the doorway).
+  // doorId lookup for a doorway lane (matches a LockedDoor on the two cells it joins).
   const doorMap = new Map<number, number>();
   for (const d of floor.lockedDoors ?? []) doorMap.set(edgeKey(d.a, d.b), d.doorId);
   const doorIdOf = (a: number, b: number): number =>
     (a >= 0 && b >= 0) ? (doorMap.get(edgeKey(a, b)) ?? -1) : -1;
 
-  const wallSegs: WallSeg[] = [];
-  const lenRaw = toRaw(CS);
-  // VERTICAL (E/W) slots: the line west of column `col`, between cells (col-1,row)/(col,row).
-  for (let row = 0; row < H; row++) {
-    for (let col = 0; col <= W; col++) {
-      const state = wallGrid.vEdges[col + row * (W + 1)]!;
-      if (state === 'OPEN') continue;
-      const a = col > 0 ? cellId(W, col - 1, row) : -1;
-      const b = col < W ? cellId(W, col, row) : -1;
-      wallSegs.push({
-        axis: 'X', state, x: toRaw(vLineX(col)), z: toRaw(rowCenterZ(row)),
-        len: lenRaw, cellA: a, cellB: b, doorId: doorIdOf(a, b),
-      });
+  // --- Phase-2b: the UNIFIED IR — Blueprint → Style → Placement[] → native-4u world pieces. ---
+  // Each lattice step is half a cell (`half` = CELL_SIZE/2 = 2u = one wall module), so a square at
+  // lattice (lcol,lrow) sits at world ((lcol-1)*half - cHalfCols*CS, (lrow-1)*half - cHalfRows*CS),
+  // which lands cell (cx,cy) [lattice 2cx+1] exactly on cellCenter(cx,cy). STRAIGHT → a 2u wall
+  // module; CORNER/TEE/CROSS/CAP → a junction; DOORWAY → a gap (doorId from the lane's two cells).
+  const blueprint = buildBlueprint(floor, { openCells });
+  const placements = makeStyle().realize(blueprint, BigInt(floor.meta.runSeed));
+  const latticeX = (lcol: number): Fixed => sub(mul(fromInt(lcol - 1), half), mul(fromInt(cHalfCols), CS));
+  const latticeZ = (lrow: number): Fixed => sub(mul(fromInt(lrow - 1), half), mul(fromInt(cHalfRows), CS));
+  const inGrid = (cx: number, cy: number): boolean => cx >= 0 && cx < W && cy >= 0 && cy < H;
+  const doorIdForLane = (p: Placement): number => {
+    if (p.axis === 'X') { // horizontal lane (odd col, even row): the door joins the N/S cells
+      const cx = (p.col - 1) / 2, ny = p.row / 2, sy = p.row / 2 - 1;
+      const n = inGrid(cx, ny) ? cellId(W, cx, ny) : -1;
+      const s = inGrid(cx, sy) ? cellId(W, cx, sy) : -1;
+      return doorIdOf(n, s);
     }
-  }
-  // HORIZONTAL (N/S) slots: the line south of row `row`, between cells (col,row-1)/(col,row).
-  for (let row = 0; row <= H; row++) {
-    for (let col = 0; col < W; col++) {
-      const state = wallGrid.hEdges[col + row * W]!;
-      if (state === 'OPEN') continue;
-      const a = row > 0 ? cellId(W, col, row - 1) : -1;
-      const b = row < H ? cellId(W, col, row) : -1;
-      wallSegs.push({
-        axis: 'Z', state, x: toRaw(colCenterX(col)), z: toRaw(hLineZ(row)),
-        len: lenRaw, cellA: a, cellB: b, doorId: doorIdOf(a, b),
-      });
-    }
-  }
-  // CORNER POSTS: pillars at true convex corners only.
-  const posts: PostPt[] = [];
-  for (let prow = 0; prow <= H; prow++) {
-    for (let pcol = 0; pcol <= W; pcol++) {
-      if (postAt(wallGrid, pcol, prow) !== 'PILLAR') continue;
-      posts.push({ state: 'PILLAR', x: toRaw(vLineX(pcol)), z: toRaw(hLineZ(prow)) });
-    }
+    const cy = (p.row - 1) / 2, ex = p.col / 2, wx = p.col / 2 - 1; // vertical lane: E/W cells
+    const e = inGrid(ex, cy) ? cellId(W, ex, cy) : -1;
+    const wc = inGrid(wx, cy) ? cellId(W, wx, cy) : -1;
+    return doorIdOf(e, wc);
+  };
+  const wallPlacements: WorldPlacement[] = [];
+  for (const p of placements) {
+    const profile: WorldPlacement['profile'] = p.piece === 'DOORWAY'
+      ? 'GAP'
+      : (classAt(blueprint, p.col, p.row) === 'WALL_POSSIBLE' ? 'LOW' : 'FULL');
+    wallPlacements.push({
+      piece: p.piece, variant: p.variant, profile,
+      x: toRaw(latticeX(p.col)), z: toRaw(latticeZ(p.row)),
+      dirs: p.dirs, axis: p.axis,
+      doorId: p.piece === 'DOORWAY' ? doorIdForLane(p) : -1,
+    });
   }
 
   return {
@@ -674,8 +626,7 @@ function buildCellGrid(
     surfaceY,
     cells,
     wallGrid,
-    wallSegs,
-    posts,
+    wallPlacements,
   };
 }
 
@@ -768,26 +719,70 @@ function emitStair(
 }
 
 /**
- * Emit the perimeter wall ring for one stratum: four FLOOR_HEIGHT-tall boxes just
- * OUTSIDE the cell footprint (no playable area lost). Consecutive strata's rings
- * stack flush (top of ring N = base of ring N+1), forming a gap-free shell.
+ * Emit one stratum's WALL collision AABBs from the UNIFIED IR (grid.wallPlacements) — the SAME
+ * pieces the renderer draws, so collision == masonry by construction (docs/13 §C-bis). Each
+ * lattice position is one 2u wall module:
+ *   - STRAIGHT  → a 2u-long thin box (WALL_T) along its axis, at the module's full height.
+ *   - CORNER/TEE/CROSS/CAP → a 1u-long arm box per wall direction in `dirs` (arms meet the
+ *     adjacent lanes' 2u boxes → a continuous wall; an L / T / + / stub at the joint).
+ *   - PILLAR    → a small WALL_T-square post.
+ *   - DOORWAY (profile GAP) → no collider (a real opening; a locked door is a separate body).
+ * The PROFILE sets height: FULL → FLOOR_HEIGHT (a real wall), LOW → LIP (a passable break/
+ * button/weight bump — keeps the fallback layer crossable). Boundary squares are WALL→FULL, so
+ * consecutive strata stack into a gap-free safe shell; stairwell/hole cells are forced OPEN so
+ * no wall blocks the climb. All coords raw Q16.16 → exact, deterministic.
  */
-function emitWallRing(solids: AABB[], floor: Floor, baseY: Fixed, half: Fixed): void {
-  const lo = cellCenter(floor, 0); // cell (0, 0)
-  const hi = cellCenter(floor, floor.cells.length - 1); // cell (W-1, H-1)
-  const minX = sub(lo.x, half);
-  const maxX = add(hi.x, half);
-  const minZ = sub(lo.z, half);
-  const maxZ = add(hi.z, half);
-  const top = add(baseY, FLOOR_HEIGHT);
-  const oMinX = sub(minX, WALL_T);
-  const oMaxX = add(maxX, WALL_T);
-  const oMinZ = sub(minZ, WALL_T);
-  const oMaxZ = add(maxZ, WALL_T);
-  solids.push(makeBox(oMinX, baseY, oMinZ, minX, top, oMaxZ)); // west
-  solids.push(makeBox(maxX, baseY, oMinZ, oMaxX, top, oMaxZ)); // east
-  solids.push(makeBox(minX, baseY, oMinZ, maxX, top, minZ)); // south
-  solids.push(makeBox(minX, baseY, maxZ, maxX, top, oMaxZ)); // north
+function emitWallsFromSlots(solids: AABB[], grid: StratumCellGrid, baseY: Fixed, half: Fixed): void {
+  const halfT = mul(WALL_T, fromFloatConst(0.5));         // half wall thickness (0.2)
+  const moduleHalf = mul(half, fromFloatConst(0.5));      // half a 2u module (1.0)
+  const topFull = add(baseY, FLOOR_HEIGHT);
+  const topLow = add(baseY, LIP);
+  const topOf = (low: boolean): Fixed => (low ? topLow : topFull);
+
+  // Decompose EVERY wall into 1u half-segments (per wall direction), then merge all contiguous
+  // collinear same-profile ones into maximal run boxes — so a straight that passes through a
+  // tee/cross simply continues, and only a real turn ends a box. Minimal box count, exact cover.
+  const oneURaw = toRaw(moduleHalf); // 1u in raw
+  interface Seg { perp: number; lo: number; low: boolean } // half-seg covers [lo, lo+1u]
+  const hSegs: Seg[] = []; // E-W (along X) at perp z
+  const vSegs: Seg[] = []; // N-S (along Z) at perp x
+  for (const wp of grid.wallPlacements) {
+    if (wp.profile === 'GAP') continue;                  // doorway — no collider
+    const low = wp.profile === 'LOW';
+    if (wp.piece === 'PILLAR') {                         // isolated post — its own small box
+      const x = fromRaw(wp.x), z = fromRaw(wp.z), top = topOf(low);
+      solids.push(makeBox(sub(x, halfT), baseY, sub(z, halfT), add(x, halfT), top, add(z, halfT)));
+      continue;
+    }
+    // a STRAIGHT carries both collinear dirs; a junction carries its `dirs` bitmask.
+    const dirs = wp.piece === 'STRAIGHT' ? (wp.axis === 'X' ? (DIR_E | DIR_W) : (DIR_N | DIR_S)) : wp.dirs;
+    if (dirs & DIR_E) hSegs.push({ perp: wp.z, lo: wp.x, low });             // [x, x+1u]
+    if (dirs & DIR_W) hSegs.push({ perp: wp.z, lo: wp.x - oneURaw, low });   // [x-1u, x]
+    if (dirs & DIR_N) vSegs.push({ perp: wp.x, lo: wp.z, low });
+    if (dirs & DIR_S) vSegs.push({ perp: wp.x, lo: wp.z - oneURaw, low });
+  }
+  // Sort is a total order on raw ints (deterministic — no Map/Set iteration on the output path).
+  const emitRuns = (segs: Seg[], horizontal: boolean): void => {
+    segs.sort((a, b) => a.perp - b.perp || (a.low ? 1 : 0) - (b.low ? 1 : 0) || a.lo - b.lo);
+    let i = 0;
+    while (i < segs.length) {
+      const s0 = segs[i]!;
+      let hiRaw = s0.lo + oneURaw;
+      let j = i;
+      while (j + 1 < segs.length) {
+        const sn = segs[j + 1]!;
+        if (sn.perp !== s0.perp || sn.low !== s0.low || sn.lo > hiRaw) break; // gap → end run
+        hiRaw = Math.max(hiRaw, sn.lo + oneURaw);
+        j++;
+      }
+      const lo = fromRaw(s0.lo), hi = fromRaw(hiRaw), perp = fromRaw(s0.perp), top = topOf(s0.low);
+      if (horizontal) solids.push(makeBox(lo, baseY, sub(perp, halfT), hi, top, add(perp, halfT)));
+      else solids.push(makeBox(sub(perp, halfT), baseY, lo, add(perp, halfT), top, hi));
+      i = j + 1;
+    }
+  };
+  emitRuns(hSegs, true);
+  emitRuns(vSegs, false);
 }
 
 /**

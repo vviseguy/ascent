@@ -23,11 +23,12 @@
 // LOOK-AROUND: mouse OrbitControls own the camera (left-drag orbit, wheel zoom,
 // right/shift-drag pan). A lazy auto-turntable spins UNTIL the user first interacts.
 //
-// OBJECT PICKER: in object mode a dark vertical TEXT LIST down the left side, GROUPED
-// by category (Featured · Procedural · Structure · Furniture · Containers · Decor) with
-// one NAME row per WorldObject. It is text-only — no thumbnails, no GLB loads on page
-// load (a GLB loads only when an object is picked). Click a row to switch objects
-// (preserves &variant/&seed/&boxes); the current object's row is highlighted.
+// CONTENT PICKER: a dark vertical TEXT LIST down the left side, DOUBLE-NESTED into
+// collapsible dropdowns — level 1 = pack (KayKit Dungeon · Furniture · … · Procedural),
+// level 2 = grouping (Structure · Furniture · …), level 3 = one NAME row per entry. It is
+// text-only — no thumbnails, no model loads on page load (a model loads only when picked).
+// Click a row to switch (objects → ?object=, procedural elements → ?element=; preserves
+// &seed/&boxes and &variant where valid); the current entry's branch is opened + highlighted.
 //
 // SNAPSHOT HOOKS (used by scripts/lab-snap.mjs through headless Chromium):
 //   window.__LAB_READY   true once the first frame has rendered
@@ -41,12 +42,17 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { LabElement, LabElementBuild } from './element.ts';
 import type { WorldObject, WorldObjectBuild, Footprint, WorldObjectBuildOpts } from './world-object.ts';
-import { buildObjectPicker, type PickerGroup } from './object-picker.ts';
+import { buildObjectPicker, type PickerPack, type PickerGroup, type PickerEntry } from './object-picker.ts';
 import { fitBoxesWithStats, aabbToFootprintBox, voxelGridForViz, lastStitchInfo, type FitStats } from './box-fit.ts';
 import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-controls.ts';
-import { kaykitObjects, kaykitCategories, CATALOG_CATEGORY_ORDER } from './kaykit-catalog.ts';
-import { buildThemePicker } from './theme-picker.ts';
-import { compileTheme, readThemeFromParams, THEMES } from './themes.ts';
+import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catalog.ts';
+import { buildRecolorLegend } from './recolor-legend.ts';
+
+// Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
+// canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
+// some (headless SwiftShader, odd drivers). Disabling createImageBitmap makes GLTFLoader use
+// ImageLoader. Lab-only (this never runs in the game). Must be set before any GLB loads.
+(globalThis as { createImageBitmap?: unknown }).createImageBitmap = undefined;
 
 type LabWindow = Window & {
   __LAB_READY?: boolean;
@@ -79,37 +85,87 @@ const objectMods = import.meta.glob('./objects/*.ts', { eager: true }) as Record
   { default?: WorldObject }
 >;
 const objects = new Map<string, WorldObject>();
-// the hand-made objects, and which of them are the FEATURED real-mesh meshObjects vs
-// the PROCEDURAL ones (door/table-spread/stair-room) — used to group the side list.
+// hand-made objects/*.ts — now all real KayKit-mesh objects with curated retexture variants
+// (the procedural door/stair-room/table-spread were removed: assets only). They fold into the
+// Dungeon pack's groups below (the catalog skips their GLBs via COVERED_BY_HANDMADE, no dupes).
 const handmadeIds: string[] = [];
 for (const [path, mod] of Object.entries(objectMods)) {
   const id = path.replace('./objects/', '').replace('.ts', '');
   if (mod.default) { objects.set(id, mod.default); handmadeIds.push(id); }
 }
-// the 3 PROCEDURAL hand-made objects (everything else hand-made is a featured real mesh).
-const PROCEDURAL_IDS = new Set(['door', 'table-spread', 'stair-room']);
 // MERGE the KayKit catalog (skip any id a hand-made file already claimed).
 for (const [id, obj] of Object.entries(kaykitObjects)) {
   if (!objects.has(id)) objects.set(id, obj);
 }
 
-/** The grouped side-list sections: Featured + Procedural hand-made objects, then the
- *  KayKit catalog categories (Structure · Furniture · Containers · Decor). Empty groups
- *  are dropped by the picker. */
-function buildPickerGroups(): PickerGroup[] {
-  const featured = handmadeIds.filter((id) => !PROCEDURAL_IDS.has(id)).sort();
-  const procedural = handmadeIds.filter((id) => PROCEDURAL_IDS.has(id)).sort();
-  const groups: PickerGroup[] = [
-    { label: 'Featured', ids: featured },
-    { label: 'Procedural', ids: procedural },
-  ];
-  for (const cat of CATALOG_CATEGORY_ORDER) {
-    const ids = Object.keys(kaykitObjects)
-      .filter((id) => kaykitCategories[id] === cat)
-      .sort();
-    groups.push({ label: cat, ids });
+/** Which Dungeon-pack group each hand-made mesh object folds into. */
+const HANDMADE_DUNGEON_CATEGORY: Record<string, string> = {
+  table: 'Furniture', bed: 'Furniture', bookshelf: 'Furniture',
+  barrel: 'Containers', 'treasure-chest': 'Containers', wall: 'Structure',
+};
+/** Level-2 grouping for the kept procedural LabElements (the "exceptions" — KayKit has no
+ *  organic/material equivalents). They open via element mode (?element=). */
+const PROCEDURAL_GROUP: Record<string, string> = {
+  'stone-slab': 'Terrain', 'stone-wall': 'Terrain', 'rubble-pile': 'Terrain',
+  'grass-clump': 'Nature', 'fern-shrub': 'Nature', 'vine-drape': 'Nature',
+  'vine-wall': 'Nature', 'glow-crystal': 'Nature',
+};
+const PROCEDURAL_GROUP_ORDER = ['Terrain', 'Nature'] as const;
+
+/** Order present categories by a declared order; append any extras alphabetically. */
+function orderCats(present: Iterable<string>, declared: readonly string[]): string[] {
+  const set = new Set(present);
+  return [...declared.filter((c) => set.has(c)), ...[...set].filter((c) => !declared.includes(c)).sort()];
+}
+
+/** The DOUBLE-NESTED side list (object-picker's pack → group → entry model): one pack per
+ *  KayKit PackDef (entries = catalog objects + the hand-made objects folded into the Dungeon
+ *  pack), then a "Procedural" pack of the kept LabElements. Empty packs/groups drop in the picker. */
+function buildPickerPacks(): PickerPack[] {
+  const packs: PickerPack[] = [];
+
+  for (const pack of PACKS) {
+    const byCat = new Map<string, PickerEntry[]>();
+    const add = (cat: string, e: PickerEntry): void => {
+      const l = byCat.get(cat); if (l) l.push(e); else byCat.set(cat, [e]);
+    };
+    for (const id of Object.keys(kaykitObjects)) {
+      if (objectPack[id] !== pack.id) continue;
+      const obj = objects.get(id);
+      if (obj) add(objectCategory[id] ?? 'Decor', { id, name: obj.name, kind: 'object' });
+    }
+    if (pack.id === 'dungeon') {
+      for (const id of handmadeIds) {
+        const cat = HANDMADE_DUNGEON_CATEGORY[id];
+        const obj = objects.get(id);
+        if (cat && obj) add(cat, { id, name: obj.name, kind: 'object' });
+      }
+    }
+    const groups: PickerGroup[] = orderCats(byCat.keys(), pack.categories).map((label) => ({
+      label,
+      entries: (byCat.get(label) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+    packs.push({ label: pack.label, groups });
   }
-  return groups;
+
+  // Procedural pack = the kept LabElements (open via element mode).
+  const byGroup = new Map<string, PickerEntry[]>();
+  for (const id of [...elements.keys()].sort()) {
+    const el = elements.get(id);
+    if (!el) continue;
+    const grp = PROCEDURAL_GROUP[id] ?? 'Misc';
+    const e: PickerEntry = { id, name: el.name, kind: 'element' };
+    const l = byGroup.get(grp); if (l) l.push(e); else byGroup.set(grp, [e]);
+  }
+  packs.push({
+    label: 'Procedural',
+    groups: orderCats(byGroup.keys(), PROCEDURAL_GROUP_ORDER).map((label) => ({
+      label,
+      entries: (byGroup.get(label) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+    })),
+  });
+
+  return packs;
 }
 
 /** Build a WIREFRAME overlay of a footprint's collision boxes (toggle ?boxes=0). */
@@ -178,13 +234,15 @@ async function boot(): Promise<void> {
   const frozen = params.get('frozen') === '1';
   const showBoxes = params.get('boxes') !== '0'; // collision-box wireframe, default ON
   const showVoxels = params.get('voxels') === '1'; // solid-voxel diagnostic cubes, default OFF
-  // GLOBAL THEME (?theme=<id>): a palette→material remap applied pack-wide (themes.ts).
-  // Compiled here once and passed into every mesh-object build (procedural objects ignore it).
-  const themeId = readThemeFromParams(params);
-  const theme = themeId ? compileTheme(themeId) : null;
-  const buildOpts: WorldObjectBuildOpts = theme
-    ? { themeRules: theme.rules, themeTolerance: theme.tolerance }
-    : {};
+  // COLORING MODE: per-pixel RECOLOR (recolor.ts) by default; ?raw=1 shows the original KayKit atlas.
+  const rawColoring = params.get('raw') === '1';
+  // DEBUG self-test: ?tintall=<hex> forces every swatch to one colour — if the model turns that
+  // colour, the recolor bake is running on your machine (proves it's not a stale bundle).
+  const tintAllParam = params.get('tintall');
+  const tintAll = tintAllParam ? parseInt(tintAllParam.replace(/^#/, ''), 16) : NaN;
+  const buildOpts: WorldObjectBuildOpts = rawColoring
+    ? { raw: true }
+    : (Number.isFinite(tintAll) ? { tintAll } : {});
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -204,9 +262,8 @@ async function boot(): Promise<void> {
       const ob = await obj.build(variant, seed, buildOpts);
       built = ob;
       footprint = ob.footprint;
-      const themeName = themeId ? (THEMES[themeId]?.name ?? themeId) : 'none';
       objHudPrefix =
-        `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed} · theme ${themeName})</span><br>` +
+        `<b>${obj.name}</b> <span style="opacity:.6">(${objId} · ${variant} · ${obj.level} · seed ${seed})</span><br>` +
         `${obj.describe}<br>` +
         `<span style="opacity:.5">variants: ${obj.variants.join(' · ')} — ?object=${objId}&amp;variant=&lt;v&gt; (?boxes=0 off) · ${objIds.length} objects in the side list →</span>`;
       hudHtml = objHudPrefix; // the fit-line + timing are appended after the first render
@@ -258,9 +315,10 @@ async function boot(): Promise<void> {
   // Held in a mutable reference so a live re-fit (fit-controls) can swap it in place.
   W.__labFootprint = footprint ?? null;
   let overlay: THREE.Group | null = null;
+  let boxesVisible = showBoxes; // toggled live by the "show boxes" checkbox (persists to ?boxes=)
   const setOverlay = (fp: Footprint | undefined): void => {
     if (overlay) { scene.remove(overlay); disposeOverlay(overlay); overlay = null; }
-    if (showBoxes && fp && fp.boxes.length) { overlay = buildBoxOverlay(fp); scene.add(overlay); }
+    if (boxesVisible && fp && fp.boxes.length) { overlay = buildBoxOverlay(fp); scene.add(overlay); }
   };
   setOverlay(footprint);
 
@@ -331,6 +389,60 @@ async function boot(): Promise<void> {
     renderer.render(scene, cam);
   };
 
+  // ---- CONTROLS BAR (bottom, right of the picker): one tidy bar for the view toggles, so they
+  // don't float separately and stack. Holds: coloring MODE (recolored / raw atlas) + show-boxes.
+  {
+    const bar = document.createElement('div');
+    bar.id = 'lab-controls';
+    Object.assign(bar.style, {
+      position: 'fixed', left: '236px', bottom: '10px', zIndex: '25', display: 'flex', alignItems: 'center',
+      gap: '14px', userSelect: 'none', color: '#bcd', font: '11px system-ui',
+      background: 'rgba(10,10,22,.82)', border: '1px solid rgba(120,130,170,.28)', borderRadius: '9px',
+      padding: '6px 11px', boxShadow: '0 4px 18px rgba(0,0,0,.45)',
+    } as Partial<CSSStyleDeclaration>);
+
+    // coloring MODE — recolored (default) vs raw atlas. Navigates (?raw=) like the picker.
+    const modeWrap = document.createElement('label');
+    Object.assign(modeWrap.style, { display: 'flex', alignItems: 'center', gap: '6px' } as Partial<CSSStyleDeclaration>);
+    const modeLbl = document.createElement('span');
+    modeLbl.textContent = 'coloring'; modeLbl.style.opacity = '.7';
+    modeWrap.appendChild(modeLbl);
+    const modeSel = document.createElement('select');
+    Object.assign(modeSel.style, { background: 'rgba(20,20,34,.9)', color: '#cde', border: '1px solid rgba(120,130,170,.3)', borderRadius: '6px', padding: '2px 4px' } as Partial<CSSStyleDeclaration>);
+    for (const [val, label] of [['', 'Recolored'], ['1', 'Raw atlas']] as const) {
+      const o = document.createElement('option'); o.value = val; o.textContent = label;
+      if ((val === '1') === rawColoring) o.selected = true;
+      modeSel.appendChild(o);
+    }
+    modeSel.addEventListener('change', () => {
+      const next = new URLSearchParams(location.search);
+      if (modeSel.value) next.set('raw', '1'); else next.delete('raw');
+      location.href = `${location.pathname}?${next.toString()}`;
+    });
+    modeWrap.appendChild(modeSel);
+    bar.appendChild(modeWrap);
+
+    // show-boxes — live toggle of the collision-box overlay (persists to ?boxes=).
+    const boxWrap = document.createElement('label');
+    Object.assign(boxWrap.style, { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' } as Partial<CSSStyleDeclaration>);
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = boxesVisible;
+    Object.assign(cb.style, { accentColor: '#4effa1' } as Partial<CSSStyleDeclaration>);
+    cb.addEventListener('change', () => {
+      boxesVisible = cb.checked;
+      setOverlay(footprint);
+      const next = new URLSearchParams(location.search);
+      if (boxesVisible) next.delete('boxes'); else next.set('boxes', '0');
+      history.replaceState(null, '', `${location.pathname}?${next.toString()}`);
+      renderOnce();
+    });
+    boxWrap.appendChild(cb);
+    boxWrap.appendChild(Object.assign(document.createElement('span'), { textContent: 'show boxes' }));
+    bar.appendChild(boxWrap);
+
+    document.body.appendChild(bar);
+  }
+
   if (hud) hud.innerHTML = hudHtml;
 
   // ---- LIVE FIT CONTROLS + TIMING READOUT (object mode only) ----------------------
@@ -384,18 +496,58 @@ async function boot(): Promise<void> {
     buildFitControls({ container: document.body, initial: fitState, onChange: (s) => refit(s) });
   }
 
-  // ---- OBJECT PICKER (object mode only): TEXT-ONLY grouped clickable list ----
-  // No thumbnails, no GLB loads here — a GLB loads only when a row is picked.
+  // ---- CONTENT PICKER (both modes): TEXT-ONLY double-nested clickable list ----
+  // No thumbnails, no model loads here — a model loads only when a row is picked.
+  buildObjectPicker({
+    container: document.body,
+    objects,
+    packs: buildPickerPacks(),
+    currentId: objId ?? params.get('element') ?? elIds[0] ?? null,
+    params,
+  });
+
+  // ---- SWATCH → MATERIAL LEGEND (object mode only) ----
   if (objId !== null) {
-    buildObjectPicker({
-      container: document.body,
-      objects,
-      groups: buildPickerGroups(),
-      currentId: objId,
-      params,
-    });
-    // ---- THEME PICKER (object mode only): a dropdown that reskins the whole pack ----
-    buildThemePicker({ container: document.body, currentId: themeId, params });
+    const ob = built as WorldObjectBuild;
+    if (ob.recolor) {
+      buildRecolorLegend({
+        container: document.body,
+        recolor: ob.recolor,
+        objectName: objects.get(objId)?.name ?? objId,
+        ...(ob.presentSwatches ? { present: ob.presentSwatches } : {}),
+      });
+    }
+  }
+
+  // ---- HIDE-UI BUTTON (top-right corner): collapse every panel to see the bare model, and a way
+  // back. State PERSISTS in the URL (?ui=0) via replaceState, so it survives a reload / the
+  // coloring + boxes navigations instead of being lost. The button itself always stays visible.
+  {
+    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend'];
+    const btn = document.createElement('button');
+    Object.assign(btn.style, {
+      position: 'fixed', right: '10px', top: '10px', zIndex: '30', cursor: 'pointer',
+      color: '#cde', font: '11px system-ui', background: 'rgba(10,10,22,.82)',
+      border: '1px solid rgba(120,130,170,.4)', borderRadius: '8px', padding: '5px 9px',
+      boxShadow: '0 4px 18px rgba(0,0,0,.45)',
+    } as Partial<CSSStyleDeclaration>);
+    let hidden = params.get('ui') === '0';
+    const apply = (): void => {
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (hidden) { if (el.dataset['prevDisp'] === undefined) el.dataset['prevDisp'] = el.style.display; el.style.display = 'none'; }
+        else { el.style.display = el.dataset['prevDisp'] ?? ''; delete el.dataset['prevDisp']; }
+      }
+      btn.textContent = hidden ? '☰ show UI' : '✕ hide UI';
+      const next = new URLSearchParams(location.search);
+      if (hidden) next.set('ui', '0'); else next.delete('ui');
+      history.replaceState(null, '', `${location.pathname}?${next.toString()}`);
+    };
+    btn.addEventListener('click', () => { hidden = !hidden; apply(); });
+    if (hidden) apply(); // restore a persisted hidden state on load
+    else btn.textContent = '✕ hide UI'; // shown: don't touch panels (keep their own display)
+    document.body.appendChild(btn);
   }
 
   // snapshot hooks — __labSetAngle positions the camera directly (so headless tooling
