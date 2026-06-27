@@ -133,6 +133,17 @@ export function conflicts(f: TileField): string[] {
 
 export const hasConflict = (f: TileField): boolean => conflicts(f).length > 0;
 
+/** Is every cell still UNCONSTRAINED (full domain)? — an untouched cell nothing has claimed yet. */
+export function isOpen(f: TileField): boolean {
+  const o = fullField();
+  return (
+    FLOOR_CORNERS.every((c) => f.floor[c] === o.floor[c]) &&
+    DIRS.every((d) => f.edge[d] === o.edge[d] && f.inner[d] === o.inner[d]) &&
+    f.centre === o.centre &&
+    f.wallType === o.wallType
+  );
+}
+
 /**
  * Collapse a field to a concrete tile by choosing one value per cell. `pick(cell, n)` selects an
  * index in `[0,n)` among the allowed values (default 0 = the canonical lowest option); swap in a

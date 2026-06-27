@@ -5,19 +5,24 @@
 // A multi-tile patch of board: a TileGrid (src/floor/tile-grid.ts) with ROOMS (room-templates.ts)
 // stamped on as atomic transactions, collapsed to WallTiles, and rendered with the SAME
 // tilePlacements() the single-tile view uses — one tile per grid cell, real KayKit meshes
-// (built once per url, cloned per instance). Buttons show each room type, plus the DB-style
-// transaction demo: a non-overlapping batch commits; an overlapping batch hits a conflict and
-// the WHOLE batch rolls back (only the floor remains).
+// (built once per url, cloned per instance).
+//
+// The grid starts fully OPEN (every cell unconstrained). Rooms constrain only their inside and leave
+// their boundary open, so cells nothing has claimed yet show as a translucent BLUE marker — you can
+// see exactly where things are still free to connect. Buttons show each room type (framed by a 1-tile
+// open margin), plus the DB-style transaction demo: a non-overlapping batch commits; an overlapping
+// batch hits a conflict and the WHOLE batch rolls back (the grid stays open).
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { makeGrid, applyBatch, collapseGrid, type TileGrid, type Region, type Stamp } from '../floor/tile-grid.ts';
-import { template, floors } from '../floor/wall-tile-field.ts';
+import { isOpen } from '../floor/wall-tile-field.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
 import { basicRoom, ROOMS } from '../floor/room-templates.ts';
 import { meshObject, type WorldObject } from './world-object.ts';
 
 const CELL = 4; // a tile is 4u; grid cell (gx,gy) centres at world (gx*CELL, gy*CELL)
+const MARGIN = 1; // open border around a single room, so its open boundary is visible (blue)
 
 /* ----------------------- real-asset building (cached + cloned) --------------- */
 
@@ -38,8 +43,9 @@ function builtOnce(url: string, scale: number): Promise<THREE.Object3D> {
 }
 const instance = async (url: string, scale: number): Promise<THREE.Object3D> => (await builtOnce(url, scale)).clone();
 
-/** A loose floor over the whole grid (only constrains floor → stone; walls stay open). */
-const baseFloor = template({ floor: { nw: floors('stone'), ne: floors('stone'), sw: floors('stone'), se: floors('stone') } });
+// the "unconstrained cell" marker — a flat translucent blue square laid on the ground
+const openGeo = new THREE.PlaneGeometry(CELL * 0.92, CELL * 0.92);
+const openMat = new THREE.MeshBasicMaterial({ color: 0x3a78ff, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false });
 
 /* ----------------------------------- scene ----------------------------------- */
 
@@ -52,7 +58,7 @@ view.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14141e);
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(22, 30, 30);
+camera.position.set(24, 32, 32);
 camera.lookAt(0, 0, 0);
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const keyLight = new THREE.DirectionalLight(0xffffff, 1.2); keyLight.position.set(12, 22, 8); scene.add(keyLight);
@@ -69,8 +75,8 @@ function status(msg: string, cls: 'ok' | 'bad'): void {
   if (el) el.innerHTML = `<span class="${cls}">${msg}</span>`;
 }
 
-/** Build a grid (gw×gh), let `build` stamp it, then render the collapsed tiles. */
-async function show(gw: number, gh: number, build: (g: TileGrid) => void, withBaseFloor = true): Promise<void> {
+/** Build a grid (gw×gh), let `build` stamp it, then render: collapsed tiles + blue OPEN markers. */
+async function show(gw: number, gh: number, build: (g: TileGrid) => void): Promise<void> {
   gen++;
   const myGen = gen;
   scene.remove(group);
@@ -78,17 +84,23 @@ async function show(gw: number, gh: number, build: (g: TileGrid) => void, withBa
   scene.add(group);
 
   const grid = makeGrid(gw, gh);
-  if (withBaseFloor) applyBatch(grid, [{ region: { x: 0, y: 0, w: gw, h: gh }, stamp: baseFloor }]);
   build(grid);
 
   const ox = -((gw - 1) / 2) * CELL;
   const oz = -((gh - 1) / 2) * CELL;
   const tiles = collapseGrid(grid);
   for (let i = 0; i < tiles.length; i++) {
-    const t = tiles[i];
-    if (!t) continue;
     const wx = ox + (i % gw) * CELL;
     const wz = oz + Math.floor(i / gw) * CELL;
+    if (isOpen(grid.cells[i]!)) {
+      const plane = new THREE.Mesh(openGeo, openMat); // unconstrained cell → blue marker only
+      plane.rotation.x = -Math.PI / 2;
+      plane.position.set(wx, 0.06, wz);
+      group.add(plane);
+      continue;
+    }
+    const t = tiles[i];
+    if (!t) continue;
     for (const p of tilePlacements(t)) {
       const root = await instance(p.url, p.scale);
       if (myGen !== gen) return;
@@ -118,24 +130,30 @@ function button(label: string, onClick: () => void): void {
   document.getElementById('buttons')?.appendChild(b);
 }
 
-// one button per room type (each sized to itself, no base floor)
-for (const [name, { make, size }] of Object.entries(ROOMS)) {
-  button(name, () => {
-    const [w, h] = size;
-    void show(w, h, (g) => { applyBatch(g, [{ region: { x: 0, y: 0, w, h }, stamp: make(w, h) }]); status(`${name} ${w}×${h}`, 'ok'); }, false);
+/** Show one room of `name`, framed by a 1-tile open (blue) margin. */
+function showRoom(name: string): void {
+  const r = ROOMS[name];
+  if (!r) return;
+  const [w, h] = r.size;
+  void show(w + 2 * MARGIN, h + 2 * MARGIN, (g) => {
+    applyBatch(g, [{ region: { x: MARGIN, y: MARGIN, w, h }, stamp: r.make(w, h) }]);
+    status(`${name} ${w}×${h} · blue = open / unconstrained`, 'ok');
   });
 }
+
+// one button per room type
+for (const name of Object.keys(ROOMS)) button(name, () => showRoom(name));
 
 button('— two rooms (commit)', () => {
   void show(GW, GH, (g) => {
     const r = applyBatch(g, TWO_ROOMS);
-    status(r.ok ? '✓ committed 2 rooms (no conflict)' : '✗ unexpected conflict', r.ok ? 'ok' : 'bad');
+    status(r.ok ? '✓ committed 2 rooms (no conflict) · blue = still open' : '✗ unexpected conflict', r.ok ? 'ok' : 'bad');
   });
 });
 button('— overlapping rooms (rollback)', () => {
   void show(GW, GH, (g) => {
     const r = applyBatch(g, OVERLAPPING);
-    status(r.ok ? '✓ committed (unexpected)' : `✗ conflict at ${r.conflicts.length} cell(s) → whole batch rolled back (only floor remains)`, r.ok ? 'ok' : 'bad');
+    status(r.ok ? '✓ committed (unexpected)' : `✗ conflict at ${r.conflicts.length} cell(s) → whole batch rolled back, grid stays open`, r.ok ? 'ok' : 'bad');
   });
 });
 
@@ -147,12 +165,9 @@ window.addEventListener('resize', () => {
 
 type BoardWindow = Window & { __BOARD_READY?: boolean; __boardRoom?: (name: string) => void };
 const Wn = window as BoardWindow;
-Wn.__boardRoom = (name) => {
-  const r = ROOMS[name];
-  if (r) void show(r.size[0], r.size[1], (g) => { applyBatch(g, [{ region: { x: 0, y: 0, w: r.size[0], h: r.size[1] }, stamp: r.make(r.size[0], r.size[1]) }]); }, false);
-};
+Wn.__boardRoom = (name) => showRoom(name);
 
-Wn.__boardRoom('throne room'); // initial view
+showRoom('throne room'); // initial view
 
 let first = true;
 function tick(): void {
