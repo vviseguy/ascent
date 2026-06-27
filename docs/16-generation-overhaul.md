@@ -53,71 +53,60 @@ This is what lets the whole overhaul ship as **green, provable increments** (§1
 
 ## 2. The lattice and the wall-tile model
 
-**Decision: one uniform 4u lattice — a grid of 4u SQUARES. Each square is either a FLOOR cell or a
-WALL tile. Walls own their own tiles** (a wall is a full 4u tile, *not* a thing that lives on the edge
-between cells). No 2u sub-modules. Per-tile variety comes from how a wall tile is *parameterized*;
-bigger set-pieces are multi-tile composites. This is the blueprint's "walls own squares" reading, and
-it resolves the "two lattices for one truth" debt (§10 / docs/13 §1) — **one square lattice, classified
-once.**
+**Decision: one uniform 4u lattice — a grid of 4u TILES. Each tile carries a floor + optional wall
+structure** (a plain floor square is just an all-`none` tile; a wall is part of the tile, *not* a thing
+on the edge between cells). No 2u sub-modules. Per-tile variety comes from how the tile is
+*parameterized*; bigger set-pieces are multi-tile composites. This resolves the "two lattices for one
+truth" debt (§10 / docs/13 §1) — **one square lattice, classified once.**
 
-### A wall tile = connectors + a centre + centre-data
+### A wall tile = the 9-cell model
 
-A wall tile is described by two orthogonal things — **connectors** and a **centre** — plus the
-**content** that hangs off it:
+A tile is a **"plus" of 9 cells** that cleanly separates *what connects to the neighbour* (the EDGES)
+from *what's structurally inside* (the INNER sides + the CENTRE):
+
+```
+            edge.N
+            inner.N
+  edge.W inner.W  ⊙  inner.E edge.E      ⊙ = centre column (none | wall | barrier)
+            inner.S                       inner.* = inner sides (none | wall | barrier)
+            edge.S                        edge.*  = outer edges (none | wall | barrier)
+```
 
 ```ts
-type Dir = 'N' | 'E' | 'S' | 'W';
-type CentreAxis = 'none' | 'NS' | 'EW' | 'both';
-type CentreData  = 'SOLID' | 'DOOR' | 'WINDOW' | 'HOLE' | 'GAP' | 'LOW_GATE';   // closed, sim-visible
+type Seg = 'none' | 'wall' | 'barrier';
+interface SideSet { N: Seg; E: Seg; S: Seg; W: Seg; }
 
-interface WallTile {                    // occupies ONE 4u square; its "piece" is DERIVED, not stored
-  connectors: Record<Dir, Connector>;   // which sides reach out to meet a neighbouring wall tile
-  centre: CentreAxis;                    // what fills the middle, per axis
-  centreData: CentreData;                // what the through-passage IS (the verifier reads THIS)
-  content?: Content[];                   // objects hung off the tile (placed by the placement machine)
+interface WallTile {                 // a tile and a floor square are the SAME struct
+  floor: CornerFloors;               // per-corner floor material (stone/dirt/wood/none)
+  edge: SideSet;                     // 4 outer cells — the connection to each neighbour
+  inner: SideSet;                    // 4 inner cells — between each edge and the centre
+  centre: 'none' | 'wall' | 'barrier'; // ADDITIVE centre column
+  wallType: WallType;                // opening, only on a full straight line
 }
 ```
 
-**1. Cardinal connectors** `{ N, E, S, W }` — for each side, does an arm reach from the tile's centre
-out to that edge to meet the neighbouring wall tile? (At minimum a bool; richer connector types later.)
-Connectors are how adjacent wall tiles agree to join.
+- Each of the 8 arm-cells (an EDGE + an INNER per direction) is `none | wall | barrier`.
+- The **centre column is ADDITIVE**: `none` lets walls pass through the middle *solid* (`inner.N+inner.S`
+  = a continuous straight wall; `inner.N+inner.E` = a clean column-less bend); `wall`/`barrier` adds a
+  pillar on top.
+- `wallType` (door/window/…) only matters when a **full straight LINE** (inner+edge on one axis) is all
+  wall.
 
-**2. The centre** — what happens where the arms would meet:
+**Why two cells per side (inner + edge)?** It separates the two questions that fought each other in the
+earlier "connectors + centre" model: the **edge** says how this tile connects to its neighbour; the
+**inner + centre** say what's happening *inside*. A *full* arm (inner+edge) reaches the neighbour; an
+*inner-only* stub caps before the boundary; an *edge-only* cell is a wall finishing **at** the boundary
+(an edge cap). That edge/inner split is exactly what makes the traversal graph well-defined (§2-graph).
 
-| `centre` | meaning |
-|---|---|
-| `none` | the arms don't meet — each connector is an independent **cap** (a W+E tile with `none` = two caps facing across a gap) |
-| `NS` | a north–south through-line fills the centre |
-| `EW` | an east–west through-line fills the centre |
-| `both` | material on **both** axes through the centre — a **junction** or a freestanding **blob** |
+**The classic pieces are DERIVED labels** (`label()` in `wall-tile.ts`), never stored — straight /
+corner / bend / tee / cross / cap / column fall out of the inner junction + whether there's a centre
+column. A **bend** is a column-less corner (`centre:'none'`); a **corner** is the same + a pillar.
 
-**3. Centre-data** — *what the through-material is*. The centre-data (**not** the connectors) is the
-structural + semantic payload the sim/collision and the **solvability verifier** read: a `DOOR` centre
-is passable + gated, a `WINDOW`/`HOLE` is see-through, `SOLID` blocks, `GAP` is open.
-
-**The classic pieces fall out of (connectors, centre) — derived, never enumerated:**
-
-| connectors | `centre` | = piece |
-|---|---|---|
-| W + E | `EW` | straight E–W wall (centre may be a door / window / hole) |
-| W + E | `none` | two caps facing across a gap |
-| just W | `none` | a single cap |
-| N + E | `both` | a **corner** — it turns, so material leaves the axis → `both` |
-| W + E + S | `both` | a **tee** — the E–W through *plus* the S stub bulges out → not a flat wall → `both` |
-| N + E + S + W | `both` | a **cross** |
-| *(none)* | `both` | a **column** — a freestanding blob: `both` centre, no connectors |
-
-Two keys, both from this session's design:
-- **A `both` centre means "this bulges; it is not a flat wall."** Corners, tees, crosses and columns
-  are *all* `both`; they differ only in which connectors are present. A flat wall is a single-axis
-  centre (`NS`/`EW`) — the instant material leaves that axis at the centre, it's `both`.
-- **A column is just `both` with no connectors** — the same centre vocabulary covers freestanding
-  pillars with no special case.
-
-**Why this beats a flat `JunctionKind` enum:** it separates *topology* (which sides connect) from *the
-passage* (what the centre is). A door, a window and a hole are all "an `EW` centre with different
-`centreData`," sharing one connector topology — so **structural variety and connection variety compose
-instead of multiplying** into one giant piece enum.
+**Rendering composes per-arm pieces**, adjacent same-type cells collapsing into longer walls (a full arm
+→ a half-wall; an inner stub or edge cap → a capped half; a clean full corner → one mitered piece; the
+centre column appended). All placement is **ONE pure function** — `tilePlacements(tile) →
+{url,x,y,z,yaw,scale}[]` (`wall-tile-assets.ts`), the single authority the renderer **and** the collision
+consume, so render==collision by construction.
 
 ### Content + the placement machine
 
@@ -157,6 +146,53 @@ staircase. They claim N adjacent squares from one anchor and map onto the IR's e
 >
 > The real cost is **curation discipline** — keep the tag vocabulary small and the socket alphabet
 > closed — not a combinatorial one.
+
+### The traversal graph — corners as nodes (the bridge to solvability) {#2-graph}
+
+The thing you pathfind and *verify* on is the **open space**, which is the dual of the walls. So make
+the tile-grid **CORNERS the graph nodes** (plus an optional per-tile **centre node**):
+
+```
+o-----------o     o = corner node (shared by the 4 tiles meeting at it → a dual grid,
+| \   |   / |          offset half a tile). An edge between two corners is OPEN unless
+|   \ | /   |          the wall between them is FULLY walled.
++++++ o +++++     ⊙ = centre node — present only when the tile interior is subdivided.
+```
+
+- A **corner is shared by 4 tiles**, so corner-nodes form a grid offset by half a tile.
+- A corner↔corner (or corner↔centre) connection is **OPEN unless fully walled** — blocked only when the
+  `edge` *and* the `inner` cell between them are wall (the centre column counts too). A **partial** wall
+  (just the edge, or just the inner) leaves a gap you slip through. That's a clean, **local,
+  deterministic** predicate over the 9 cells — the graph falls out of the tile mechanically.
+- The **centre node** appears only when the interior is actually subdivided (a centre column, or
+  perpendicular inner walls); its corner-spokes model going around / through.
+
+**Three things that make it work — and break it if ignored:**
+
+1. **Shared edge cells (the load-bearing one).** A boundary cell is owned **once**, on the shared grid
+   edge — `edge.E of A` *is* `edge.W of B`, the same cell — so adjacent tiles can never disagree about
+   their shared boundary, and "how it tiles" is well-defined by construction. (The inner cells + centre
+   stay per-tile; only the outer ring is shared.) **Lock this into the data model first** — it's free if
+   designed in, a retrofit nightmare if not. *(Today `WallTile.edge` is per-tile; this is the one schema
+   change the graph needs — see §12.)*
+2. **Graph == collision.** Derive **both** the traversal graph and the collision AABBs from the same
+   9-cell data — `tilePlacements()` is already the single source the renderer + collision share, so the
+   verifier checks the same truth the sim collides on. The graph must be the **conservative** read:
+   claim a connection only when a body actually fits the gap.
+3. **Conditional centre node.** Keep it out unless the interior is subdivided — keeps the graph small and
+   contains the diagonal "can a body squeeze past a corner" question.
+
+**How it layers with the rest — two resolutions of one idea.** The **coarse** floor-graph (cells/rooms,
+the spine carve, the requirement queue §6) *plans* connectivity and drives generation. The **fine**
+corner-graph is what the 9-cell tiles *compile to* for the final solvability proof + collision:
+
+```
+coarse floor-graph (plan)  →  9-cell tiles (realize)  →  corner-graph (verify, == collision)
+```
+
+The coarse layer never needs to know about corners; the fine corner-graph is the ground-truth check that
+what the tiles actually built is still solvable — the independent verifier of GENERATION-SOLVABILITY,
+run on the dual of the walls.
 
 ---
 
@@ -450,5 +486,10 @@ At no point is `main` left with a dual IR producer, two lattices, or a broken re
 2. **`hallStatus`** — a durable field on `Cell` or a generation-time scratch artifact (lean: scratch;
    `cellType` is the durable projection the blueprint already reads).
 3. **Tag taxonomy** — flat strings vs a small hierarchy (lean: flat strings, for hashability).
-4. **Where to start the real build** — Phase 1 (one lattice) is the natural first refactor after this
+4. **Shared edge-cell ownership (the corner-graph prerequisite, §2-graph #1).** Today `WallTile.edge` is
+   per-tile, so two neighbours can *describe* their shared boundary independently. To make the traversal
+   graph well-defined, the outer-ring cell must be owned **once** on the shared grid edge (`edge.E of A`
+   == `edge.W of B`). Decide the representation — a separate `EdgeGrid` the tiles read, vs. a "tile owns
+   its N+W edges, reads its neighbour's for S+E" convention — and lock it before building the verifier.
+5. **Where to start the real build** — Phase 1 (one lattice) is the natural first refactor after this
    doc + Phase 0.
