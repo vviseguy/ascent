@@ -2,18 +2,19 @@
 // src/lab/board.ts — the TILE-BOARD preview (board.html).
 // ============================================================================
 //
-// A multi-tile patch of board: a TileGrid (src/floor/tile-grid.ts) with ROOMS stamped on as
-// atomic transactions, collapsed to WallTiles, and rendered with the SAME tilePlacements() the
-// single-tile view uses — one tile placed per grid cell. The buttons demonstrate the DB-style
-// transaction: a non-overlapping batch commits; an overlapping batch hits a conflict and the
-// WHOLE batch rolls back (nothing lands). Real KayKit meshes, no boxes.
+// A multi-tile patch of board: a TileGrid (src/floor/tile-grid.ts) with ROOMS (room-templates.ts)
+// stamped on as atomic transactions, collapsed to WallTiles, and rendered with the SAME
+// tilePlacements() the single-tile view uses — one tile per grid cell, real KayKit meshes
+// (built once per url, cloned per instance). Buttons show each room type, plus the DB-style
+// transaction demo: a non-overlapping batch commits; an overlapping batch hits a conflict and
+// the WHOLE batch rolls back (only the floor remains).
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { makeGrid, applyBatch, collapseGrid, type TileGrid, type Region, type Stamp } from '../floor/tile-grid.ts';
-import { template, fromTile, floors } from '../floor/wall-tile-field.ts';
+import { template, floors } from '../floor/wall-tile-field.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
-import type { WallTile, SideSet, CornerFloors, Seg, Dir } from '../floor/wall-tile.ts';
+import { basicRoom, ROOMS } from '../floor/room-templates.ts';
 import { meshObject, type WorldObject } from './world-object.ts';
 
 const CELL = 4; // a tile is 4u; grid cell (gx,gy) centres at world (gx*CELL, gy*CELL)
@@ -37,34 +38,11 @@ function builtOnce(url: string, scale: number): Promise<THREE.Object3D> {
 }
 const instance = async (url: string, scale: number): Promise<THREE.Object3D> => (await builtOnce(url, scale)).clone();
 
-/* ------------------------------- room templates ------------------------------ */
-
-const allF = (m: 'stone'): CornerFloors => ({ nw: m, ne: m, sw: m, se: m });
-const side = (N: Seg, E: Seg, S: Seg, W: Seg): SideSet => ({ N, E, S, W });
-
-/** The intended tile at local (lx,ly) of a room: floor inside, a wall ring (straights + corners). */
-function roomTile(lx: number, ly: number, rw: number, rh: number): WallTile {
-  const e: SideSet = side('none', 'none', 'none', 'none');
-  const n: SideSet = side('none', 'none', 'none', 'none');
-  const wall = (d: Dir): void => { e[d] = 'wall'; n[d] = 'wall'; };
-  const onW = lx === 0, onE = lx === rw - 1, onN = ly === 0, onS = ly === rh - 1;
-  if (onN && onW) { wall('E'); wall('S'); } // NW corner: arms into the N + W walls
-  else if (onN && onE) { wall('S'); wall('W'); } // NE
-  else if (onS && onW) { wall('N'); wall('E'); } // SW
-  else if (onS && onE) { wall('N'); wall('W'); } // SE
-  else if (onN || onS) { wall('E'); wall('W'); } // top/bottom run: E–W wall
-  else if (onW || onE) { wall('N'); wall('S'); } // left/right run: N–S wall
-  return { floor: allF('stone'), edge: e, inner: n, centre: 'none', wallType: 'solid' };
-}
-/** A room stamp forces each of its tiles (singleton domains) — so overlaps CONFLICT and roll back. */
-const roomStamp = (rw: number, rh: number): Stamp => (lx, ly) => fromTile(roomTile(lx, ly, rw, rh));
-
 /** A loose floor over the whole grid (only constrains floor → stone; walls stay open). */
 const baseFloor = template({ floor: { nw: floors('stone'), ne: floors('stone'), sw: floors('stone'), se: floors('stone') } });
 
 /* ----------------------------------- scene ----------------------------------- */
 
-const GW = 7, GH = 7;
 const view = document.getElementById('view') as HTMLDivElement;
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -91,26 +69,26 @@ function status(msg: string, cls: 'ok' | 'bad'): void {
   if (el) el.innerHTML = `<span class="${cls}">${msg}</span>`;
 }
 
-/** Build a grid for a scenario, then render the collapsed tiles. */
-async function show(build: (g: TileGrid) => void): Promise<void> {
+/** Build a grid (gw×gh), let `build` stamp it, then render the collapsed tiles. */
+async function show(gw: number, gh: number, build: (g: TileGrid) => void, withBaseFloor = true): Promise<void> {
   gen++;
   const myGen = gen;
   scene.remove(group);
   group = new THREE.Group();
   scene.add(group);
 
-  const grid = makeGrid(GW, GH);
-  applyBatch(grid, [{ region: { x: 0, y: 0, w: GW, h: GH }, stamp: baseFloor }]); // floor everywhere
+  const grid = makeGrid(gw, gh);
+  if (withBaseFloor) applyBatch(grid, [{ region: { x: 0, y: 0, w: gw, h: gh }, stamp: baseFloor }]);
   build(grid);
 
-  const ox = -((GW - 1) / 2) * CELL;
-  const oz = -((GH - 1) / 2) * CELL;
+  const ox = -((gw - 1) / 2) * CELL;
+  const oz = -((gh - 1) / 2) * CELL;
   const tiles = collapseGrid(grid);
   for (let i = 0; i < tiles.length; i++) {
     const t = tiles[i];
     if (!t) continue;
-    const wx = ox + (i % GW) * CELL;
-    const wz = oz + Math.floor(i / GW) * CELL;
+    const wx = ox + (i % gw) * CELL;
+    const wz = oz + Math.floor(i / gw) * CELL;
     for (const p of tilePlacements(t)) {
       const root = await instance(p.url, p.scale);
       if (myGen !== gen) return;
@@ -123,13 +101,14 @@ async function show(build: (g: TileGrid) => void): Promise<void> {
 
 /* --------------------------------- scenarios --------------------------------- */
 
+const GW = 7, GH = 7;
 const TWO_ROOMS: { region: Region; stamp: Stamp }[] = [
-  { region: { x: 0, y: 0, w: 4, h: 3 }, stamp: roomStamp(4, 3) },
-  { region: { x: 4, y: 3, w: 3, h: 4 }, stamp: roomStamp(3, 4) },
+  { region: { x: 0, y: 0, w: 4, h: 3 }, stamp: basicRoom(4, 3) },
+  { region: { x: 4, y: 3, w: 3, h: 4 }, stamp: basicRoom(3, 4) },
 ];
 const OVERLAPPING: { region: Region; stamp: Stamp }[] = [
-  { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: roomStamp(4, 4) },
-  { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: roomStamp(4, 4) }, // overlaps the first → conflict
+  { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4) },
+  { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4) }, // overlaps → conflict
 ];
 
 function button(label: string, onClick: () => void): void {
@@ -139,22 +118,26 @@ function button(label: string, onClick: () => void): void {
   document.getElementById('buttons')?.appendChild(b);
 }
 
-button('two rooms (commit)', () => {
-  void show((g) => {
+// one button per room type (each sized to itself, no base floor)
+for (const [name, { make, size }] of Object.entries(ROOMS)) {
+  button(name, () => {
+    const [w, h] = size;
+    void show(w, h, (g) => { applyBatch(g, [{ region: { x: 0, y: 0, w, h }, stamp: make(w, h) }]); status(`${name} ${w}×${h}`, 'ok'); }, false);
+  });
+}
+
+button('— two rooms (commit)', () => {
+  void show(GW, GH, (g) => {
     const r = applyBatch(g, TWO_ROOMS);
     status(r.ok ? '✓ committed 2 rooms (no conflict)' : '✗ unexpected conflict', r.ok ? 'ok' : 'bad');
   });
 });
-button('overlapping rooms (rollback)', () => {
-  void show((g) => {
+button('— overlapping rooms (rollback)', () => {
+  void show(GW, GH, (g) => {
     const r = applyBatch(g, OVERLAPPING);
-    status(
-      r.ok ? '✓ committed (unexpected)' : `✗ conflict at ${r.conflicts.length} cell(s) → whole batch rolled back (only the floor remains)`,
-      r.ok ? 'ok' : 'bad',
-    );
+    status(r.ok ? '✓ committed (unexpected)' : `✗ conflict at ${r.conflicts.length} cell(s) → whole batch rolled back (only floor remains)`, r.ok ? 'ok' : 'bad');
   });
 });
-button('clear (floor only)', () => { void show(() => status('floor only', 'ok')); });
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -162,15 +145,15 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-type BoardWindow = Window & { __BOARD_READY?: boolean; __boardShow?: (scenario: 'two' | 'overlap' | 'clear') => void };
+type BoardWindow = Window & { __BOARD_READY?: boolean; __boardRoom?: (name: string) => void };
 const Wn = window as BoardWindow;
-Wn.__boardShow = (s) => {
-  if (s === 'two') void show((g) => { applyBatch(g, TWO_ROOMS); });
-  else if (s === 'overlap') void show((g) => { applyBatch(g, OVERLAPPING); });
-  else void show(() => {});
+Wn.__boardRoom = (name) => {
+  const r = ROOMS[name];
+  if (r) void show(r.size[0], r.size[1], (g) => { applyBatch(g, [{ region: { x: 0, y: 0, w: r.size[0], h: r.size[1] }, stamp: r.make(r.size[0], r.size[1]) }]); }, false);
 };
 
-void show((g) => { applyBatch(g, TWO_ROOMS); }); // initial
+Wn.__boardRoom('throne room'); // initial view
+
 let first = true;
 function tick(): void {
   controls.update();
