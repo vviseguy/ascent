@@ -46,12 +46,22 @@ export type CentreType = 'wall' | 'barrier';
  * The through-passage variety of a single-axis WALL centre (EW/NS only). Wide + extensible
  * (new openings drop in here, not as new pieces). Only `solid` blocks fully; the others are
  * the openings collision + the solvability verifier read. (A barrier centre carries no
- * wallType; a barrier "style" enum could be added in parallel later.)
+ * wallType — barriers are stone-only; there are no other barrier assets today.)
  */
 export type WallType = 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate';
 
-/** The full parameterization of one wall tile (one 4u square). */
+/** The floor under the tile. `none` = a hole (no floor). Stone is the only built asset today. */
+export type FloorType = 'none' | 'stone';
+
+/**
+ * The full parameterization of one 4u SQUARE. A wall tile and a plain FLOOR square are the
+ * SAME thing: a floor square is just `floor:'stone'` with every connection `none` and
+ * `centre:'none'`; a hole is `floor:'none'`. So this one struct covers floor, hole, and any
+ * wall/barrier the tile carries on top of its floor.
+ */
 export interface WallTile {
+  /** The floor slab (or a hole). Orthogonal to the wall structure above it. */
+  floor: FloorType;
   N: Connection;
   E: Connection;
   S: Connection;
@@ -171,6 +181,37 @@ export function classify(tile: WallTile): WallCase {
   }
   if (n === 3) return tile.centre === 'both' ? 'tee' : 'custom';
   return tile.centre === 'both' ? 'cross' : 'custom'; // n === 4
+}
+
+/* ----------------------------------- validate --------------------------------- */
+
+export interface TileIssue {
+  code: string;
+  message: string;
+}
+
+/**
+ * Flag inputs that are structurally INVALID as an authored tile. The resolver stays total
+ * (it resolves anything), but a generator/editor should not EMIT these. The main rule the
+ * design locked: a single-axis (`EW`/`NS`) centre must have at least one connection on that
+ * axis — a floating bar with no connections is invalid, save special pieces (a ramp-down
+ * wall) that we'll model explicitly later. Returns [] when the tile is well-formed.
+ */
+export function validateWallTile(tile: WallTile): TileIssue[] {
+  const issues: TileIssue[] = [];
+  if (tile.centre === 'EW' && tile.E === 'none' && tile.W === 'none') {
+    issues.push({
+      code: 'floating-EW-centre',
+      message: 'an EW centre with no E or W connection is a floating bar — valid only for special pieces (e.g. a ramp-down wall).',
+    });
+  }
+  if (tile.centre === 'NS' && tile.N === 'none' && tile.S === 'none') {
+    issues.push({
+      code: 'floating-NS-centre',
+      message: 'an NS centre with no N or S connection is a floating bar — valid only for special pieces (e.g. a ramp-down wall).',
+    });
+  }
+  return issues;
 }
 
 /* ----------------------------------- describe --------------------------------- */

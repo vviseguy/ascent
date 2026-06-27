@@ -2,17 +2,16 @@
 // src/lab/walltile.ts — the WALL-TILE DEBUG view (walltile.html).
 // ============================================================================
 //
-// Plug the WallTile params (4 connections, centre axis, centre type, wallType) into the
-// panel and SEE the resolved arrangement in 3D — to eyeball that every input maps to a
-// sane output and catch resolver/geometry errors. Boxes only (this is a debugger, not art):
-// full-height = wall, low = barrier. Objects (torches, a floor barrel) demo SIDE placement
-// (docs/16 §2 "content + the placement machine") — torches mount on a wall FACE inward, or
-// on a barrier's outer KNUB; floor props sit skewed but aligned against the nearest structure.
+// Plug a tile's params (floor, 4 connections, centre axis/type, wallType) into the panel
+// and SEE the resolved arrangement in 3D — to eyeball that every input maps to a sane output
+// and catch resolver/geometry/validation errors. The STRUCTURE is drawn as schematic boxes
+// (full-height = wall, low = barrier) — that is deliberate: boxes show the resolver TOPOLOGY
+// clearly. The OBJECTS demo (torches, a barrel) uses the REAL KayKit catalog assets
+// (kaykit-catalog.ts → world-object build → recolor + box-fit), to prove the asset system
+// is consumable and to demo SIDE placement (a mounted torch on a wall face; a barrel on the
+// floor against a wall).
 //
-// SNAPSHOT HOOKS (for headless screenshotting / driving from JS):
-//   window.__WT_READY        true once the first frame has rendered
-//   window.__wtSet(partial)  merge params into the tile + re-render  (e.g. {centre:'both'})
-//   window.__wtState()       the current tile + resolved {case, describe}
+// SNAPSHOT HOOKS:  __WT_READY · __wtSet(partial) · __wtState()
 // ============================================================================
 
 import * as THREE from 'three';
@@ -20,6 +19,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   resolveWallTile,
   describeWallTile,
+  validateWallTile,
   DIRS,
   type WallTile,
   type Dir,
@@ -27,14 +27,14 @@ import {
   type CentreAxis,
   type CentreType,
   type WallType,
-  type WallArrangement,
+  type FloorType,
 } from '../floor/wall-tile.ts';
+import { meshObject, type WorldObject } from './world-object.ts';
 
 /* --------------------------------- constants --------------------------------- */
 
 const STONE = 0x8a8a96; // wall
 const WOOD = 0x9c6b3f; // barrier
-const FLAME = 0xffae42; // object / torch
 const FLOOR = 0x33333f;
 
 const HALF = 2; // tile is 4u → ±2 to each edge
@@ -47,19 +47,20 @@ const CONN: Connection[] = ['none', 'wall', 'barrier'];
 const AXES: CentreAxis[] = ['none', 'EW', 'NS', 'both'];
 const CTYPES: CentreType[] = ['wall', 'barrier'];
 const WTS: WallType[] = ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'];
+const FLOORS: FloorType[] = ['stone', 'none'];
 
 // d → unit (dx,dz) in the X(=E/W) / Z(=N/S) plane. N = -Z, S = +Z, E = +X, W = -X.
 const DV: Record<Dir, readonly [number, number]> = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
 
-/* --------------------------------- geometry ---------------------------------- */
+// REAL KayKit Dungeon Remastered assets, built through the same world-object → recolor →
+// box-fit path the game uses (constructed directly rather than via the 900-entry catalog).
+const TORCH: WorldObject = meshObject({ meshUrl: 'models/kaykit_dungeon_remastered/torch_mounted.gltf.glb', name: 'Torch (mounted)', describe: 'wall torch', level: 'object', scale: 0.5, variants: { default: [] } });
+const BARREL: WorldObject = meshObject({ meshUrl: 'models/kaykit_dungeon_remastered/barrel_small.gltf.glb', name: 'Barrel (small)', describe: 'floor barrel', level: 'object', scale: 0.5, variants: { default: [] } });
 
-const mat = (color: number, emissive = false): THREE.MeshStandardMaterial =>
-  new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.85,
-    metalness: 0,
-    ...(emissive ? { emissive: color, emissiveIntensity: 0.9 } : {}),
-  });
+/* --------------------------- structure (schematic boxes) ---------------------- */
+
+const mat = (color: number): THREE.MeshStandardMaterial =>
+  new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0 });
 
 function box(w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material): THREE.Mesh {
   const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
@@ -84,19 +85,18 @@ function armMesh(d: Dir, t: 'wall' | 'barrier'): THREE.Mesh {
 /** A single-axis centre BAR through the centre region, honouring the wall opening (wallType). */
 function barMeshes(ew: boolean, h: number, m: THREE.Material, wt: WallType): THREE.Mesh[] {
   const along = C * 2;
-  // a slab of the bar between two heights (full width across the centre region)
   const slab = (y0: number, y1: number): THREE.Mesh =>
     ew ? box(along, y1 - y0, TH, 0, (y0 + y1) / 2, 0, m) : box(TH, y1 - y0, along, 0, (y0 + y1) / 2, 0, m);
   switch (wt) {
     case 'door':
     case 'arch':
-      return [slab(2.4, h)]; // a lintel — open doorway below
+      return [slab(2.4, h)];
     case 'window':
-      return [slab(0, 1.2), slab(2.8, h)]; // sill + lintel, gap between
+      return [slab(0, 1.2), slab(2.8, h)];
     case 'hole':
-      return [slab(0, 1.6), slab(2.4, h)]; // a smaller knocked-through gap
+      return [slab(0, 1.6), slab(2.4, h)];
     case 'low_gate':
-      return [slab(0, BAR_H)]; // a low passable lip
+      return [slab(0, BAR_H)];
     case 'solid':
     default:
       return [slab(0, h)];
@@ -109,56 +109,61 @@ function centreMeshes(tile: WallTile): THREE.Mesh[] {
   const t = tile.centreType;
   const h = heightOf(t);
   const m = mat(colorOf(t));
-  if (tile.centre === 'both') return [box(C * 2, h, C * 2, 0, h / 2, 0, m)]; // column / hub
+  if (tile.centre === 'both') return [box(C * 2, h, C * 2, 0, h / 2, 0, m)];
   return barMeshes(tile.centre === 'EW', h, m, t === 'wall' ? tile.wallType : 'solid');
 }
 
-/* --------------------------- objects (side placement) ------------------------- */
+/* ----------------------- objects: REAL KayKit catalog assets ------------------ */
 
-/** A torch: a short bracket pointing along `out` from `(x,z)` at mid-height, with a flame tip. */
-function torch(x: number, z: number, out: readonly [number, number]): THREE.Group {
-  const g = new THREE.Group();
-  const y = WALL_H * 0.55;
-  const [ox, oz] = out;
-  const reach = 0.35;
-  g.add(box(0.12, 0.12, 0.12, x + ox * reach, y, z + oz * reach, mat(0x4a3a2a))); // bracket
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), mat(FLAME, true));
-  flame.position.set(x + ox * (reach + 0.18), y + 0.22, z + oz * (reach + 0.18));
-  g.add(flame);
-  return g;
+/** Build a catalog object by id (recolor + box-fit, the same path the game uses) and scale
+ *  its built root to `targetH` game-units tall so it reads against the 4u tile. */
+async function buildAsset(obj: WorldObject, targetH: number): Promise<THREE.Object3D | null> {
+  const built = await obj.build('default', 0); // → { root (base at y=0), footprint, … }
+  const root = built.root;
+  const bb = new THREE.Box3().setFromObject(root);
+  const h = bb.max.y - bb.min.y || 1;
+  root.scale.multiplyScalar(targetH / h);
+  return root;
 }
 
-/** Side-placed object demo: torches on wall faces (inward) / barrier knubs (outward) + a floor barrel. */
-function objectMeshes(tile: WallTile, a: WallArrangement): THREE.Object3D[] {
-  const out: THREE.Object3D[] = [];
-  let barrelPlaced = false;
+/** Side-placed object demo: a mounted torch on each wall arm's face (inward) + a floor barrel. */
+async function addObjects(tile: WallTile, myGen: number): Promise<void> {
+  type Job = { obj: WorldObject; target: number; place: (o: THREE.Object3D) => void };
+  const jobs: Job[] = [];
+  let barrel = false;
   for (const d of DIRS) {
+    if (tile[d] !== 'wall') continue;
     const [dx, dz] = DV[d];
     const mid = (HALF + C) / 2;
-    if (tile[d] === 'wall') {
-      // torch on the arm's broad FACE, facing inward (perpendicular to the arm). E/W arm faces ±Z.
-      const face: readonly [number, number] = dx !== 0 ? [0, 1] : [1, 0];
-      out.push(torch(dx * mid, dz * mid, face));
-      if (!barrelPlaced) {
-        // a barrel on the floor, slid against the arm, skewed a touch (aligned-not-perfect).
-        const bx = dx * mid + (dx !== 0 ? 0 : 0.7);
-        const bz = dz * mid + (dz !== 0 ? 0 : 0.7);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.8, 12), mat(0x6b4a2a));
-        barrel.position.set(bx, 0.4, bz);
-        barrel.rotation.y = 0.25;
-        out.push(barrel);
-        barrelPlaced = true;
-      }
-    } else if (tile[d] === 'barrier') {
-      // torch on the OUTER knub of the barrier, facing outward toward the edge.
-      out.push(torch(dx * HALF * 0.9, dz * HALF * 0.9, [dx, dz]));
+    const faceZ = dx !== 0; // E/W arm runs along X → its broad faces point ±Z
+    jobs.push({
+      obj: TORCH,
+      target: 1.4,
+      place: (o) => {
+        o.position.set(dx * mid + (faceZ ? 0 : TH / 2 + 0.05), WALL_H * 0.42, dz * mid + (faceZ ? TH / 2 + 0.05 : 0));
+        o.rotation.y = faceZ ? 0 : Math.PI / 2; // approximate inward facing (refined by placement rules later)
+      },
+    });
+    if (!barrel) {
+      jobs.push({
+        obj: BARREL,
+        target: 1.1,
+        place: (o) => {
+          o.position.set(dx * mid + (dx !== 0 ? 0 : 0.85), 0, dz * mid + (dz !== 0 ? 0 : 0.85));
+          o.rotation.y = 0.3; // skewed a touch, aligned-not-perfect
+        },
+      });
+      barrel = true;
     }
   }
-  // a torch on a freestanding wall column, facing south.
-  if (tile.centre === 'both' && tile.centreType === 'wall' && DIRS.every((d) => tile[d] === 'none')) {
-    out.push(torch(0, C, [0, 1]));
+  for (const j of jobs) {
+    const o = await buildAsset(j.obj, j.target);
+    if (myGen !== gen) return; // a newer rebuild superseded us
+    if (o) {
+      j.place(o);
+      group.add(o);
+    }
   }
-  return out;
 }
 
 /* ----------------------------------- scene ----------------------------------- */
@@ -176,7 +181,7 @@ const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerH
 camera.position.set(7, 7, 9);
 camera.lookAt(0, 1.4, 0);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 const key = new THREE.DirectionalLight(0xffffff, 1.1);
 key.position.set(6, 10, 4);
 scene.add(key);
@@ -184,11 +189,9 @@ const fill = new THREE.DirectionalLight(0x8899ff, 0.3);
 fill.position.set(-5, 4, -6);
 scene.add(fill);
 
-// reference: a 3×3 tile grid on the ground so you can read the 4u footprint + neighbours.
 const grid = new THREE.GridHelper(12, 3, 0x445, 0x2a2a3a);
 grid.position.y = 0.001;
 scene.add(grid);
-scene.add(box(4, 0.1, 4, 0, -0.05, 0, mat(FLOOR))); // the tile's own floor slab
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1.4, 0);
@@ -199,11 +202,14 @@ scene.add(group);
 
 /* ----------------------------------- state ----------------------------------- */
 
-const DEFAULT: WallTile = { N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'solid' };
+const DEFAULT: WallTile = { floor: 'stone', N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'solid' };
 const state: WallTile = { ...DEFAULT };
 let showObjects = false;
+let gen = 0;
 
 function rebuild(): void {
+  gen++;
+  const myGen = gen;
   scene.remove(group);
   group.traverse((o) => {
     if (o instanceof THREE.Mesh) {
@@ -212,36 +218,42 @@ function rebuild(): void {
     }
   });
   group = new THREE.Group();
+
+  if (state.floor !== 'none') group.add(box(4, 0.1, 4, 0, -0.05, 0, mat(FLOOR))); // floor slab (none = a hole)
   for (const d of DIRS) if (state[d] !== 'none') group.add(armMesh(d, state[d] as 'wall' | 'barrier'));
   for (const m of centreMeshes(state)) group.add(m);
-  const a = resolveWallTile(state);
-  if (showObjects) for (const o of objectMeshes(state, a)) group.add(o);
   scene.add(group);
 
+  if (showObjects) void addObjects(state, myGen);
+
+  const a = resolveWallTile(state);
+  const issues = validateWallTile(state);
   const caseEl = document.getElementById('case');
   const descEl = document.getElementById('desc');
+  const warnEl = document.getElementById('warn');
   if (caseEl) caseEl.textContent = a.case;
   if (descEl) descEl.textContent = describeWallTile(state);
+  if (warnEl) warnEl.textContent = issues.length ? `⚠ ${issues.map((i) => i.message).join(' · ')}` : '';
 }
 
 /* ----------------------------------- panel ----------------------------------- */
 
-function makeSelect(key: keyof WallTile, opts: readonly string[]): HTMLDivElement {
+function makeSelect(labelKey: keyof WallTile, opts: readonly string[]): HTMLDivElement {
   const row = document.createElement('div');
   row.className = 'row';
   const label = document.createElement('label');
-  label.textContent = key;
+  label.textContent = labelKey;
   const sel = document.createElement('select');
-  sel.dataset['key'] = key;
+  sel.dataset['key'] = labelKey;
   for (const o of opts) {
     const opt = document.createElement('option');
     opt.value = o;
     opt.textContent = o;
     sel.appendChild(opt);
   }
-  sel.value = state[key];
+  sel.value = state[labelKey];
   sel.addEventListener('change', () => {
-    (state[key] as string) = sel.value;
+    (state[labelKey] as string) = sel.value;
     rebuild();
   });
   row.appendChild(label);
@@ -258,6 +270,7 @@ function syncControls(): void {
 
 const fields = document.getElementById('fields');
 if (fields) {
+  fields.appendChild(makeSelect('floor', FLOORS));
   fields.appendChild(makeSelect('N', CONN));
   fields.appendChild(makeSelect('E', CONN));
   fields.appendChild(makeSelect('S', CONN));
@@ -275,14 +288,16 @@ objChk?.addEventListener('change', () => {
 
 const PRESETS: Record<string, WallTile> = {
   'straight wall': { ...DEFAULT },
-  'wall + door': { N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'door' },
-  corner: { N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  tee: { N: 'none', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  cross: { N: 'wall', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  column: { N: 'none', E: 'none', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  'caps (gap)': { N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'none', centreType: 'wall', wallType: 'solid' },
-  'railing (E–W)': { N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'EW', centreType: 'barrier', wallType: 'solid' },
-  '=‖= barrier + column': { N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  'wall + door': { floor: 'stone', N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'door' },
+  corner: { floor: 'stone', N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  tee: { floor: 'stone', N: 'none', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  cross: { floor: 'stone', N: 'wall', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  column: { floor: 'stone', N: 'none', E: 'none', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  'caps (gap)': { floor: 'stone', N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'none', centreType: 'wall', wallType: 'solid' },
+  'railing (E–W)': { floor: 'stone', N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'EW', centreType: 'barrier', wallType: 'solid' },
+  '=‖= barrier + column': { floor: 'stone', N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'both', centreType: 'wall', wallType: 'solid' },
+  'floor only': { floor: 'stone', N: 'none', E: 'none', S: 'none', W: 'none', centre: 'none', centreType: 'wall', wallType: 'solid' },
+  hole: { floor: 'none', N: 'none', E: 'none', S: 'none', W: 'none', centre: 'none', centreType: 'wall', wallType: 'solid' },
 };
 const presets = document.getElementById('presets');
 if (presets) {
@@ -303,7 +318,7 @@ if (presets) {
 type WTWindow = Window & {
   __WT_READY?: boolean;
   __wtSet?: (p: Partial<WallTile> & { objects?: boolean }) => void;
-  __wtState?: () => { tile: WallTile; case: string; describe: string; objects: boolean };
+  __wtState?: () => { tile: WallTile; case: string; describe: string; issues: string[]; objects: boolean };
 };
 const Wn = window as WTWindow;
 Wn.__wtSet = (p) => {
@@ -316,7 +331,13 @@ Wn.__wtSet = (p) => {
   syncControls();
   rebuild();
 };
-Wn.__wtState = () => ({ tile: { ...state }, case: resolveWallTile(state).case, describe: describeWallTile(state), objects: showObjects });
+Wn.__wtState = () => ({
+  tile: { ...state },
+  case: resolveWallTile(state).case,
+  describe: describeWallTile(state),
+  issues: validateWallTile(state).map((i) => i.code),
+  objects: showObjects,
+});
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

@@ -4,6 +4,7 @@ import {
   resolveWallTile,
   classify,
   describeWallTile,
+  validateWallTile,
   type WallTile,
   type Connection,
   type CentreAxis,
@@ -13,6 +14,7 @@ import {
 
 /** Build a tile with sane defaults; override only the fields a case cares about. */
 const T = (p: Partial<WallTile>): WallTile => ({
+  floor: 'stone',
   N: 'none',
   E: 'none',
   S: 'none',
@@ -125,6 +127,36 @@ describe('wall-tile resolver — the MIXED-type cases (the resolution rule)', ()
   });
 });
 
+describe('wall-tile — floor + validation', () => {
+  it('a plain floor square is just an all-none tile with a stone floor', () => {
+    const floorSq = T({ floor: 'stone' });
+    expect(classify(floorSq)).toBe('empty');
+    expect(validateWallTile(floorSq)).toEqual([]);
+  });
+
+  it('a hole (floor:none, all-none) is still well-formed', () => {
+    expect(validateWallTile(T({ floor: 'none' }))).toEqual([]);
+  });
+
+  it('a straight wall is valid', () => {
+    expect(validateWallTile(T({ E: 'wall', W: 'wall', centre: 'EW' }))).toEqual([]);
+  });
+
+  it('an EW centre with NO E/W connection is INVALID (floating bar)', () => {
+    const issues = validateWallTile(T({ centre: 'EW', centreType: 'wall' }));
+    expect(issues.map((i) => i.code)).toContain('floating-EW-centre');
+  });
+
+  it('an NS centre with NO N/S connection is INVALID', () => {
+    const issues = validateWallTile(T({ centre: 'NS' }));
+    expect(issues.map((i) => i.code)).toContain('floating-NS-centre');
+  });
+
+  it('a single connection on the centre axis is enough to be valid (the ramp-down edge)', () => {
+    expect(validateWallTile(T({ W: 'wall', centre: 'EW' }))).toEqual([]);
+  });
+});
+
 describe('wall-tile resolver — totality + invariants over EVERY input', () => {
   const CONN: Connection[] = ['none', 'wall', 'barrier'];
   const AXES: CentreAxis[] = ['none', 'EW', 'NS', 'both'];
@@ -140,7 +172,7 @@ describe('wall-tile resolver — totality + invariants over EVERY input', () => 
             for (const centre of AXES)
               for (const centreType of CTYPES)
                 for (const wallType of WT) {
-                  const tile: WallTile = { N, E, S, W, centre, centreType, wallType };
+                  const tile: WallTile = { floor: 'stone', N, E, S, W, centre, centreType, wallType };
                   const a = resolveWallTile(tile);
                   count++;
 
