@@ -51,25 +51,98 @@ This is what lets the whole overhaul ship as **green, provable increments** (§1
 
 ---
 
-## 2. The lattice: uniform 4u + composites
+## 2. The lattice and the wall-tile model
 
-**Decision: one uniform 4u lattice. No 2u sub-modules. Sub-4u detail lives inside composite units.**
+**Decision: one uniform 4u lattice — a grid of 4u SQUARES. Each square is either a FLOOR cell or a
+WALL tile. Walls own their own tiles** (a wall is a full 4u tile, *not* a thing that lives on the edge
+between cells). No 2u sub-modules. Per-tile variety comes from how a wall tile is *parameterized*;
+bigger set-pieces are multi-tile composites. This is the blueprint's "walls own squares" reading, and
+it resolves the "two lattices for one truth" debt (§10 / docs/13 §1) — **one square lattice, classified
+once.**
 
-The lattice is just the **4u grid**:
-- **cells** — 4u floor tiles (one slot each, for floor + content);
-- **edges** — one wall slot per 4u edge between adjacent cells;
-- **vertices** — junction posts where edges meet.
+### A wall tile = connectors + a centre + centre-data
 
-This collapses today's `(2W+1)×(2H+1)` blueprint to its natural 4u reading and **retires the 2u
-half-module**. It also resolves the "two lattices for one truth" debt (§10 / docs/13 §1): there is one
-lattice, classified once.
+A wall tile is described by two orthogonal things — **connectors** and a **centre** — plus the
+**content** that hangs off it:
 
-**Composites are where richness comes from** — two kinds:
-- **In-place composites** bake sub-4u detail into a *single* slot: a `wall-with-door` (a 4u edge unit
-  whose footprint has a gap), a `wall-with-shelf`, a `window-wall`, a `half-wall`. A doorway narrower
-  than a full edge is *authored into the unit*, not positioned in the lattice.
-- **Multi-slot composites** span N adjacent slots: a 2-wide archway, a 2×2 shrine, a multi-cell
-  staircase. They claim all their slots from one anchor and map onto the IR's existing `Placement.span`.
+```ts
+type Dir = 'N' | 'E' | 'S' | 'W';
+type CentreAxis = 'none' | 'NS' | 'EW' | 'both';
+type CentreData  = 'SOLID' | 'DOOR' | 'WINDOW' | 'HOLE' | 'GAP' | 'LOW_GATE';   // closed, sim-visible
+
+interface WallTile {                    // occupies ONE 4u square; its "piece" is DERIVED, not stored
+  connectors: Record<Dir, Connector>;   // which sides reach out to meet a neighbouring wall tile
+  centre: CentreAxis;                    // what fills the middle, per axis
+  centreData: CentreData;                // what the through-passage IS (the verifier reads THIS)
+  content?: Content[];                   // objects hung off the tile (placed by the placement machine)
+}
+```
+
+**1. Cardinal connectors** `{ N, E, S, W }` — for each side, does an arm reach from the tile's centre
+out to that edge to meet the neighbouring wall tile? (At minimum a bool; richer connector types later.)
+Connectors are how adjacent wall tiles agree to join.
+
+**2. The centre** — what happens where the arms would meet:
+
+| `centre` | meaning |
+|---|---|
+| `none` | the arms don't meet — each connector is an independent **cap** (a W+E tile with `none` = two caps facing across a gap) |
+| `NS` | a north–south through-line fills the centre |
+| `EW` | an east–west through-line fills the centre |
+| `both` | material on **both** axes through the centre — a **junction** or a freestanding **blob** |
+
+**3. Centre-data** — *what the through-material is*. The centre-data (**not** the connectors) is the
+structural + semantic payload the sim/collision and the **solvability verifier** read: a `DOOR` centre
+is passable + gated, a `WINDOW`/`HOLE` is see-through, `SOLID` blocks, `GAP` is open.
+
+**The classic pieces fall out of (connectors, centre) — derived, never enumerated:**
+
+| connectors | `centre` | = piece |
+|---|---|---|
+| W + E | `EW` | straight E–W wall (centre may be a door / window / hole) |
+| W + E | `none` | two caps facing across a gap |
+| just W | `none` | a single cap |
+| N + E | `both` | a **corner** — it turns, so material leaves the axis → `both` |
+| W + E + S | `both` | a **tee** — the E–W through *plus* the S stub bulges out → not a flat wall → `both` |
+| N + E + S + W | `both` | a **cross** |
+| *(none)* | `both` | a **column** — a freestanding blob: `both` centre, no connectors |
+
+Two keys, both from this session's design:
+- **A `both` centre means "this bulges; it is not a flat wall."** Corners, tees, crosses and columns
+  are *all* `both`; they differ only in which connectors are present. A flat wall is a single-axis
+  centre (`NS`/`EW`) — the instant material leaves that axis at the centre, it's `both`.
+- **A column is just `both` with no connectors** — the same centre vocabulary covers freestanding
+  pillars with no special case.
+
+**Why this beats a flat `JunctionKind` enum:** it separates *topology* (which sides connect) from *the
+passage* (what the centre is). A door, a window and a hole are all "an `EW` centre with different
+`centreData`," sharing one connector topology — so **structural variety and connection variety compose
+instead of multiplying** into one giant piece enum.
+
+### Content + the placement machine
+
+Once a tile's structure (connectors + centre) is fixed, its **content** is computed — the objects that
+hang off it: a **shelf or torch on a wall face**, a **barrel on the floor** of the adjacent cell.
+Content is chosen from the cell/room **role** (a library wall → bookshelf; a guard post → weapon rack),
+then a **placement machine** resolves the exact transform per **object placement rule**:
+
+- a torch's rule = *centre on a wall face*;
+- a barrel's rule = *sit on the floor, slide against the nearest wall*;
+- a banner's rule = *hang high, centred on a wall face*.
+
+The machine takes **liberty within the rule** (centre / nudge-against-a-wall / pick a corner), but every
+choice is a **seeded hash** of `(tile, object, run-seed)` → deterministic and rollback-safe, and content
+**never changes the centre-data or connectors**, so it is invisible to the verifier (the §3 cosmetic vs
+`host` split holds — a shelf `host` can carry a queued key; the rest is pure view). This is §5's gradual
+decoration made concrete: content + placement run *per tile, the moment its structure commits* — no
+decorate phase, just the placement machine trailing the structural front.
+
+### Composites (multi-tile set-pieces)
+
+A single wall tile already covers most variety through (connectors, centre, centre-data, content).
+**Composites are for things bigger than one tile** — a 2-wide archway, a 2×2 shrine, a multi-cell
+staircase. They claim N adjacent squares from one anchor and map onto the IR's existing
+`Placement.span`.
 
 > **The explosion is the goal, and the architecture absorbs it without an explosion of *work*:**
 > - **Authoring stays linear.** You never hand-validate unit×unit pairings. Each unit declares its
@@ -91,10 +164,11 @@ lattice, classified once.
 
 A slot's eligibility is decided by three things that must **never be conflated**:
 
-1. **Sockets** — a per-face *physical mating contract* in a small **closed** alphabet (owned by the
+1. **Sockets** — a per-side *physical mating contract* in a small **closed** alphabet (owned by the
    generator). Two adjacent slots are compatible iff their facing sockets are complementary. This is
-   "WFC adjacency", named by physical meaning. *Sockets are few.*
-   `WALL_FLAT | WALL_END | POST | OPEN | DOORWAY | VOID`
+   "WFC adjacency", named by physical meaning. *Sockets are few.* For wall tiles the socket on a side
+   **is that side's connector** (§2): my `E` connector must meet your `W` connector, and the tile's
+   `centreData` sets passability. `WALL_FLAT | WALL_END | POST | OPEN | DOORWAY | VOID`
 2. **Tags** — a per-candidate *semantic predicate set* in an **open**, authored vocabulary (owned by the
    editor). `flat`, `junction`, `shelf`, `rubble-ok`, `opening`, `gate`, `library`, `light`… *Tags are
    many.* Stored as a bitmask for cheap, deterministic set-ops.
