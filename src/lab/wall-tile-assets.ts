@@ -17,7 +17,7 @@
 // │  + low_gate │ wall_gated                │  ″                                             │
 // │  + hole     │ wall_broken               │  ″                                             │
 // │ corner      │ wall_corner (with column) │ {W,N}→0 {N,E}→π/2 {E,S}→π {S,W}→−π/2            │
-// │ bend        │ wall_corner_small (no col)│ same yaw; triggered by a SINGLE-axis centre     │
+// │ bend        │ wall_half_endcap ×2       │ a short capped wall-end at each edge → column-less L; single-axis centre │
 // │ tee         │ wall_Tsplit               │ open S→0  W→π/2  N→π  E→−π/2                    │
 // │ cross       │ wall_crossing             │ 0                                              │
 // │ cap         │ wall_endcap               │ W→0  S→π/2  E→π  N→−π/2                         │
@@ -54,10 +54,10 @@ const u = (f: string): string => `${DIR}/${f}.gltf.glb`;
 export const PIECE = {
   wall: u('wall'),
   corner: u('wall_corner'),
-  cornerSmall: u('wall_corner_small'), // a corner BEND with no column
   tee: u('wall_Tsplit'),
   cross: u('wall_crossing'),
   cap: u('wall_endcap'),
+  halfCap: u('wall_half_endcap'), // a SHORT capped wall-end (sits at the tile edge)
   arch: u('wall_arched'),
   window: u('wall_archedwindow_open'),
   gate: u('wall_gated'),
@@ -74,6 +74,12 @@ export const PIECE = {
 } as const;
 
 const Q = Math.PI / 2;
+
+/** d → unit (x,z). E = +X, W = -X, N = -Z, S = +Z. */
+const DV: Record<Dir, readonly [number, number]> = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
+
+/** How far to push an edge-cap toward the tile boundary (tile half-extent is 2u). Tunable. */
+const EDGE = 1.6;
 
 const present = (t: WallTile): Dir[] => (['N', 'E', 'S', 'W'] as Dir[]).filter((d) => t[d] !== 'none');
 
@@ -128,6 +134,9 @@ function wallTypeUrl(wt: WallType): string {
 export interface WallPlacement {
   url: string;
   yaw: number;
+  /** offset from the tile centre (whole-tile pieces = 0; arm/cap pieces shift into their half). */
+  x?: number;
+  z?: number;
 }
 
 /** The KayKit wall/barrier piece(s) that realize a tile's structure. All centred on the tile. */
@@ -135,7 +144,7 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
   const a = resolveWallTile(tile);
   const ds = present(tile);
   const barrier = (tile.centre !== 'none' ? tile.centreType : tile[ds[0] ?? 'N']) === 'barrier';
-  const at = (url: string, yaw = 0): WallPlacement => ({ url, yaw });
+  const at = (url: string, yaw = 0, x = 0, z = 0): WallPlacement => ({ url, yaw, x, z });
 
   switch (a.case) {
     case 'empty':
@@ -152,8 +161,17 @@ export function wallPieces(tile: WallTile): WallPlacement[] {
       return [at(barrier ? PIECE.barrier : wallTypeUrl(tile.wallType), straightYaw(ds))];
     case 'corner':
       return [at(barrier ? PIECE.barrierCorner : PIECE.corner, cornerYaw(ds))];
-    case 'bend':
-      return [at(barrier ? PIECE.barrierCorner : PIECE.cornerSmall, cornerYaw(ds))]; // no column
+    case 'bend': {
+      // a column-less turn: for walls, an end-cap at EACH connected EDGE — the cap's open mouth
+      // meets the neighbour wall at the tile boundary, its rounded back just inside, so each wall
+      // finishes nicely at the edge and the corner stays OPEN (no centre pillar). Barriers use the
+      // low corner piece.
+      if (barrier) return [at(PIECE.barrierCorner, cornerYaw(ds))];
+      return ds.map((d) => {
+        const [dx, dz] = DV[d];
+        return at(PIECE.halfCap, capYaw(d), dx * EDGE, dz * EDGE);
+      });
+    }
     case 'tee':
       return barrier ? composeArms(tile) : [at(PIECE.tee, teeYaw(ds))]; // no barrier_Tsplit asset
     case 'cross':

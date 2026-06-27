@@ -165,6 +165,8 @@ async function renderTile(tile: WallTile, myGen: number): Promise<void> {
     const root = await buildPiece(wp.url, 1);
     if (myGen !== gen) return;
     root.rotation.y = wp.yaw;
+    root.position.x = wp.x ?? 0;
+    root.position.z = wp.z ?? 0;
     group.add(root);
   }
   // ---- optional object demo: a mounted torch per wall arm + a floor barrel ----
