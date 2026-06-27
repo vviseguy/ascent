@@ -4,6 +4,7 @@ import { makeGrid, applyBatch, collapseGrid, at } from './tile-grid.ts';
 import { collapse, segs, isOpen, type TileField } from './wall-tile-field.ts';
 import { label } from './wall-tile.ts';
 
+const OPEN = segs('none', 'wall', 'barrier'); // a fully-open segment domain
 const fieldAt = (g: ReturnType<typeof makeGrid>, x: number, y: number): TileField => at(g, x, y) as TileField;
 const tileAt = (g: ReturnType<typeof makeGrid>, x: number, y: number) => collapse(fieldAt(g, x, y))!;
 const labelAt = (g: ReturnType<typeof makeGrid>, x: number, y: number): string => label(tileAt(g, x, y));
@@ -26,14 +27,23 @@ describe('room-templates — every room stamps cleanly + collapses to a full gri
   }
 });
 
-describe('room-templates — constrain only the inside', () => {
-  it('the outward boundary edge of a wall tile is left OPEN (anything can connect)', () => {
-    const g = makeGrid(5, 4);
-    applyBatch(g, [{ region: { x: 0, y: 0, w: 5, h: 4 }, stamp: basicRoom(5, 4) }]);
-    const west = fieldAt(g, 0, 1); // a west-wall tile (N–S run)
-    expect(west.edge.W).toBe(segs('none', 'wall', 'barrier')); // outward edge unconstrained
-    expect(west.inner.N).toBe(segs('wall')); // ...but the wall itself IS pinned
-    expect(west.inner.S).toBe(segs('wall'));
+describe('room-templates — constrain only what is inside the room', () => {
+  it('a boundary corner is NOT forced to be a corner — outward arms stay open (tee/cross allowed)', () => {
+    const g = stamp('basic room', 5, 4);
+    const nw = fieldAt(g, 0, 0); // NW corner, the room's arms are E + S
+    expect(nw.inner.E).toBe(segs('wall')); // its OWN walls are pinned
+    expect(nw.inner.S).toBe(segs('wall'));
+    expect(nw.inner.N).toBe(OPEN); // outward — open, so it can become a tee/cross if something connects
+    expect(nw.inner.W).toBe(OPEN);
+  });
+
+  it('floor is cut per corner — a wall tile keeps floor only on its interior side', () => {
+    const g = stamp('basic room', 5, 4);
+    const west = tileAt(g, 0, 1); // a west-wall tile; interior is to the EAST
+    expect(west.floor.ne).toBe('stone'); // interior corners kept
+    expect(west.floor.se).toBe('stone');
+    expect(west.floor.nw).toBe('none'); // corners beyond the wall removed
+    expect(west.floor.sw).toBe('none');
   });
 
   it('a cell outside the stamped region stays fully open (ground only in the room)', () => {
@@ -84,5 +94,26 @@ describe('room-templates — entries + structural signatures', () => {
     const g = makeGrid(7, 5);
     applyBatch(g, [{ region: { x: 0, y: 0, w: 7, h: 5 }, stamp: library(7, 5) }]);
     expect(tileAt(g, 3, 2).floor.nw).toBe('wood');
+  });
+});
+
+describe('room-templates — permissive rooms only conflict when genuinely incompatible', () => {
+  it('two SAME-floor rooms can overlap (compatible) — no conflict', () => {
+    const g = makeGrid(7, 7);
+    const r = applyBatch(g, [
+      { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+      { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+    ]);
+    expect(r.ok).toBe(true);
+  });
+
+  it('two DIFFERENT-floor rooms overlapping conflict → batch rolls back', () => {
+    const g = makeGrid(7, 7);
+    const r = applyBatch(g, [
+      { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+      { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'wood') }, // wood vs stone on shared floor
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.conflicts.length).toBeGreaterThan(0);
   });
 });

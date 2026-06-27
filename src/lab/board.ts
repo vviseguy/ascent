@@ -58,7 +58,7 @@ view.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14141e);
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(24, 32, 32);
+camera.position.set(6, 46, 20); // steep, near-top-down — reads as a floor plan
 camera.lookAt(0, 0, 0);
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const keyLight = new THREE.DirectionalLight(0xffffff, 1.2); keyLight.position.set(12, 22, 8); scene.add(keyLight);
@@ -119,8 +119,8 @@ const TWO_ROOMS: { region: Region; stamp: Stamp }[] = [
   { region: { x: 4, y: 3, w: 3, h: 4 }, stamp: basicRoom(3, 4) },
 ];
 const OVERLAPPING: { region: Region; stamp: Stamp }[] = [
-  { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4) },
-  { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4) }, // overlaps → conflict
+  { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+  { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'wood') }, // demands wood where the other wants stone → conflict
 ];
 
 function button(label: string, onClick: () => void): void {
@@ -153,7 +153,7 @@ button('— two rooms (commit)', () => {
 button('— overlapping rooms (rollback)', () => {
   void show(GW, GH, (g) => {
     const r = applyBatch(g, OVERLAPPING);
-    status(r.ok ? '✓ committed (unexpected)' : `✗ conflict at ${r.conflicts.length} cell(s) → whole batch rolled back, grid stays open`, r.ok ? 'ok' : 'bad');
+    status(r.ok ? '✓ committed (unexpected)' : `✗ incompatible floors at ${r.conflicts.length} cell(s) → whole batch rolled back, grid stays open`, r.ok ? 'ok' : 'bad');
   });
 });
 
