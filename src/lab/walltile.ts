@@ -1,13 +1,11 @@
 // ============================================================================
-// src/lab/walltile.ts — the WALL-TILE DEBUG view (walltile.html).
+// src/lab/walltile.ts — the WALL-TILE DEBUG view (walltile.html), 9-cell model.
 // ============================================================================
 //
-// Plug a tile's params (per-corner floor, 4 connections, centre axis/type, wallType) into the
-// panel and SEE the resolved arrangement built from REAL KayKit Dungeon Remastered meshes
-// (no custom boxes) — to eyeball that every input maps to a sane piece + orientation and catch
-// resolver/asset/validation errors. Structure pieces come from the architectural registry
-// (wall-tile-assets.ts); floors are per-corner; the optional object demo (torch/barrel) shows
-// side placement. Everything builds through world-object → recolor → box-fit, the game's path.
+// Plug the 9 cells (4 outer EDGES + 4 INNER sides + the CENTRE column) + per-corner floor +
+// wallType into the panel and SEE the composed arrangement built from REAL KayKit Dungeon
+// Remastered meshes (no boxes). Structure pieces come from the registry (wall-tile-assets.ts);
+// the object demo (torch/barrel) shows side placement.
 //
 // SNAPSHOT HOOKS:  __WT_READY · __wtSet(partial) · __wtState()
 // ============================================================================
@@ -15,43 +13,37 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  resolveWallTile,
-  describeWallTile,
-  validateWallTile,
+  label,
+  validate,
+  armOf,
+  DIRS,
   FLOOR_CORNERS,
   type WallTile,
-  type Connection,
-  type CentreAxis,
-  type CentreType,
+  type Seg,
+  type Centre,
   type WallType,
   type FloorMaterial,
   type CornerFloors,
   type FloorCorner,
+  type SideSet,
 } from '../floor/wall-tile.ts';
 import { wallPieces, floorPieces } from './wall-tile-assets.ts';
 import { meshObject, type WorldObject } from './world-object.ts';
 
 /* --------------------------------- constants --------------------------------- */
 
-const HALF = 2; // tile is native 4u → ±2 to each edge
-const CONN: Connection[] = ['none', 'wall', 'barrier'];
-const AXES: CentreAxis[] = ['none', 'EW', 'NS', 'both'];
-const CTYPES: CentreType[] = ['wall', 'barrier'];
+const HALF = 2; // native 4u tile → ±2 to each edge
+const SEGS: Seg[] = ['none', 'wall', 'barrier'];
+const CENTRES: Centre[] = ['none', 'wall', 'barrier'];
 const WTS: WallType[] = ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'];
 const FLOOR_MATS: FloorMaterial[] = ['stone', 'dirt', 'wood', 'none'];
+const CORNER_POS: Record<FloorCorner, readonly [number, number]> = { nw: [-1, -1], ne: [1, -1], sw: [-1, 1], se: [1, 1] };
 
-// corner → (x,z) centre of that quarter. E = +X, W = -X, N = -Z, S = +Z.
-const CORNER_POS: Record<FloorCorner, readonly [number, number]> = {
-  nw: [-1, -1],
-  ne: [1, -1],
-  sw: [-1, 1],
-  se: [1, 1],
-};
+const TORCH = 'models/kaykit_dungeon_remastered/torch_mounted.gltf.glb';
+const BARREL = 'models/kaykit_dungeon_remastered/barrel_small.gltf.glb';
 
 /* ----------------------- real-asset building (cached) ------------------------ */
 
-// Build KayKit pieces through the real world-object path. Cache one WorldObject per (url,scale);
-// the GLB template itself is cached inside world-object.ts, so repeated builds are cheap.
 const objCache = new Map<string, WorldObject>();
 function pieceObj(url: string, scale: number): WorldObject {
   const key = `${url}@${scale}`;
@@ -65,7 +57,6 @@ function pieceObj(url: string, scale: number): WorldObject {
 async function buildPiece(url: string, scale = 1): Promise<THREE.Object3D> {
   return (await pieceObj(url, scale).build('default', 0)).root;
 }
-/** Build an asset and scale its built root to `targetH` game-units tall (for props). */
 async function buildSized(url: string, targetH: number): Promise<THREE.Object3D> {
   const root = await buildPiece(url, 1);
   const bb = new THREE.Box3().setFromObject(root);
@@ -73,9 +64,6 @@ async function buildSized(url: string, targetH: number): Promise<THREE.Object3D>
   root.scale.multiplyScalar(targetH / h);
   return root;
 }
-
-const TORCH = 'models/kaykit_dungeon_remastered/torch_mounted.gltf.glb';
-const BARREL = 'models/kaykit_dungeon_remastered/barrel_small.gltf.glb';
 
 /* ----------------------------------- scene ----------------------------------- */
 
@@ -93,16 +81,12 @@ camera.position.set(7, 7, 9);
 camera.lookAt(0, 1.4, 0);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const key = new THREE.DirectionalLight(0xffffff, 1.2);
-key.position.set(6, 10, 4);
-scene.add(key);
-const fill = new THREE.DirectionalLight(0x8899ff, 0.35);
-fill.position.set(-5, 4, -6);
-scene.add(fill);
-
-const grid = new THREE.GridHelper(12, 3, 0x445, 0x24243200);
-grid.position.y = 0.0;
-scene.add(grid);
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+keyLight.position.set(6, 10, 4);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0x8899ff, 0.35);
+fillLight.position.set(-5, 4, -6);
+scene.add(fillLight);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1.4, 0);
@@ -114,8 +98,18 @@ scene.add(group);
 /* ----------------------------------- state ----------------------------------- */
 
 const allF = (m: FloorMaterial): CornerFloors => ({ nw: m, ne: m, sw: m, se: m });
-const DEFAULT: WallTile = { floor: allF('stone'), N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'solid' };
-const state: WallTile = { ...DEFAULT, floor: { ...DEFAULT.floor } };
+const side = (N: Seg, E: Seg, S: Seg, W: Seg): SideSet => ({ N, E, S, W });
+
+// default: a straight E–W wall (both arms full on the EW axis)
+const DEFAULT: WallTile = {
+  floor: allF('stone'),
+  edge: side('none', 'wall', 'none', 'wall'),
+  inner: side('none', 'wall', 'none', 'wall'),
+  centre: 'none',
+  wallType: 'solid',
+};
+const clone = (t: WallTile): WallTile => ({ floor: { ...t.floor }, edge: { ...t.edge }, inner: { ...t.inner }, centre: t.centre, wallType: t.wallType });
+const state: WallTile = clone(DEFAULT);
 let showObjects = false;
 let gen = 0;
 
@@ -136,21 +130,22 @@ function rebuild(): void {
   disposeGroup(group);
   group = new THREE.Group();
   scene.add(group);
-
   void renderTile(state, myGen);
 
-  const a = resolveWallTile(state);
-  const issues = validateWallTile(state);
   const caseEl = document.getElementById('case');
   const descEl = document.getElementById('desc');
   const warnEl = document.getElementById('warn');
-  if (caseEl) caseEl.textContent = a.case;
-  if (descEl) descEl.textContent = describeWallTile(state);
-  if (warnEl) warnEl.textContent = issues.length ? `⚠ ${issues.map((i) => i.message).join(' · ')}` : '';
+  const issues = validate(state);
+  if (caseEl) caseEl.textContent = label(state);
+  if (descEl) {
+    const e = state.edge;
+    const i = state.inner;
+    descEl.textContent = `edge ${e.N}/${e.E}/${e.S}/${e.W} · inner ${i.N}/${i.E}/${i.S}/${i.W} · centre ${state.centre}`;
+  }
+  if (warnEl) warnEl.textContent = issues.length ? `⚠ ${issues.map((x) => x.message).join(' · ')}` : '';
 }
 
 async function renderTile(tile: WallTile, myGen: number): Promise<void> {
-  // ---- floor (full tile when uniform, else a quarter per non-none corner) ----
   for (const fp of floorPieces(tile)) {
     const root = await buildPiece(fp.url, fp.corner === 'full' ? 1 : 0.5);
     if (myGen !== gen) return;
@@ -160,20 +155,18 @@ async function renderTile(tile: WallTile, myGen: number): Promise<void> {
     }
     group.add(root);
   }
-  // ---- walls / barriers (real KayKit pieces, centred, yaw from the registry) ----
   for (const wp of wallPieces(tile)) {
     const root = await buildPiece(wp.url, 1);
     if (myGen !== gen) return;
     root.rotation.y = wp.yaw;
-    root.position.x = wp.x ?? 0;
-    root.position.z = wp.z ?? 0;
+    root.position.x = wp.x;
+    root.position.z = wp.z;
     group.add(root);
   }
-  // ---- optional object demo: a mounted torch per wall arm + a floor barrel ----
   if (showObjects) {
     let barrel = false;
-    for (const d of ['N', 'E', 'S', 'W'] as const) {
-      if (tile[d] !== 'wall') continue;
+    for (const d of DIRS) {
+      if (armOf(tile, d).type !== 'wall') continue;
       const dx = d === 'E' ? 1 : d === 'W' ? -1 : 0;
       const dz = d === 'S' ? 1 : d === 'N' ? -1 : 0;
       const t = await buildSized(TORCH, 1.4);
@@ -195,13 +188,13 @@ async function renderTile(tile: WallTile, myGen: number): Promise<void> {
 
 /* ----------------------------------- panel ----------------------------------- */
 
-function selectRow(label: string, value: string, opts: readonly string[], onChange: (v: string) => void, dataKey?: string): HTMLDivElement {
+function selectRow(labelText: string, value: string, opts: readonly string[], onChange: (v: string) => void, dataKey: string): HTMLDivElement {
   const row = document.createElement('div');
   row.className = 'row';
   const lab = document.createElement('label');
-  lab.textContent = label;
+  lab.textContent = labelText;
   const sel = document.createElement('select');
-  if (dataKey) sel.dataset['key'] = dataKey;
+  sel.dataset['key'] = dataKey;
   for (const o of opts) {
     const opt = document.createElement('option');
     opt.value = o;
@@ -215,56 +208,72 @@ function selectRow(label: string, value: string, opts: readonly string[], onChan
   return row;
 }
 
+function valueFor(key: string): string {
+  if (key.startsWith('edge.')) return state.edge[key.slice(5) as Dir];
+  if (key.startsWith('inner.')) return state.inner[key.slice(6) as Dir];
+  if (key.startsWith('floor.')) return state.floor[key.slice(6) as FloorCorner];
+  return state[key as 'centre' | 'wallType'];
+}
+type Dir = 'N' | 'E' | 'S' | 'W';
+function setValue(key: string, v: string): void {
+  if (key.startsWith('edge.')) state.edge[key.slice(5) as Dir] = v as Seg;
+  else if (key.startsWith('inner.')) state.inner[key.slice(6) as Dir] = v as Seg;
+  else if (key.startsWith('floor.')) state.floor[key.slice(6) as FloorCorner] = v as FloorMaterial;
+  else if (key === 'centre') state.centre = v as Centre;
+  else if (key === 'wallType') state.wallType = v as WallType;
+}
 function syncControls(): void {
   document.querySelectorAll<HTMLSelectElement>('#fields select').forEach((sel) => {
     const k = sel.dataset['key'];
-    if (!k) return;
-    if (k.startsWith('floor.')) sel.value = state.floor[k.slice(6) as FloorCorner];
-    else sel.value = state[k as keyof WallTile] as string;
+    if (k) sel.value = valueFor(k);
   });
 }
 
 const fields = document.getElementById('fields');
+function group2(title: string): void {
+  const h = document.createElement('div');
+  h.textContent = title;
+  h.style.cssText = 'color:#778;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.5px';
+  fields?.appendChild(h);
+}
 if (fields) {
-  for (const c of FLOOR_CORNERS) {
-    fields.appendChild(
-      selectRow(`floor ${c}`, state.floor[c], FLOOR_MATS, (v) => { state.floor[c] = v as FloorMaterial; rebuild(); }, `floor.${c}`),
-    );
-  }
-  const wallKeys: (keyof WallTile)[] = ['N', 'E', 'S', 'W'];
-  for (const k of wallKeys) fields.appendChild(selectRow(k, state[k] as string, CONN, (v) => { (state[k] as string) = v; rebuild(); }, k));
-  fields.appendChild(selectRow('centre', state.centre, AXES, (v) => { state.centre = v as CentreAxis; rebuild(); }, 'centre'));
-  fields.appendChild(selectRow('centreType', state.centreType, CTYPES, (v) => { state.centreType = v as CentreType; rebuild(); }, 'centreType'));
-  fields.appendChild(selectRow('wallType', state.wallType, WTS, (v) => { state.wallType = v as WallType; rebuild(); }, 'wallType'));
+  const addSel = (label: string, opts: readonly string[], key: string): void => {
+    fields.appendChild(selectRow(label, valueFor(key), opts, (v) => { setValue(key, v); rebuild(); }, key));
+  };
+  group2('edges (neighbour side)');
+  for (const d of DIRS) addSel(`edge ${d}`, SEGS, `edge.${d}`);
+  group2('inner (centre side)');
+  for (const d of DIRS) addSel(`inner ${d}`, SEGS, `inner.${d}`);
+  group2('centre + opening');
+  addSel('centre col', CENTRES, 'centre');
+  addSel('wallType', WTS, 'wallType');
+  group2('floor (per corner)');
+  for (const c of FLOOR_CORNERS) addSel(`floor ${c}`, FLOOR_MATS, `floor.${c}`);
 }
 
 const objChk = document.getElementById('objects') as HTMLInputElement | null;
 objChk?.addEventListener('change', () => { showObjects = objChk.checked; rebuild(); });
 
 const PRESETS: Record<string, WallTile> = {
-  'straight wall': { ...DEFAULT, floor: allF('stone') },
-  'wall + door': { floor: allF('stone'), N: 'none', E: 'wall', S: 'none', W: 'wall', centre: 'EW', centreType: 'wall', wallType: 'door' },
-  corner: { floor: allF('stone'), N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  'bend (no column)': { floor: allF('stone'), N: 'wall', E: 'wall', S: 'none', W: 'none', centre: 'EW', centreType: 'wall', wallType: 'solid' },
-  tee: { floor: allF('stone'), N: 'none', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  cross: { floor: allF('stone'), N: 'wall', E: 'wall', S: 'wall', W: 'wall', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  column: { floor: allF('stone'), N: 'none', E: 'none', S: 'none', W: 'none', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  'railing (E–W)': { floor: allF('stone'), N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'EW', centreType: 'barrier', wallType: 'solid' },
-  '=‖= barrier + column': { floor: allF('stone'), N: 'none', E: 'barrier', S: 'none', W: 'barrier', centre: 'both', centreType: 'wall', wallType: 'solid' },
-  'dirt↔stone floor': { floor: { nw: 'stone', ne: 'stone', sw: 'dirt', se: 'dirt' }, N: 'none', E: 'none', S: 'none', W: 'none', centre: 'none', centreType: 'wall', wallType: 'solid' },
-  hole: { floor: allF('none'), N: 'none', E: 'none', S: 'none', W: 'none', centre: 'none', centreType: 'wall', wallType: 'solid' },
+  'straight wall': clone(DEFAULT),
+  'wall + door': { floor: allF('stone'), edge: side('none', 'wall', 'none', 'wall'), inner: side('none', 'wall', 'none', 'wall'), centre: 'none', wallType: 'door' },
+  'bend (no column)': { floor: allF('stone'), edge: side('wall', 'wall', 'none', 'none'), inner: side('wall', 'wall', 'none', 'none'), centre: 'none', wallType: 'solid' },
+  'corner (column)': { floor: allF('stone'), edge: side('wall', 'wall', 'none', 'none'), inner: side('wall', 'wall', 'none', 'none'), centre: 'wall', wallType: 'solid' },
+  tee: { floor: allF('stone'), edge: side('none', 'wall', 'wall', 'wall'), inner: side('none', 'wall', 'wall', 'wall'), centre: 'none', wallType: 'solid' },
+  cross: { floor: allF('stone'), edge: side('wall', 'wall', 'wall', 'wall'), inner: side('wall', 'wall', 'wall', 'wall'), centre: 'none', wallType: 'solid' },
+  column: { floor: allF('stone'), edge: side('none', 'none', 'none', 'none'), inner: side('none', 'none', 'none', 'none'), centre: 'wall', wallType: 'solid' },
+  'edge caps only': { floor: allF('stone'), edge: side('wall', 'wall', 'none', 'none'), inner: side('none', 'none', 'none', 'none'), centre: 'none', wallType: 'solid' },
+  'inner stub N': { floor: allF('stone'), edge: side('none', 'none', 'none', 'none'), inner: side('wall', 'none', 'none', 'none'), centre: 'none', wallType: 'solid' },
+  'railing (E–W)': { floor: allF('stone'), edge: side('none', 'barrier', 'none', 'barrier'), inner: side('none', 'barrier', 'none', 'barrier'), centre: 'none', wallType: 'solid' },
+  'dirt↔stone floor': { floor: { nw: 'stone', ne: 'stone', sw: 'dirt', se: 'dirt' }, edge: side('none', 'none', 'none', 'none'), inner: side('none', 'none', 'none', 'none'), centre: 'none', wallType: 'solid' },
+  hole: { floor: allF('none'), edge: side('none', 'none', 'none', 'none'), inner: side('none', 'none', 'none', 'none'), centre: 'none', wallType: 'solid' },
 };
 const presets = document.getElementById('presets');
 if (presets) {
   for (const [name, tile] of Object.entries(PRESETS)) {
     const b = document.createElement('button');
     b.textContent = name;
-    b.addEventListener('click', () => {
-      Object.assign(state, tile);
-      state.floor = { ...tile.floor };
-      syncControls();
-      rebuild();
-    });
+    b.addEventListener('click', () => { Object.assign(state, clone(tile)); syncControls(); rebuild(); });
     presets.appendChild(b);
   }
 }
@@ -274,7 +283,7 @@ if (presets) {
 type WTWindow = Window & {
   __WT_READY?: boolean;
   __wtSet?: (p: Partial<WallTile> & { objects?: boolean }) => void;
-  __wtState?: () => { tile: WallTile; case: string; describe: string; issues: string[]; objects: boolean };
+  __wtState?: () => { tile: WallTile; label: string; issues: string[]; objects: boolean };
 };
 const Wn = window as WTWindow;
 Wn.__wtSet = (p) => {
@@ -282,20 +291,15 @@ Wn.__wtSet = (p) => {
     showObjects = p.objects;
     if (objChk) objChk.checked = p.objects;
   }
-  const { objects: _o, floor, ...rest } = p as Partial<WallTile> & { objects?: boolean };
-  void _o;
-  Object.assign(state, rest);
-  if (floor) state.floor = { ...state.floor, ...floor };
+  if (p.edge) state.edge = { ...state.edge, ...p.edge };
+  if (p.inner) state.inner = { ...state.inner, ...p.inner };
+  if (p.floor) state.floor = { ...state.floor, ...p.floor };
+  if (p.centre) state.centre = p.centre;
+  if (p.wallType) state.wallType = p.wallType;
   syncControls();
   rebuild();
 };
-Wn.__wtState = () => ({
-  tile: { ...state, floor: { ...state.floor } },
-  case: resolveWallTile(state).case,
-  describe: describeWallTile(state),
-  issues: validateWallTile(state).map((i) => i.code),
-  objects: showObjects,
-});
+Wn.__wtState = () => ({ tile: clone(state), label: label(state), issues: validate(state).map((i) => i.code), objects: showObjects });
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

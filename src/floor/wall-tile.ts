@@ -1,63 +1,52 @@
-/**
- * src/floor/wall-tile.ts — the WALL-TILE structural model + resolver (docs/16 §2).
- *
- * A wall occupies its OWN 4u square (walls own tiles, not edges). A tile's "piece" is
- * NOT an enum — it is PARAMETERS that the resolver turns into a concrete arrangement:
- *
- *   - four CARDINAL CONNECTIONS (N/E/S/W), each `none | wall | barrier` — does an arm
- *     reach from the tile's centre out to that edge to meet the neighbour, and as what.
- *   - a CENTRE axis (`none | EW | NS | both`) — what fills the middle, on which axes.
- *   - a CENTRE TYPE (`wall | barrier`) — what the centre material is.
- *   - a WALL TYPE (wide, extensible) — the through-passage variety (solid/door/window/…),
- *     meaningful only for a single-axis WALL centre (EW or NS).
- *
- * The classic pieces (cap / straight / corner / tee / cross / column) are DERIVED from
- * (connections, centre) — never stored. A `both` centre means "it bulges, it is not a
- * flat wall" (corner/tee/cross/column); a column is just `both` with no connections.
- *
- * THE RESOLUTION RULE (the heart of this file):
- *   An arm whose TYPE and AXIS match the centre flows into it as one continuous **run**.
- *   An arm that does NOT match **caps** at the centre — a wall cap, or a half-barrier
- *   reaching the middle. **Overlap is fine.** So E+W barriers around a `both`/`wall`
- *   centre resolve to a barrier crossbar with a wall column poking through it:
- *        ||          (the wall column — full height)
- *      =====         (the barrier crossbar — low; the column overlaps it in the middle)
- *
- * Pure + deterministic: a tile always resolves to the same arrangement. No RNG, no
- * floats, no Map iteration on output paths — safe for the sim / blueprint layer.
- *
- * Item placement (objects on the wall/floor corners) is deferred — see docs/16 §2
- * "content + the placement machine".
- */
+// ============================================================================
+// src/floor/wall-tile.ts — the WALL-TILE structural model (the 9-cell tile).
+// ============================================================================
+//
+// A wall occupies its own 4u SQUARE, modelled as a "plus" of 9 cells that cleanly
+// separates "what connects to the neighbour" (the EDGES) from "what's structurally
+// inside" (the INNER sides + the CENTRE):
+//
+//               edge.N
+//               inner.N
+//     edge.W  inner.W  ⊙  inner.E  edge.E      ⊙ = centre column (none|wall|barrier)
+//               inner.S                          inner.* = inner sides (none|wall|barrier)
+//               edge.S                           edge.*  = outer edges (none|wall|barrier)
+//
+// - Each of the 8 arm-cells (an EDGE + an INNER per direction) is `none | wall | barrier`.
+// - The CENTRE column is ADDITIVE: `none` lets walls pass through the middle solid (a
+//   cN+cS = a continuous straight wall, a cN+cE = a clean column-less bend); `wall`/`barrier`
+//   adds a pillar on top.
+// - `wallType` (door/window/…) only matters when a full straight LINE collapses to one wall.
+//
+// The classic pieces (straight / corner / tee / cross / cap / column / bend) are DERIVED
+// labels — see `label()`. Rendering composes per-arm pieces + the centre (wall-tile-assets.ts):
+// adjacent same-type cells collapse into longer walls; isolated cells are caps (inner caps
+// face in, edge caps face out). Pure + deterministic — no float/RNG/Map-iteration on output.
 
 export type Dir = 'N' | 'E' | 'S' | 'W';
 export const DIRS: readonly Dir[] = ['N', 'E', 'S', 'W'];
 
-/** A side's connection: nothing, a full-height wall arm, or a low barrier (handrail-like). */
-export type Connection = 'none' | 'wall' | 'barrier';
+/** One arm-cell (an edge or an inner side): nothing, a full-height wall, or a low barrier. */
+export type Seg = 'none' | 'wall' | 'barrier';
 
-/** What fills the tile's centre, and on which axis/axes. */
-export type CentreAxis = 'none' | 'EW' | 'NS' | 'both';
+/** The additive centre column. `none` = walls still pass through solid; wall/barrier = a pillar. */
+export type Centre = 'none' | 'wall' | 'barrier';
 
-/** What the centre material IS — a full wall, or a low barrier. */
-export type CentreType = 'wall' | 'barrier';
+/** A per-direction set of cells. */
+export interface SideSet {
+  N: Seg;
+  E: Seg;
+  S: Seg;
+  W: Seg;
+}
 
-/**
- * The through-passage variety of a single-axis WALL centre (EW/NS only). Wide + extensible
- * (new openings drop in here, not as new pieces). Only `solid` blocks fully; the others are
- * the openings collision + the solvability verifier read. (A barrier centre carries no
- * wallType — barriers are stone-only; there are no other barrier assets today.)
- */
+/** Opening of a full straight WALL line (EW or NS). Only read when a full line is all wall. */
 export type WallType = 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate';
 
 /** A floor material at one CORNER of a tile. `none` = a hole at that corner. */
 export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood';
 
-/**
- * Per-CORNER floor materials. A full tile of one material = all four corners equal; corners
- * may differ (a dirt↔stone transition), and any corner may be `none` (a partial hole). All
- * four `none` = a full hole.
- */
+/** Per-CORNER floor materials. Uniform non-`none` = a full tile; mixed = per-corner. */
 export interface CornerFloors {
   nw: FloorMaterial;
   ne: FloorMaterial;
@@ -68,144 +57,77 @@ export interface CornerFloors {
 export const FLOOR_CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
 export type FloorCorner = (typeof FLOOR_CORNERS)[number];
 
-/** The single material if all four corners agree and it isn't `none`, else null (mixed/partial/hole). */
+/** The single material if all four corners agree and it isn't `none`, else null. */
 export function uniformFloor(f: CornerFloors): Exclude<FloorMaterial, 'none'> | null {
   return f.nw === f.ne && f.ne === f.sw && f.sw === f.se && f.nw !== 'none' ? f.nw : null;
 }
 
-/**
- * The full parameterization of one 4u SQUARE. A wall tile and a plain FLOOR square are the
- * SAME thing: a floor square is just every connection `none` + `centre:'none'` over a floor;
- * an all-`none` floor is a hole. So this one struct covers floor, hole, and any wall/barrier
- * the tile carries on top of its floor.
- */
+/** The full parameterization of one 4u square. A plain floor = all-`none` arms + `centre:'none'`. */
 export interface WallTile {
-  /** Per-corner floor materials (or holes). Orthogonal to the wall structure above. */
   floor: CornerFloors;
-  N: Connection;
-  E: Connection;
-  S: Connection;
-  W: Connection;
-  /** What fills the centre. */
-  centre: CentreAxis;
-  /** Centre material — read only when `centre !== 'none'`. */
-  centreType: CentreType;
-  /** Through-passage — read only when `centreType === 'wall'` and `centre` is `EW`|`NS`. */
+  /** Outer cells, at the tile boundary — the connection to each neighbour. */
+  edge: SideSet;
+  /** Inner cells, between each edge and the centre. */
+  inner: SideSet;
+  /** Additive centre column. */
+  centre: Centre;
+  /** Opening kind for a full straight wall line. */
   wallType: WallType;
 }
 
-/* --------------------------------- arrangement -------------------------------- */
+/* ----------------------------------- derived --------------------------------- */
 
-/** How an arm meets the centre. `run` = continuous (matched type+axis); `cap` = ends at centre. */
-export type ArmTerminal = 'run' | 'cap';
-
-export interface ArmPiece {
-  type: Connection;
-  terminal: ArmTerminal;
+/** One direction's collapsed arm: its material, and whether it reaches the centre / the edge. */
+export interface Arm {
+  dir: Dir;
+  /** `null` = no arm. For a mixed inner/edge type, the INNER (centre-side) wins. */
+  type: 'wall' | 'barrier' | null;
+  /** inner cell present → the arm reaches the centre (joins the junction). */
+  reachesCentre: boolean;
+  /** edge cell present → the arm reaches the tile boundary (connects to the neighbour). */
+  reachesEdge: boolean;
 }
 
-export interface CentrePiece {
-  axis: CentreAxis;
-  /** `'none'` exactly when `axis === 'none'`. */
-  type: CentreType | 'none';
-  /** Present only for a single-axis WALL centre. */
-  wallType?: WallType;
+export function armOf(tile: WallTile, d: Dir): Arm {
+  const i = tile.inner[d];
+  const e = tile.edge[d];
+  const type = i !== 'none' ? i : e !== 'none' ? e : 'none';
+  return { dir: d, type: type === 'none' ? null : type, reachesCentre: i !== 'none', reachesEdge: e !== 'none' };
 }
 
-/** Named common case; `custom` covers mixed wall/barrier or an axis/connector mismatch. */
-export type WallCase =
-  | 'empty' //    nothing
-  | 'column' //   both-axis WALL centre, no connections → freestanding pillar
-  | 'post' //     both-axis BARRIER centre, no connections → freestanding barrier hub
-  | 'cap' //      one connection
-  | 'straight' // two opposite connections + a matching single-axis centre
-  | 'caps' //     two connections, no joining centre → independent caps across a gap
-  | 'corner' //   two adjacent connections + a both-axis centre → a turn WITH a column
-  | 'bend' //     two adjacent connections + a single-axis centre → a soft turn, NO column
-  | 'tee' //      three connections + a both-axis centre
-  | 'cross' //    four connections + a both-axis centre
-  | 'custom'; //  mixed types, or a connector/axis that doesn't line up
-
-/** The resolved geometry: a centre + four arms. Overlaps allowed. */
-export interface WallArrangement {
-  tile: WallTile;
-  centre: CentrePiece;
-  arms: Record<Dir, ArmPiece>;
-  case: WallCase;
+/** The directions whose INNER cell is set (these define the centre junction). */
+export function innerDirs(tile: WallTile): Dir[] {
+  return DIRS.filter((d) => tile.inner[d] !== 'none');
 }
 
-/* ----------------------------------- resolver --------------------------------- */
-
-const axisOf = (d: Dir): 'EW' | 'NS' => (d === 'E' || d === 'W' ? 'EW' : 'NS');
-
-/** Does the centre have material on the axis of direction `d`? */
-const centreCoversDir = (axis: CentreAxis, d: Dir): boolean =>
-  axis === 'both' || axis === axisOf(d);
-
-/**
- * Resolve a tile to its arrangement. Total: every input resolves (never throws). An arm
- * `run`s iff it shares the centre's type AND lies on a centre axis; otherwise it `cap`s
- * (a wall cap, or a half-barrier to the centre — overlap is allowed).
- */
-export function resolveWallTile(tile: WallTile): WallArrangement {
-  const centre: CentrePiece = {
-    axis: tile.centre,
-    type: tile.centre === 'none' ? 'none' : tile.centreType,
-  };
-  if (centre.type === 'wall' && (tile.centre === 'EW' || tile.centre === 'NS')) {
-    centre.wallType = tile.wallType;
-  }
-
-  const arms = {} as Record<Dir, ArmPiece>;
-  for (const d of DIRS) {
-    const conn = tile[d];
-    if (conn === 'none') {
-      arms[d] = { type: 'none', terminal: 'cap' };
-      continue;
-    }
-    const runs = centre.type === conn && centreCoversDir(tile.centre, d);
-    arms[d] = { type: conn, terminal: runs ? 'run' : 'cap' };
-  }
-
-  return { tile, centre, arms, case: classify(tile) };
-}
-
-/** Classify a tile into a common named case (or `custom`). Pure function of the params. */
-export function classify(tile: WallTile): WallCase {
-  const conns = DIRS.filter((d) => tile[d] !== 'none');
-  const n = conns.length;
-
-  // Material is "uniform" when every present thing (connections + a real centre) is one type.
-  const types = new Set<string>(conns.map((d) => tile[d]));
-  if (tile.centre !== 'none') types.add(tile.centreType);
-  if (types.size > 1) return 'custom';
-
+/** A human label for the structure, DERIVED from the inner junction + centre (for readouts). */
+export function label(tile: WallTile): string {
+  const inner = innerDirs(tile);
+  const edges = DIRS.filter((d) => tile.edge[d] !== 'none');
+  const col = tile.centre !== 'none';
+  const n = inner.length;
   if (n === 0) {
-    if (tile.centre === 'both') return tile.centreType === 'wall' ? 'column' : 'post';
-    if (tile.centre === 'none') return 'empty';
-    return 'custom'; // a single-axis centre floating with no connections — degenerate
+    if (col) return tile.centre === 'wall' ? 'column' : 'post';
+    return edges.length ? 'edge-caps' : 'empty';
   }
   if (n === 1) return 'cap';
   if (n === 2) {
-    const a = conns[0]!;
-    const b = conns[1]!;
+    const [a, b] = inner as [Dir, Dir];
     const opposite = (a === 'N' && b === 'S') || (a === 'E' && b === 'W');
-    if (opposite) {
-      if (tile.centre === axisOf(a)) return 'straight';
-      if (tile.centre === 'none') return 'caps';
-      return 'custom';
-    }
-    // adjacent pair = a corner candidate
-    if (tile.centre === 'both') return 'corner'; // a turn WITH a column
-    if (tile.centre === 'EW' || tile.centre === 'NS') return 'bend'; // a soft turn, NO column
-    if (tile.centre === 'none') return 'caps';
-    return 'custom';
+    if (opposite) return 'straight';
+    return col ? 'corner' : 'bend'; // adjacent: pillared corner vs column-less bend
   }
-  if (n === 3) return tile.centre === 'both' ? 'tee' : 'custom';
-  return tile.centre === 'both' ? 'cross' : 'custom'; // n === 4
+  if (n === 3) return 'tee';
+  return 'cross';
 }
 
-/* ----------------------------------- validate --------------------------------- */
+/** Is this axis a full straight WALL line (so `wallType` applies)? */
+export function fullWallLine(tile: WallTile, axis: 'EW' | 'NS'): boolean {
+  const ds: Dir[] = axis === 'EW' ? ['E', 'W'] : ['N', 'S'];
+  return ds.every((d) => tile.inner[d] === 'wall' && tile.edge[d] === 'wall');
+}
+
+/* ----------------------------------- validate -------------------------------- */
 
 export interface TileIssue {
   code: string;
@@ -213,40 +135,17 @@ export interface TileIssue {
 }
 
 /**
- * Flag inputs that are structurally INVALID as an authored tile. The resolver stays total
- * (it resolves anything), but a generator/editor should not EMIT these. The main rule the
- * design locked: a single-axis (`EW`/`NS`) centre must have at least one connection on that
- * axis — a floating bar with no connections is invalid, save special pieces (a ramp-down
- * wall) that we'll model explicitly later. Returns [] when the tile is well-formed.
+ * Flag tiles a generator/editor shouldn't emit. The model is permissive (an edge cap with no
+ * inner is a valid wall finishing at the boundary), so today the only check is a `wallType`
+ * opening declared where no full straight line exists to host it (it would be ignored).
  */
-export function validateWallTile(tile: WallTile): TileIssue[] {
+export function validate(tile: WallTile): TileIssue[] {
   const issues: TileIssue[] = [];
-  if (tile.centre === 'EW' && tile.E === 'none' && tile.W === 'none') {
+  if (tile.wallType !== 'solid' && !fullWallLine(tile, 'EW') && !fullWallLine(tile, 'NS')) {
     issues.push({
-      code: 'floating-EW-centre',
-      message: 'an EW centre with no E or W connection is a floating bar — valid only for special pieces (e.g. a ramp-down wall).',
-    });
-  }
-  if (tile.centre === 'NS' && tile.N === 'none' && tile.S === 'none') {
-    issues.push({
-      code: 'floating-NS-centre',
-      message: 'an NS centre with no N or S connection is a floating bar — valid only for special pieces (e.g. a ramp-down wall).',
+      code: 'wallType-without-line',
+      message: `wallType '${tile.wallType}' needs a full straight wall line (both inner+edge on one axis all wall); it will be ignored.`,
     });
   }
   return issues;
-}
-
-/* ----------------------------------- describe --------------------------------- */
-
-/** A compact, human-readable summary of a tile's resolved arrangement (for tests/docs). */
-export function describeWallTile(tile: WallTile): string {
-  const a = resolveWallTile(tile);
-  const conns = DIRS.filter((d) => tile[d] !== 'none').map((d) => `${d}:${tile[d]}`);
-  const centre =
-    a.centre.type === 'none'
-      ? 'centre:none'
-      : `centre:${a.centre.axis}/${a.centre.type}${a.centre.wallType ? `/${a.centre.wallType}` : ''}`;
-  const caps = DIRS.filter((d) => a.arms[d].type !== 'none' && a.arms[d].terminal === 'cap');
-  const tail = caps.length ? `  (caps: ${caps.join(',')})` : '';
-  return `${a.case} { ${conns.join(' ') || 'no connections'} | ${centre} }${tail}`;
 }

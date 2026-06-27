@@ -1,43 +1,26 @@
 // ============================================================================
-// src/lab/wall-tile-assets.ts — the ARCHITECTURAL ELEMENT REGISTRY.
+// src/lab/wall-tile-assets.ts — the ARCHITECTURAL ELEMENT REGISTRY (9-cell model).
 // ============================================================================
 //
-// THE list of architectural elements + how to TRIGGER each, mapping a resolved WallTile
-// (src/floor/wall-tile.ts) onto REAL KayKit "Dungeon Remastered" meshes. No custom boxes.
-// Yaw formulas are the proven ones the game renderer (src/render/dungeon.ts) already uses.
+// Maps a WallTile (src/floor/wall-tile.ts) onto REAL KayKit Dungeon Remastered meshes by
+// COMPOSING per-arm pieces — adjacent same-type cells visually collapse into longer walls.
+// No custom boxes. Orientation reuses the game renderer's proven yaw conventions.
 //
-// TRIGGER TABLE (resolver case → KayKit asset → orientation)
-// ┌─────────────┬───────────────────────────┬──────────────────────────────────────────────┐
-// │ case        │ asset (dungeon_remastered)│ yaw                                            │
-// ├─────────────┼───────────────────────────┼──────────────────────────────────────────────┤
-// │ straight    │ wall  (or wallType asset) │ EW axis → 0 ; NS axis → π/2                     │
-// │  + door     │ wall_arched               │  ″                                             │
-// │  + arch     │ wall_arched               │  ″                                             │
-// │  + window   │ wall_archedwindow_open    │  ″                                             │
-// │  + low_gate │ wall_gated                │  ″                                             │
-// │  + hole     │ wall_broken               │  ″                                             │
-// │ corner      │ wall_corner (with column) │ {W,N}→0 {N,E}→π/2 {E,S}→π {S,W}→−π/2            │
-// │ bend        │ wall_half_endcap ×2       │ a short capped wall-end at each edge → column-less L; single-axis centre │
-// │ tee         │ wall_Tsplit               │ open S→0  W→π/2  N→π  E→−π/2                    │
-// │ cross       │ wall_crossing             │ 0                                              │
-// │ cap         │ wall_endcap               │ W→0  S→π/2  E→π  N→−π/2                         │
-// │ caps        │ wall_endcap × N           │ capYaw per arm                                 │
-// │ column      │ pillar                    │ 0                                              │
-// │ post        │ barrier_column            │ 0                                              │
-// │ barrier ↑   │ barrier / barrier_corner  │ same yaws as the wall equivalents              │
-// │ custom/mix  │ pillar|barrier_column +   │ centre piece + per-arm pieces: an arm that MEETS │
-// │             │   wall_half / wall_endcap │ a centre = half, else an END-CAP                │
-// └─────────────┴───────────────────────────┴──────────────────────────────────────────────┘
+// PER ARM (a direction's inner + edge cell):
+//   reaches centre AND edge → a half-wall (wall_half / barrier_half) centre→edge (open to join)
+//   reaches centre only      → a capped half from centre (wall_half_endcap) — an inner stub
+//   reaches edge only        → a capped half at the edge, facing out (the "edge cap")
+// CENTRE column (additive): wall → pillar, barrier → barrier_column, none → nothing.
+// FULL STRAIGHT LINE + wallType: one spanning opening piece (arch/window/gated/broken).
 // FLOOR (per corner): stone→floor_tile_large · dirt→floor_dirt_large · wood→floor_wood_large.
-//   uniform (all corners equal) → one full tile; mixed → one tile per non-`none` corner.
 //
-// GAPS (no single KayKit asset): a BARRIER tee/cross (pack ships no barrier_Tsplit/crossing) →
-//   composed from barrier_column + barrier_half arms; per-corner floor has no quarter assets →
-//   quarter-scaled full tiles. Both flagged here, not silently approximated.
+// NOTE: arm yaw/offset constants (armYaw / EDGE) are tuned against the live view.
 // ============================================================================
 
 import {
-  resolveWallTile,
+  armOf,
+  DIRS,
+  fullWallLine,
   uniformFloor,
   FLOOR_CORNERS,
   type WallTile,
@@ -47,159 +30,96 @@ import {
   type FloorCorner,
 } from '../floor/wall-tile.ts';
 
-const DIR = 'models/kaykit_dungeon_remastered';
-const u = (f: string): string => `${DIR}/${f}.gltf.glb`;
+const PACK = 'models/kaykit_dungeon_remastered';
+const u = (f: string): string => `${PACK}/${f}.gltf.glb`;
 
-/** The KayKit asset for every element this registry triggers (Dungeon Remastered). */
 export const PIECE = {
   wall: u('wall'),
-  corner: u('wall_corner'),
-  tee: u('wall_Tsplit'),
-  cross: u('wall_crossing'),
-  cap: u('wall_endcap'),
-  halfCap: u('wall_half_endcap'), // a SHORT capped wall-end (sits at the tile edge)
+  half: u('wall_half'),
+  halfCap: u('wall_half_endcap'),
   arch: u('wall_arched'),
   window: u('wall_archedwindow_open'),
   gate: u('wall_gated'),
   broken: u('wall_broken'),
   pillar: u('pillar'),
   barrier: u('barrier'),
-  barrierCorner: u('barrier_corner'),
-  barrierColumn: u('barrier_column'),
   barrierHalf: u('barrier_half'),
-  wallHalf: u('wall_half'),
+  barrierColumn: u('barrier_column'),
   floorStone: u('floor_tile_large'),
   floorDirt: u('floor_dirt_large'),
   floorWood: u('floor_wood_large'),
 } as const;
 
 const Q = Math.PI / 2;
-
-/** d → unit (x,z). E = +X, W = -X, N = -Z, S = +Z. */
 const DV: Record<Dir, readonly [number, number]> = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
-
-/** How far to push an edge-cap toward the tile boundary (tile half-extent is 2u). Tunable. */
+/** How far an edge-cap is pushed toward the tile boundary (tile half-extent 2u). Tunable. */
 const EDGE = 1.6;
 
-const present = (t: WallTile): Dir[] => (['N', 'E', 'S', 'W'] as Dir[]).filter((d) => t[d] !== 'none');
+/** Point a +X-extending half toward direction d (from the centre). */
+const armYaw = (d: Dir): number => (d === 'E' ? 0 : d === 'N' ? Q : d === 'W' ? Math.PI : -Q);
+/** Edge-cap yaw — the proven convention (a cap finishing a wall extending West sits at 0). */
+const capYaw = (d: Dir): number => (d === 'W' ? 0 : d === 'S' ? Q : d === 'E' ? Math.PI : -Q);
 
-/** wall_corner native joins W+N at yaw 0. */
-function cornerYaw(ds: Dir[]): number {
-  const s = new Set(ds);
-  if (s.has('W') && s.has('N')) return 0;
-  if (s.has('N') && s.has('E')) return Q;
-  if (s.has('E') && s.has('S')) return Math.PI;
-  return -Q; // S,W
-}
-
-/** wall_Tsplit native opens to the South; yaw to put the OPEN side (the missing dir) there. */
-function teeYaw(ds: Dir[]): number {
-  const s = new Set(ds);
-  const open = (['N', 'E', 'S', 'W'] as Dir[]).find((d) => !s.has(d));
-  if (open === 'S') return 0;
-  if (open === 'W') return Q;
-  if (open === 'N') return Math.PI;
-  return -Q; // open E
-}
-
-/** wall_endcap native caps a wall extending West. */
-function capYaw(d: Dir): number {
-  if (d === 'W') return 0;
-  if (d === 'S') return Q;
-  if (d === 'E') return Math.PI;
-  return -Q; // N
-}
-
-/** A straight wall's yaw: along E–W → 0, along N–S → π/2. */
-const straightYaw = (ds: Dir[]): number => (ds.includes('E') || ds.includes('W') ? 0 : Q);
-
-/** The wall asset for a single-axis WALL centre's opening kind. */
-function wallTypeUrl(wt: WallType): string {
-  switch (wt) {
-    case 'door':
-    case 'arch':
-      return PIECE.arch;
-    case 'window':
-      return PIECE.window;
-    case 'low_gate':
-      return PIECE.gate;
-    case 'hole':
-      return PIECE.broken;
-    case 'solid':
-    default:
-      return PIECE.wall;
-  }
-}
+const wallTypeUrl = (wt: WallType): string =>
+  wt === 'door' || wt === 'arch'
+    ? PIECE.arch
+    : wt === 'window'
+      ? PIECE.window
+      : wt === 'low_gate'
+        ? PIECE.gate
+        : wt === 'hole'
+          ? PIECE.broken
+          : PIECE.wall;
 
 export interface WallPlacement {
   url: string;
   yaw: number;
-  /** offset from the tile centre (whole-tile pieces = 0; arm/cap pieces shift into their half). */
-  x?: number;
-  z?: number;
+  x: number;
+  z: number;
 }
 
-/** The KayKit wall/barrier piece(s) that realize a tile's structure. All centred on the tile. */
+/** Compose the KayKit pieces that realize a tile's structure. */
 export function wallPieces(tile: WallTile): WallPlacement[] {
-  const a = resolveWallTile(tile);
-  const ds = present(tile);
-  const barrier = (tile.centre !== 'none' ? tile.centreType : tile[ds[0] ?? 'N']) === 'barrier';
-  const at = (url: string, yaw = 0, x = 0, z = 0): WallPlacement => ({ url, yaw, x, z });
-
-  switch (a.case) {
-    case 'empty':
-      return [];
-    case 'column':
-      return [at(PIECE.pillar)];
-    case 'post':
-      return [at(PIECE.barrierColumn)];
-    case 'cap':
-      return [at(barrier ? PIECE.barrierHalf : PIECE.cap, capYaw(ds[0]!))];
-    case 'caps':
-      return ds.map((d) => at(barrier ? PIECE.barrierHalf : PIECE.cap, capYaw(d)));
-    case 'straight':
-      return [at(barrier ? PIECE.barrier : wallTypeUrl(tile.wallType), straightYaw(ds))];
-    case 'corner':
-      return [at(barrier ? PIECE.barrierCorner : PIECE.corner, cornerYaw(ds))];
-    case 'bend': {
-      // a column-less turn: for walls, an end-cap at EACH connected EDGE — the cap's open mouth
-      // meets the neighbour wall at the tile boundary, its rounded back just inside, so each wall
-      // finishes nicely at the edge and the corner stays OPEN (no centre pillar). Barriers use the
-      // low corner piece.
-      if (barrier) return [at(PIECE.barrierCorner, cornerYaw(ds))];
-      return ds.map((d) => {
-        const [dx, dz] = DV[d];
-        return at(PIECE.halfCap, capYaw(d), dx * EDGE, dz * EDGE);
-      });
-    }
-    case 'tee':
-      return barrier ? composeArms(tile) : [at(PIECE.tee, teeYaw(ds))]; // no barrier_Tsplit asset
-    case 'cross':
-      return barrier ? composeArms(tile) : [at(PIECE.cross, 0)]; // no barrier_crossing asset
-    case 'custom':
-      return composeArms(tile);
-  }
-}
-
-/** Compose a mixed/gap case from a centre piece + per-arm pieces (orientation approximate).
- *  An arm that MEETS a matching centre is an open `half`; an arm with no centre to meet (the
- *  resolver marks it `cap`) is an END-CAP, not a half. */
-function composeArms(tile: WallTile): WallPlacement[] {
   const out: WallPlacement[] = [];
-  const a = resolveWallTile(tile);
-  if (tile.centre === 'both') out.push({ url: tile.centreType === 'barrier' ? PIECE.barrierColumn : PIECE.pillar, yaw: 0 });
-  for (const d of present(tile)) {
-    const capped = a.arms[d].terminal === 'cap'; // no centre on this axis → an end-cap
-    const url =
-      tile[d] === 'barrier'
-        ? PIECE.barrierHalf // (the pack ships no barrier end-cap; half is the closest)
-        : capped
-          ? PIECE.cap
-          : PIECE.wallHalf;
-    out.push({ url, yaw: capYaw(d) });
+  const skip = new Set<Dir>();
+
+  // a full straight wall LINE carrying an opening → one spanning piece (skip those arms)
+  if (tile.wallType !== 'solid') {
+    if (fullWallLine(tile, 'EW')) {
+      out.push({ url: wallTypeUrl(tile.wallType), yaw: 0, x: 0, z: 0 });
+      skip.add('E').add('W');
+    } else if (fullWallLine(tile, 'NS')) {
+      out.push({ url: wallTypeUrl(tile.wallType), yaw: Q, x: 0, z: 0 });
+      skip.add('N').add('S');
+    }
   }
+
+  for (const d of DIRS) {
+    if (skip.has(d)) continue;
+    const a = armOf(tile, d);
+    if (!a.type) continue;
+    const isB = a.type === 'barrier';
+    const [dx, dz] = DV[d];
+    if (a.reachesCentre && a.reachesEdge) {
+      // full arm: a half-wall from the centre out to the edge (open, joins neighbour)
+      out.push({ url: isB ? PIECE.barrierHalf : PIECE.half, yaw: armYaw(d), x: 0, z: 0 });
+    } else if (a.reachesCentre) {
+      // inner stub: a capped half from the centre, finishing before the edge
+      out.push({ url: isB ? PIECE.barrierHalf : PIECE.halfCap, yaw: armYaw(d), x: 0, z: 0 });
+    } else {
+      // edge cap: a capped half sitting at the boundary, facing out
+      out.push({ url: isB ? PIECE.barrierHalf : PIECE.halfCap, yaw: capYaw(d), x: dx * EDGE, z: dz * EDGE });
+    }
+  }
+
+  // additive centre column
+  if (tile.centre === 'wall') out.push({ url: PIECE.pillar, yaw: 0, x: 0, z: 0 });
+  else if (tile.centre === 'barrier') out.push({ url: PIECE.barrierColumn, yaw: 0, x: 0, z: 0 });
+
   return out;
 }
+
+/* --------------------------------- floor ------------------------------------- */
 
 const FLOOR_URL: Record<Exclude<FloorMaterial, 'none'>, string> = {
   stone: PIECE.floorStone,
@@ -213,7 +133,6 @@ export interface FloorPlacement {
   corner: FloorCorner | 'full';
 }
 
-/** The floor tile(s): one full tile when uniform, else one quarter per non-`none` corner. */
 export function floorPieces(tile: WallTile): FloorPlacement[] {
   const f = tile.floor;
   const uni = uniformFloor(f);
