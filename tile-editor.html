@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCENT — Tile Paint Editor</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; font: 13px/1.4 system-ui, sans-serif; color: #cdd; }
+      #app { display: flex; height: 100%; }
+      #panel { width: 240px; flex: none; background: #0d0d18; padding: 12px 14px; overflow-y: auto; box-shadow: 2px 0 12px rgba(0,0,0,.4); }
+      #paint { flex: 1 1 auto; overflow: auto; padding: 18px; }
+      #preview { width: 40%; flex: none; position: relative; border-left: 1px solid #23233a; }
+      #view3d { position: absolute; inset: 0; }
+      #hint { position: absolute; left: 10px; bottom: 10px; right: 10px; color: #99a; font-size: 12px; text-shadow: 0 1px 2px #000; }
+
+      h1 { font-size: 13px; margin: 0 0 10px; color: #fff; letter-spacing: .3px; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #7a7a95; margin: 16px 0 6px; }
+      .row { display: flex; flex-wrap: wrap; gap: 4px; }
+      .chip { padding: 5px 9px; background: #20203400; border: 1px solid #34344e; border-radius: 6px; cursor: pointer; color: #cde; user-select: none; }
+      .chip:hover { background: #2a2a44; }
+      .chip.on { background: #3a78ff; border-color: #3a78ff; color: #fff; }
+      .chip.val { min-width: 26px; text-align: center; }
+      .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid #0006; }
+      label.ck { display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 3px 0; }
+      button { padding: 6px 9px; background: #23233a; color: #cde; border: 1px solid #34344e; border-radius: 6px; cursor: pointer; font: inherit; }
+      button:hover { background: #2e2e4c; }
+      input[type=number], input[type=text] { width: 54px; background: #1a1a2c; border: 1px solid #34344e; color: #cde; border-radius: 5px; padding: 3px 5px; font: inherit; }
+      #combos .combo { display: flex; align-items: center; gap: 4px; margin: 3px 0; }
+      #combos .combo .name { flex: 1; cursor: pointer; padding: 4px 6px; background: #1a1a2c; border-radius: 5px; }
+      #combos .combo .name:hover { background: #26263e; }
+      #combos .combo.sel .name { outline: 1px solid #3a78ff; }
+      #combos .combo button { padding: 3px 6px; }
+      #status { margin-top: 12px; padding-top: 8px; border-top: 1px solid #23233a; color: #99a; min-height: 1.4em; }
+      #grid .wallLayer, #grid .floorLayer { cursor: crosshair; }
+      #grid.mode-section .floorLayer { pointer-events: none; } /* section: only the 9 wall sections take clicks */
+      #grid.mode-floor .wallLayer { pointer-events: none; }    /* floor: clicks fall through to the corners */
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="panel">
+        <h1>Tile Paint Editor</h1>
+        <div id="controls"></div>
+        <div id="status"></div>
+      </aside>
+      <main id="paint"><svg id="grid" xmlns="http://www.w3.org/2000/svg"></svg></main>
+      <section id="preview">
+        <div id="view3d"></div>
+        <div id="hint"></div>
+      </section>
+    </div>
+    <script type="module" src="/src/lab/tile-editor.ts"></script>
+  </body>
+</html>

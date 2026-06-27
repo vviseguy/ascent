@@ -87,7 +87,7 @@ describe('wall-tile-field — conflict (the NOR guard)', () => {
 describe('wall-tile-field — collapse is deterministic + seeded-pickable', () => {
   it('a seeded pick chooses different valid options but stays in-domain', () => {
     const f = andGate(fullField(), template({ edge: { N: segs('none', 'wall', 'barrier') } }));
-    const pickLast = (_cell: string, n: number) => n - 1;
+    const pickLast = (_cell: string, opts: readonly string[]) => opts.length - 1;
     const t = collapse(f, pickLast)!;
     expect(t.edge.N).toBe('barrier'); // last option of {none,wall,barrier}
     // and the collapsed tile is a valid WallTile the resolver can read

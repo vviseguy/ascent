@@ -124,11 +124,11 @@ export function applyBatch(
  *  seam — a seeded `(x,y,cell,options) → index` for real generation; default = canonical. */
 export function collapseGrid(
   grid: TileGrid,
-  pick?: (x: number, y: number, cell: string, options: number) => number,
+  pick?: (x: number, y: number, cell: string, options: readonly string[]) => number,
 ): (WallTile | null)[] {
   return grid.cells.map((f, i) => {
     const x = i % grid.w;
     const y = Math.floor(i / grid.w);
-    return collapse(f, pick ? (cell, n) => pick(x, y, cell, n) : undefined);
+    return collapse(f, pick ? (cell, opts) => pick(x, y, cell, opts) : undefined);
   });
 }

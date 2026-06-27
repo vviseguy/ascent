@@ -85,6 +85,13 @@ export const centres = (...allowed: Centre[]): Mask => maskOf(CENTRES, allowed);
 export const wallTypes = (...allowed: WallType[]): Mask => maskOf(WALLTYPES, allowed);
 export const floors = (...allowed: FloorMaterial[]): Mask => maskOf(FLOORS, allowed);
 
+/** The ordered value list per cell kind (bit i ↔ value i) — the single source for editor palettes. */
+export const VALUES = { seg: SEGS, centre: CENTRES, wallType: WALLTYPES, floor: FLOORS } as const;
+/** Decode a mask back to its allowed values (in bit order). */
+export const maskValues = <T>(vals: readonly T[], mask: Mask): T[] => valuesOf(vals, mask);
+/** How many values a domain still allows (1 = pinned, >1 = ambiguous, 0 = conflict). */
+export const domainSize = (m: Mask): number => { let c = 0; for (let x = m; x; x >>= 1) c += x & 1; return c; };
+
 export interface TemplateSpec {
   floor?: Partial<Record<FloorCorner, Mask>>;
   edge?: Partial<Record<Dir, Mask>>;
@@ -145,15 +152,16 @@ export function isOpen(f: TileField): boolean {
 }
 
 /**
- * Collapse a field to a concrete tile by choosing one value per cell. `pick(cell, n)` selects an
- * index in `[0,n)` among the allowed values (default 0 = the canonical lowest option); swap in a
- * seeded coordinate hash for real generation. Returns null if any cell is empty (a conflict).
+ * Collapse a field to a concrete tile by choosing one value per cell. `pick(cell, options)` selects
+ * an index into the allowed value strings (default 0 = the canonical lowest option) — seeing the
+ * values lets a caller PREFER one (e.g. derive ambiguity toward 'wall'). Swap in a seeded hash for
+ * real generation. Returns null if any cell is empty (a conflict).
  */
-export function collapse(f: TileField, pick?: (cell: string, options: number) => number): WallTile | null {
+export function collapse(f: TileField, pick?: (cell: string, options: readonly string[]) => number): WallTile | null {
   if (hasConflict(f)) return null;
-  const choose = <T>(cell: string, vals: readonly T[], mask: Mask): T => {
+  const choose = <T extends string>(cell: string, vals: readonly T[], mask: Mask): T => {
     const opts = valuesOf(vals, mask);
-    const i = pick ? ((pick(cell, opts.length) % opts.length) + opts.length) % opts.length : 0;
+    const i = pick ? ((pick(cell, opts) % opts.length) + opts.length) % opts.length : 0;
     return opts[i]!;
   };
   const side = (which: 'edge' | 'inner', s: Record<Dir, Mask>): SideSet => ({

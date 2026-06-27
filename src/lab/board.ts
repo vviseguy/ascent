@@ -19,29 +19,10 @@ import { makeGrid, applyBatch, collapseGrid, type TileGrid, type Region, type St
 import { isOpen } from '../floor/wall-tile-field.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
 import { basicRoom, ROOMS } from '../floor/room-templates.ts';
-import { meshObject, type WorldObject } from './world-object.ts';
+import { instance } from './tile-render.ts';
 
 const CELL = 4; // a tile is 4u; grid cell (gx,gy) centres at world (gx*CELL, gy*CELL)
 const MARGIN = 1; // open border around a single room, so its open boundary is visible (blue)
-
-/* ----------------------- real-asset building (cached + cloned) --------------- */
-
-const objCache = new Map<string, WorldObject>();
-const builtCache = new Map<string, Promise<THREE.Object3D>>();
-function pieceObj(url: string, scale: number): WorldObject {
-  const k = `${url}@${scale}`;
-  let o = objCache.get(k);
-  if (!o) { o = meshObject({ meshUrl: url, name: url, describe: '', level: 'object', scale, variants: { default: [] } }); objCache.set(k, o); }
-  return o;
-}
-/** Build a piece ONCE per (url,scale); clone for each instance (shares geometry+material). */
-function builtOnce(url: string, scale: number): Promise<THREE.Object3D> {
-  const k = `${url}@${scale}`;
-  let p = builtCache.get(k);
-  if (!p) { p = pieceObj(url, scale).build('default', 0).then((b) => b.root); builtCache.set(k, p); }
-  return p;
-}
-const instance = async (url: string, scale: number): Promise<THREE.Object3D> => (await builtOnce(url, scale)).clone();
 
 // the "unconstrained cell" marker — a flat translucent blue square laid on the ground
 const openGeo = new THREE.PlaneGeometry(CELL * 0.92, CELL * 0.92);

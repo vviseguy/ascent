@@ -57,6 +57,7 @@ export default defineConfig({
         lab: r('./lab.html'),
         walltile: r('./walltile.html'),
         board: r('./board.html'),
+        tileeditor: r('./tile-editor.html'),
       },
     },
   },
