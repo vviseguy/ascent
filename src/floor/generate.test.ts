@@ -95,14 +95,6 @@ describe('generator structure', () => {
     expect(open.edges.length).toBe(complete);
     expect(tight.edges.length).toBeLessThan(open.edges.length);
   });
-
-  it('cells are tagged with chunk types in [0, chunkTypeCount)', () => {
-    const f = generateFloor(cfg({ gridSize: 6, chunkTypeCount: 3 }));
-    for (const c of f.cells) {
-      expect(c.chunkType).toBeGreaterThanOrEqual(0);
-      expect(c.chunkType).toBeLessThan(3);
-    }
-  });
 });
 
 describe('rooms-and-corridors layout (rooms default ON)', () => {

@@ -72,11 +72,12 @@ Floor graph        src/floor/generate.ts        → Floor (cells, edges, rooms, 
    space), **D** (theme dressing as first-class) are aspirational. Room *themes* exist only render-side
    (`dungeon.ts`, 7 themes keyed by `roomId % 7`), not as sim/game data.
 3. **`profile` is a hook, not a 3D world.** Everything underneath is per-stratum 2D.
-4. **Coloring is split.** The **lab** colors via `recolor.ts` (authoritative — see `src/lab/CLAUDE.md`),
-   but the **game renderer** (`src/render/dungeon.ts`) still colors via the legacy `themes.ts` /
-   `materials.ts` path. Unifying them needs the recolor tables moved out of `src/lab` (`TODO(publish)`).
+4. **Recolor tables not yet published.** The game renderer already colors via `recolor.ts` (the split
+   is closed; `themes.ts` is deleted). The only remnant: `recolor.ts`'s tables still live in `src/lab`;
+   publishing them is the `TODO(publish)` (see docs/16 §10 Phase 2).
 
 The layered model A–D below is still the right *target*; sections C / C-bis describe what shipped.
+**The next-gen direction (constraint-collapse generator + structure editor) is [docs/16](16-generation-overhaul.md).**
 
 ---
 

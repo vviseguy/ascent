@@ -10,7 +10,7 @@ file is the map + the non-obvious rules that must not be reverted. Full design c
 - [`docs/DECISIONS-LOG.md`](docs/DECISIONS-LOG.md) — how we got here + every locked decision (start here for *why*).
 - [`docs/ENGINE-ARCHITECTURE.md`](docs/ENGINE-ARCHITECTURE.md) — the custom physics engine (fixed-point; Rapier = test oracle only).
 - [`docs/GENERATION-SOLVABILITY.md`](docs/GENERATION-SOLVABILITY.md) — the solvability invariant + the independent verifier.
-- **Working on world generation / rendering?** → [`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) (the *realized* pipeline + its tracked debt), [`docs/14-terrain-puzzles-solvability.md`](docs/14-terrain-puzzles-solvability.md), [`docs/15-world-object-model.md`](docs/15-world-object-model.md).
+- **Working on world generation / rendering?** → [`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) (the *realized* pipeline + its tracked debt), [`docs/14-terrain-puzzles-solvability.md`](docs/14-terrain-puzzles-solvability.md), [`docs/15-world-object-model.md`](docs/15-world-object-model.md). **The next-gen plan is [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md)** (constraint-collapse generator + 3D structure editor).
 - **Working on assets / colors?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) (authoritative — the `recolor.ts` swatch system) + [`docs/ART-LAB.md`](docs/ART-LAB.md).
 - **What to work on next** → [`BACKLOG.md`](BACKLOG.md) (the live queue) + [`docs/GAPS.md`](docs/GAPS.md) (the intent audit it draws from).
 
@@ -78,7 +78,7 @@ src/floor/      ✅ deterministic floor generation + INDEPENDENT solvability ver
 src/game/       ✅ tower compiler (floor → terrain + the WorldPlacement IR), strata, scoring,
                    win conditions, crew identity, beacons, roles/abilities.
 src/render/     ✅ Three.js: vertical-follow camera, fog/occlusion cutaway, dungeon mesh builder
-                   (view-only; reads the sim). Colors via the LEGACY themes/materials path (see debt).
+                   (view-only; reads the sim). Colors via the lab's recolor.ts engine (src/lab/CLAUDE.md).
 src/lab/        ✅ the Asset Lab: KayKit catalog, box-fit collision voxelizer, the recolor engine,
                    WorldObject viewer + headless snapshot harness. (Authoritative guide: src/lab/CLAUDE.md.)
 src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock sync) — NOT yet wired
@@ -102,10 +102,12 @@ Floor graph (src/floor/generate.ts)
    (themes exist only render-side). Topology-roles / BSP-space / first-class dressing are aspirational.
 3. **`profile` (FULL/LOW/GAP) is a 3D hook** — only collision height varies on it today; everything
    underneath is per-stratum 2D.
-4. **Coloring is split** — the lab is authoritative via `recolor.ts`, but the game renderer still uses
-   the legacy `themes.ts`/`materials.ts`; unifying needs the recolor tables published out of `src/lab`.
+4. **Recolor tables not yet published** — the game *already* colors via `recolor.ts` (the split is
+   closed; `themes.ts` is deleted). The only remnant: `recolor.ts`'s tables still live in `src/lab`;
+   publishing them is the remaining `TODO(publish)` (docs/16 §10 Phase 2).
 
 Prefer reconciling (1) + the spec before piling on new features — the duplication is the main risk.
+**The next-gen plan that addresses all of this is [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md).**
 
 ## Conventions
 - TS strict, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`.

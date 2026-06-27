@@ -30,10 +30,14 @@ lives at the repo root: [`../CLAUDE.md`](../CLAUDE.md).
 | [ENGINE-ARCHITECTURE.md](ENGINE-ARCHITECTURE.md) | The custom fixed-point physics engine; Rapier = test oracle only. |
 | [GENERATION-SOLVABILITY.md](GENERATION-SOLVABILITY.md) | The solvability invariant + the independent verifier contract. |
 
-## Current build — the worldgen / asset overhaul (implemented)
+## Current build — the worldgen / asset overhaul
+
+> **The forward plan is [16-generation-overhaul.md](16-generation-overhaul.md)** — the
+> constraint-collapse generator + 3D structure editor (supersedes the forward-looking parts of 13).
 
 | Doc | What it covers |
 |---|---|
+| [16-generation-overhaul.md](16-generation-overhaul.md) | **The next-gen plan** — constraint-collapse generator + structure editor + the migration sequence. |
 | [13-generation-architecture.md](13-generation-architecture.md) | **The realized dungeon pipeline** (Blueprint→Style→Placement→IR→{render,collision}) + tracked debt. |
 | [14-terrain-puzzles-solvability.md](14-terrain-puzzles-solvability.md) | Richer terrain (30×30), puzzle types, lock-and-key reachability. |
 | [15-world-object-model.md](15-world-object-model.md) | The sim-vs-view split; the `WorldObject` abstraction (variants + footprint). |

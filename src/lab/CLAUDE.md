@@ -1,10 +1,9 @@
 # Lab asset coloring — the RECOLOR system
 
 This is the **authoritative** guide for how lab assets get their colors/materials. It supersedes
-the older "theme / retexture / palette-role" approach described in `themes.ts`, `retexture.ts`,
-and `materials.ts` (those remain only for the game renderer `src/render/dungeon.ts` and for the
-`RetextureRule` variant type — see **Legacy** below). When they disagree with this file, **this
-file wins.**
+the older "theme / retexture / palette-role" approach (the now-deleted `themes.ts` and the residual
+`retexture.ts` / `materials.ts` — see **Legacy** below). The game renderer (`src/render/dungeon.ts`)
+also colors via this engine now. When anything disagrees with this file, **this file wins.**
 
 ## The one idea
 
@@ -74,9 +73,9 @@ wood), then **architecture** (the earth/stone swatches for walls/pillars/floors)
 
 ## Legacy (do not extend)
 
-- `themes.ts`, `retexture.ts`, `materials.ts` are the **old** lab approach (palette roles → tiling
-  PBR via per-triangle retexture + coalescence + name-regex exceptions). The lab no longer uses
-  them for rendering. They stay because: `src/render/dungeon.ts` (the game) still colors via
-  `themes.ts` (migrating the game to recolor.ts is a future task), and `MeshObjectSpec.variants`
-  still types its rules as `RetextureRule`. Don't add new coloring logic there — add it here.
+- `themes.ts` is **deleted** — the game renderer now colors via `recolor.ts` too. `retexture.ts`
+  survives only for the `RetextureRule`/`MaterialSpec` types (`MeshObjectSpec.variants`, dormant) +
+  the `presentSwatchHexes` legend sampler; `materials.ts` survives only as the flame-glow / no-atlas
+  render fallback in `dungeon.ts`. Both are slated for removal (docs/16 §10 Phase 2). Don't add new
+  coloring logic there — add it here.
 ```

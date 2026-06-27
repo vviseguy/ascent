@@ -171,12 +171,6 @@ export interface Cell {
   /** Grid row [0, height); 0 = entry band, height-1 = exit band. */
   y: number;
   /**
-   * Authored-chunk hook: a coarse chunk-type id used later by dressing to pick
-   * furniture matching this cell's edge tags. Generation only TAGS it; no geometry
-   * is produced here. Stable small integer; meaning defined by the dressing layer.
-   */
-  chunkType: number;
-  /**
    * Layout ROLE of this cell (see CellType) — which room/corridor/wall/void slot it
    * fills. OPTIONAL & purely cosmetic-for-routing: the generator now always sets it
    * (rooms-and-corridors pass), but a hand-built / legacy Floor may omit it, in which

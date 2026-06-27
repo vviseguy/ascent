@@ -16,8 +16,6 @@
  *      perimeter only), 1 = open arena (every adjacency connected). Adding edges can
  *      never remove a guaranteed path, so the invariant survives any openness.
  *
- *   3. DRESSING HOOK. Tag each cell with a coarse chunkType id (no geometry yet).
- *
  * The PERIMETER is always added as WALK edges (the universal go-around fallback).
  *
  * EDGE-DISJOINT SPINES — how we GUARANTEE correctness:
@@ -77,8 +75,6 @@ export interface FloorConfig {
    * gameplay; the fallback layer keeps them solvable.
    */
   gateDensity?: number;
-  /** How many distinct chunk-type ids to tag cells with (>=1, default 4). */
-  chunkTypeCount?: number;
   /**
    * Lay the floor out as RECTANGULAR ROOMS joined by corridors/doorways (default
    * true) instead of a uniform cell maze. When on, a rooms-and-corridors pass runs
@@ -142,8 +138,7 @@ export interface RoomParams {
 const S_LAYOUT = 1; // entry/exit selection
 const S_SPINES = 2; // spine carving (path order + gate rolls)
 const S_OPENNESS = 3; // extra-edge pass
-const S_DRESS = 4; // chunk tagging
-const S_ROOMS = 5; // rooms-and-corridors layout (new; high tag so it never shifts 1-4)
+const S_ROOMS = 5; // rooms-and-corridors layout (high tag, kept stable so it never shifts 1-3)
 const S_PUZZLES = 6; // locked-door/key/rug placement (high tag so it never shifts 1-5)
 
 /* ------------------------------ small utilities ------------------------------ */
@@ -244,7 +239,6 @@ export function generateFloor(config: FloorConfig): Floor {
   const gateDensity = clamp01(config.gateDensity ?? 0.5);
   const gateWeights = config.gateWeights ?? DEFAULT_GATE_WEIGHTS;
   const stratumIndex = config.stratumIndex ?? 0;
-  const chunkTypeCount = Math.max(1, Math.floor(config.chunkTypeCount ?? 4));
   const useRooms = config.rooms ?? true;
 
   // Clamp k to what the structure can support; record whether we clamped.
@@ -259,7 +253,7 @@ export function generateFloor(config: FloorConfig): Floor {
   const cells: Cell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      cells.push({ id: cellId(width, x, y), x, y, chunkType: 0 });
+      cells.push({ id: cellId(width, x, y), x, y });
     }
   }
 
@@ -301,10 +295,6 @@ export function generateFloor(config: FloorConfig): Floor {
 
   // ---- 3.5 classify every cell's layout ROLE from the final edge graph ----
   if (useRooms && roomIdOf) classifyCells(cells, edges, width, height, roomIdOf);
-
-  // ---- 4. dressing hook: tag each cell with a chunk-type id ----
-  const dressRng = subStream(root, S_DRESS);
-  for (const c of cells) c.chunkType = nextInt(dressRng, chunkTypeCount);
 
   const meta: FloorMeta = {
     runSeed: config.seed.toString(),

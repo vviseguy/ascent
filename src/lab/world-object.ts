@@ -101,11 +101,9 @@ export type WorldObjectLevel = 'object' | 'grouping' | 'room';
 
 /**
  * Optional build inputs that apply ACROSS objects (vs. the per-object variant).
- * Today: a global THEME (themes.ts) — a palette→material remap layered UNDER the
- * object's own variant rules (variant wins per-swatch). Procedural objects ignore it
- * (they don't use the KayKit atlas); only mesh-based objects honour it. The theme is
- * compiled PER-OBJECT here (not by the caller) so the grey cluster can resolve to metal
- * on metal props (a sword) but stone on the shell — see themes.compileTheme.
+ * Coloring itself is handled by the recolor engine (see src/lab/CLAUDE.md); these opts
+ * only toggle whole-object debug/raw modes. Procedural objects ignore them (they don't
+ * use the KayKit atlas); only mesh-based objects honour them.
  */
 export interface WorldObjectBuildOpts {
   /** Skip recolor and show the ORIGINAL KayKit atlas (the "Raw atlas" coloring mode). */
