@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         main: r('./index.html'),
         lab: r('./lab.html'),
+        walltile: r('./walltile.html'),
       },
     },
   },
