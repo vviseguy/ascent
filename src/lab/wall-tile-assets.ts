@@ -37,6 +37,9 @@ export const PIECE = {
   wall: u('wall'),
   half: u('wall_half'),
   halfCap: u('wall_half_endcap'),
+  corner: u('wall_corner'), // a full MITERED corner (clean bend, reaches both edges)
+  cornerSmall: u('wall_corner_small'),
+  barrierCorner: u('barrier_corner'),
   arch: u('wall_arched'),
   window: u('wall_archedwindow_open'),
   gate: u('wall_gated'),
@@ -59,6 +62,14 @@ const EDGE = 1.6;
 const armYaw = (d: Dir): number => (d === 'E' ? 0 : d === 'N' ? Q : d === 'W' ? Math.PI : -Q);
 /** Edge-cap yaw — the proven convention (a cap finishing a wall extending West sits at 0). */
 const capYaw = (d: Dir): number => (d === 'W' ? 0 : d === 'S' ? Q : d === 'E' ? Math.PI : -Q);
+/** Mitered-corner yaw — wall_corner native joins W+N at 0. */
+function cornerYaw(ds: Dir[]): number {
+  const s = new Set(ds);
+  if (s.has('W') && s.has('N')) return 0;
+  if (s.has('N') && s.has('E')) return Q;
+  if (s.has('E') && s.has('S')) return Math.PI;
+  return -Q; // S,W
+}
 
 const wallTypeUrl = (wt: WallType): string =>
   wt === 'door' || wt === 'arch'
@@ -82,6 +93,23 @@ export interface WallPlacement {
 export function wallPieces(tile: WallTile): WallPlacement[] {
   const out: WallPlacement[] = [];
   const skip = new Set<Dir>();
+
+  // a FULL corner (exactly two adjacent full-wall arms, nothing else) → one MITERED piece
+  // instead of two half-walls overlapping jaggedly at the bend. The centre column (if any)
+  // is added on top, so `bend` = clean corner, `corner` = clean corner + a pillar.
+  const fulls = DIRS.filter((d) => { const a = armOf(tile, d); return a.reachesCentre && a.reachesEdge; });
+  const extra = DIRS.filter((d) => !fulls.includes(d) && (tile.inner[d] !== 'none' || tile.edge[d] !== 'none'));
+  if (tile.wallType === 'solid' && fulls.length === 2 && extra.length === 0) {
+    const [a, b] = fulls as [Dir, Dir];
+    const opposite = (a === 'N' && b === 'S') || (a === 'E' && b === 'W');
+    if (!opposite) {
+      const barrier = armOf(tile, a).type === 'barrier';
+      const pieces: WallPlacement[] = [{ url: barrier ? PIECE.barrierCorner : PIECE.corner, yaw: cornerYaw([a, b]), x: 0, z: 0 }];
+      if (tile.centre === 'wall') pieces.push({ url: PIECE.pillar, yaw: 0, x: 0, z: 0 });
+      else if (tile.centre === 'barrier') pieces.push({ url: PIECE.barrierColumn, yaw: 0, x: 0, z: 0 });
+      return pieces;
+    }
+  }
 
   // a full straight wall LINE carrying an opening → one spanning piece (skip those arms)
   if (tile.wallType !== 'solid') {
