@@ -37,10 +37,11 @@ import { SWATCHES, type SwatchName, type SwatchRole } from './palette.ts';
 // these just set how light bounces). A "material" is a preset + a tint colour.
 // ----------------------------------------------------------------------------
 
-export type Preset = 'stone' | 'wood' | 'metal' | 'gold' | 'cloth' | 'terracotta' | 'dark' | 'plain';
+export type Preset = 'stone' | 'floor' | 'wood' | 'metal' | 'gold' | 'cloth' | 'terracotta' | 'dark' | 'plain';
 
 const SURFACE: Record<Preset, { roughness: number; metalness: number }> = {
   stone: { roughness: 0.95, metalness: 0.0 },
+  floor: { roughness: 1.0, metalness: 0.0 }, // cobblestone underfoot
   wood: { roughness: 0.82, metalness: 0.0 },
   metal: { roughness: 0.5, metalness: 0.85 },
   gold: { roughness: 0.35, metalness: 1.0 },
@@ -76,7 +77,7 @@ export interface MappingLayer {
 const ROLE_PRESET: Record<SwatchRole, Preset> = {
   stone: 'stone',
   trim: 'stone', // the dark plinth/cap slate — still masonry by default
-  floor: 'stone',
+  floor: 'floor', // floor tiles → cobblestone grain
   wood: 'wood',
   metal: 'metal',
   gold: 'gold',
@@ -309,31 +310,54 @@ function copyTexParams(src: THREE.Texture, dst: THREE.Texture): void {
 
 /** preset → tiling SLOT (0 = no tiling: flat baked colour). gold reuses the metal grain. */
 const TILING_SLOT: Record<Preset, number> = { plain: 0, dark: 0, terracotta: 0, cloth: 0, stone: 1, wood: 2, metal: 3, gold: 3, floor: 4 };
-/** slot → texture file + worldScale (metres per tile) + inverse mean (≈1/avg-luminance, to keep the
- *  multiply from darkening). Slot 0 = none. */
+/** slot → texture file + worldScale (metres per tile). Slot 0 = none. The normalising factor
+ *  (1/mean-linear-luminance, so the multiply averages to 1 and only adds the PATTERN, not darkening)
+ *  is COMPUTED from the loaded image (_tilingInv) — no hand-tuned magic numbers. */
 const TILING_SETS = [
   null,
-  { file: 'stone_diff.jpg', scale: 3.0, inv: 2.4 },
-  { file: 'wood_diff.jpg', scale: 1.4, inv: 2.5 },
-  { file: 'metal_diff.jpg', scale: 1.2, inv: 2.6 },
-  { file: 'floor_diff.jpg', scale: 2.6, inv: 2.5 },
+  { file: 'stone_diff.jpg', scale: 3.0 },
+  { file: 'wood_diff.jpg', scale: 1.4 },
+  { file: 'metal_diff.jpg', scale: 1.2 },
+  { file: 'floor_diff.jpg', scale: 2.6 },
 ] as const;
 
 let _tiling: (THREE.Texture | null)[] | null = null;
+let _tilingInv: number[] = [1, 1, 1, 1, 1]; // per-slot 1 / mean-linear-luminance (computed on load)
 let _tilingPromise: Promise<void> | null = null;
 
-/** Load the tiling textures once (await before building, so the bake's shader can bind them). */
+const srgbToLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+
+/** Load the tiling textures once (await before building, so the bake's shader can bind them). They
+ *  are sRGB JPEGs → loaded as SRGBColorSpace so texture2D returns LINEAR (matching diffuseColor's
+ *  space); we also compute each one's mean LINEAR luminance so the shader can normalise the multiply. */
 export function ensureTilingTextures(): Promise<void> {
   if (!_tilingPromise) {
     _tilingPromise = (async () => {
       const loader = new THREE.TextureLoader();
       const load = (file: string): Promise<THREE.Texture> => new Promise((res, rej) => loader.load(
         'textures/' + file,
-        (t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.NoColorSpace; t.anisotropy = 8; t.needsUpdate = true; res(t); },
+        (t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.needsUpdate = true; res(t); },
         undefined, rej,
       ));
       const loaded = await Promise.all(TILING_SETS.map((s) => (s ? load(s.file) : Promise.resolve(null))));
       _tiling = loaded;
+      // mean LINEAR luminance per slot (sample a 32×32 reduction) → 1/mean keeps the grain ≈ 1 avg.
+      _tilingInv = loaded.map((t) => {
+        const img = t?.image as (CanvasImageSource & { width: number; height: number }) | undefined;
+        if (!img?.width) return 1;
+        try {
+          const c = document.createElement('canvas'); c.width = 32; c.height = 32;
+          const ctx = c.getContext('2d', { willReadFrequently: true })!;
+          ctx.drawImage(img, 0, 0, 32, 32);
+          const d = ctx.getImageData(0, 0, 32, 32).data;
+          let sum = 0; const n = 32 * 32;
+          for (let i = 0; i < n; i++) {
+            sum += 0.299 * srgbToLinear(d[i * 4]! / 255) + 0.587 * srgbToLinear(d[i * 4 + 1]! / 255) + 0.114 * srgbToLinear(d[i * 4 + 2]! / 255);
+          }
+          const mean = sum / n;
+          return mean > 0.001 ? 1 / mean : 1;
+        } catch { return 1; }
+      });
     })();
   }
   return _tilingPromise;
@@ -341,6 +365,11 @@ export function ensureTilingTextures(): Promise<void> {
 
 /** Inject the world-space tiling-detail multiply into a baked material (slot from ORM.r). */
 function patchTilingDetail(mat: THREE.MeshStandardMaterial, tiling: (THREE.Texture | null)[]): void {
+  // build each branch from the ONE source of truth (TILING_SETS.scale + computed _tilingInv).
+  const branch = (slot: number, uni: string, prefix: string): string => {
+    const s = TILING_SETS[slot]!;
+    return `${prefix} ( tslot == ${slot} ) grain = texture2D( ${uni}, planarUV(${(1 / s.scale).toFixed(5)}) ).rgb * ${_tilingInv[slot]!.toFixed(4)};`;
+  };
   mat.onBeforeCompile = (shader) => {
     shader.uniforms['uStone'] = { value: tiling[1] };
     shader.uniforms['uWood'] = { value: tiling[2] };
@@ -351,6 +380,8 @@ function patchTilingDetail(mat: THREE.MeshStandardMaterial, tiling: (THREE.Textu
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
       .replace('#include <project_vertex>', '#include <project_vertex>\n  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vWNor = normalize(mat3(modelMatrix) * objectNormal);');
     // FRAGMENT: after the baked albedo is set (map_fragment), multiply in the slot's tiling grain.
+    // The tiling texture is sRGB→linear (matches diffuseColor) and ×(1/mean) so it averages to 1 —
+    // it adds the PATTERN around the baked colour, not a second darkening.
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', [
         '#include <common>',
@@ -363,15 +394,19 @@ function patchTilingDetail(mat: THREE.MeshStandardMaterial, tiling: (THREE.Textu
         '#include <map_fragment>',
         'int tslot = int( texture2D( roughnessMap, vRoughnessMapUv ).r * 255.0 + 0.5 );', // slot baked in ORM.r
         'vec3 grain = vec3(1.0);',
-        `if ( tslot == 1 ) grain = texture2D( uStone, planarUV(${(1 / 3.0).toFixed(5)}) ).rgb * ${(2.4).toFixed(3)};`,
-        `else if ( tslot == 2 ) grain = texture2D( uWood, planarUV(${(1 / 1.4).toFixed(5)}) ).rgb * ${(2.5).toFixed(3)};`,
-        `else if ( tslot == 3 ) grain = texture2D( uMetal, planarUV(${(1 / 1.2).toFixed(5)}) ).rgb * ${(2.6).toFixed(3)};`,
-        `else if ( tslot == 4 ) grain = texture2D( uFloor, planarUV(${(1 / 2.6).toFixed(5)}) ).rgb * ${(2.5).toFixed(3)};`,
-        'diffuseColor.rgb *= clamp( grain, 0.35, 1.8 );', // tiling pattern modulates the baked colour
+        branch(1, 'uStone', 'if'),
+        branch(2, 'uWood', 'else if'),
+        branch(3, 'uMetal', 'else if'),
+        branch(4, 'uFloor', 'else if'),
+        'diffuseColor.rgb *= clamp( grain, 0.6, 1.4 );', // modulate around the baked colour (no re-shade)
       ].join('\n'));
   };
-  mat.customProgramCacheKey = () => 'recolorTiled';
+  // UNIQUE per material: a shared key would let three reuse one program and SKIP onBeforeCompile for
+  // later materials, leaving their custom tiling uniforms unbound. Unique → onBeforeCompile always runs.
+  const id = ++_tiledMatSeq;
+  mat.customProgramCacheKey = () => 'recolorTiled' + id;
 }
+let _tiledMatSeq = 0;
 
 /** Bake recolored albedo + ORM textures and return a MeshStandardMaterial. The recolor is HSL —
  *  each pixel keeps its own Lightness (the gradient) and takes the target swatch's Hue+Sat — and
@@ -402,7 +437,11 @@ function bakeMaterial(atlas: THREE.Texture, resolved: ResolvedSwatch[], method: 
   const albTex = new THREE.DataTexture(albedo, w, h, THREE.RGBAFormat);
   albTex.colorSpace = THREE.SRGBColorSpace; copyTexParams(atlas, albTex); albTex.needsUpdate = true;
   const ormTex = new THREE.DataTexture(orm, w, h, THREE.RGBAFormat);
-  ormTex.colorSpace = THREE.NoColorSpace; copyTexParams(atlas, ormTex); ormTex.needsUpdate = true;
+  ormTex.colorSpace = THREE.NoColorSpace; copyTexParams(atlas, ormTex);
+  // NEAREST: ORM carries per-swatch CONSTANTS (slot/rough/metal), not gradients. Linear-filtering
+  // the slot (R) would average e.g. 1↔3 to 2 at a swatch seam → wrong tiling texture on the seam.
+  ormTex.magFilter = ormTex.minFilter = THREE.NearestFilter;
+  ormTex.needsUpdate = true;
 
   const mat = new THREE.MeshStandardMaterial({ map: albTex, roughnessMap: ormTex, metalnessMap: ormTex, roughness: 1, metalness: 1 });
   if (_tiling) patchTilingDetail(mat, _tiling); // real tiling grain (world-space), if textures loaded
@@ -430,10 +469,15 @@ export function applyRecolor(root: THREE.Object3D, meshUrl: string, method: Swat
     const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined;
     if (mat?.map) atlas = mat.map;
   });
-  if (!atlas) return null;
+  if (!atlas) return null; // no atlas → procedural element; caller keeps its own material (not an error)
 
   const baked = bakeMaterial(atlas, resolved, method);
-  if (!baked) return null;
+  if (!baked) {
+    // The atlas exists but couldn't be read (undrawable/0-size image, tainted canvas). Surface it —
+    // otherwise the model silently keeps its raw KayKit colours and looks like the recolor "did nothing".
+    console.warn(`[recolor] atlas present but unreadable for ${file} — keeping original material. Check the atlas image is a drawable <img> (createImageBitmap shim) and same-origin.`);
+    return null;
+  }
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh || !m.geometry) return;
