@@ -182,7 +182,7 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       if (opts?.raw) {
         model.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
       } else {
-        resolved = applyRecolor(model, spec.meshUrl, 'position', opts?.tintAll);
+        resolved = applyRecolor(model, spec.meshUrl, 'position', opts?.tintAll, present);
       }
 
       // wrap in a scaled group, then DROP to y=0 (base on the ground, like LabElement)

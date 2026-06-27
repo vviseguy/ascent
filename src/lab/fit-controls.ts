@@ -30,7 +30,13 @@ export interface FitControlState {
   seedMode: SeedMode;
   samples: number;
   beam: number;
+  /** AUTO edge-density: scan for the LOWEST edge-density reaching ~95% fill (default ON). When on,
+   *  the edgeDensity slider is the manual fallback and is disabled. */
+  autoEdge: boolean;
 }
+
+/** The fill target the auto edge-density scan aims to just exceed. */
+export const AUTO_FILL_TARGET = 0.95;
 
 const SEED_MODES: SeedMode[] = ['scan', 'cluster', 'random-best'];
 
@@ -47,6 +53,7 @@ export function readFitStateFromParams(params: URLSearchParams): FitControlState
     seedMode: (sm && (SEED_MODES as string[]).includes(sm) ? sm : 'cluster') as SeedMode,
     samples: Number.isFinite(samples) && samples > 0 ? Math.round(samples) : 10,
     beam: Number.isFinite(beam) && beam > 0 ? Math.round(beam) : 2,
+    autoEdge: params.get('autoEd') !== '0', // default ON
   };
 }
 
@@ -59,6 +66,8 @@ export function fitStateToOpts(s: FitControlState, randomSeed: number): FitBoxes
     samples: s.samples,
     beam: s.beam,
     randomSeed,
+    autoEdgeDensity: s.autoEdge,
+    fillTarget: AUTO_FILL_TARGET,
   };
 }
 
@@ -70,6 +79,7 @@ export function writeFitStateToUrl(s: FitControlState): void {
   params.set('seedMode', s.seedMode);
   params.set('samples', String(s.samples));
   params.set('beam', String(s.beam));
+  if (s.autoEdge) params.delete('autoEd'); else params.set('autoEd', '0'); // default ON → clean URL
   history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
 }
 
@@ -120,7 +130,18 @@ export function buildFitControls(opts: FitControlsOpts): void {
     timer = setTimeout(() => onChange({ ...state }), 150);
   };
 
-  // --- edgeDensity slider (0..1, shown as %) ---
+  // --- AUTO edge-density checkbox: scan for the lowest edge-density reaching ~95% fill ---
+  const autoRow = document.createElement('label');
+  Object.assign(autoRow.style, { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' } as Partial<CSSStyleDeclaration>);
+  const autoBox = document.createElement('input');
+  autoBox.type = 'checkbox'; autoBox.checked = state.autoEdge;
+  Object.assign(autoBox.style, { accentColor: '#4ea1ff' } as Partial<CSSStyleDeclaration>);
+  const autoText = document.createElement('span');
+  autoText.innerHTML = 'auto edge density <span style="opacity:.5">(→ ≥95% fill, lowest)</span>';
+  autoRow.appendChild(autoBox); autoRow.appendChild(autoText);
+  panel.appendChild(autoRow);
+
+  // --- edgeDensity slider (0..1, shown as %) — the MANUAL fallback; disabled while auto is on ---
   const edRow = document.createElement('label');
   Object.assign(edRow.style, { display: 'block', marginBottom: '8px' } as Partial<CSSStyleDeclaration>);
   const edLabel = document.createElement('div');
@@ -128,9 +149,15 @@ export function buildFitControls(opts: FitControlsOpts): void {
   edSlider.type = 'range'; edSlider.min = '0'; edSlider.max = '1'; edSlider.step = '0.01';
   edSlider.value = String(state.edgeDensity);
   Object.assign(edSlider.style, { width: '100%', marginTop: '2px', accentColor: '#4ea1ff' } as Partial<CSSStyleDeclaration>);
-  const updEdLabel = (): void => { edLabel.innerHTML = `edge density <b style="color:#cfe3ff">${(state.edgeDensity * 100).toFixed(0)}%</b>`; };
-  updEdLabel();
+  const updEdLabel = (): void => {
+    edLabel.innerHTML = state.autoEdge
+      ? 'edge density <b style="color:#cfe3ff">auto</b> <span style="opacity:.5">(see HUD)</span>'
+      : `edge density <b style="color:#cfe3ff">${(state.edgeDensity * 100).toFixed(0)}%</b>`;
+  };
+  const syncEdEnabled = (): void => { edSlider.disabled = state.autoEdge; edRow.style.opacity = state.autoEdge ? '.5' : '1'; };
+  updEdLabel(); syncEdEnabled();
   edSlider.addEventListener('input', () => { state.edgeDensity = Number(edSlider.value); updEdLabel(); fire(); });
+  autoBox.addEventListener('change', () => { state.autoEdge = autoBox.checked; updEdLabel(); syncEdEnabled(); fire(); });
   edRow.appendChild(edLabel); edRow.appendChild(edSlider);
   panel.appendChild(edRow);
 

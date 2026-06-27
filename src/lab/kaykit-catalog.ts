@@ -31,6 +31,7 @@
 
 import { meshObject, type WorldObject } from './world-object.ts';
 import { PACK_FILES } from './kaykit-packs.generated.ts';
+import { cleanKey, dungeonCategory } from './object-category.ts';
 
 /** One asset pack: its on-disk folder, the extension its models ship, a uniform import
  *  scale, the display order of its groupings, and how a file maps to a grouping. */
@@ -59,12 +60,8 @@ const COVERED_BY_HANDMADE = new Set([
 
 // ---- file → model token / display name -------------------------------------------------
 
-/** The clean model token for a manifest file: drop any leading subfolder and a `.gltf`
- *  infix (Dungeon Remastered ships `<name>.gltf.glb`, listed as `<name>.gltf`). */
-function cleanKey(file: string): string {
-  const last = file.slice(file.lastIndexOf('/') + 1);
-  return last.replace(/\.gltf$/i, '');
-}
+// cleanKey + dungeonCategory now live in object-category.ts (shared with recolor.ts's CATEGORY
+// layer, so "architecture/furnishings" is classified ONE way). Imported at the top.
 
 /** Pretty display name from a file: clean it, split on `_`, Title-Case, keep single
  *  uppercase letters (A/B model suffixes) as-is. `bottle_A_green` → "Bottle A Green". */
@@ -83,15 +80,6 @@ function idOf(packId: string, file: string): string {
 }
 
 // ---- grouping schemes ------------------------------------------------------------------
-
-/** Dungeon family (legacy + remastered): the original Structure/Furniture/Containers/Decor. */
-function dungeonCategory(file: string): string {
-  const k = cleanKey(file);
-  if (/^(wall|floor|stair|pillar|barrier|arch|gate|foundation|scaffold|door)/.test(k) || k === 'column') return 'Structure';
-  if (/^(table|chair|bed|shelf|shelves|bench|throne|stool)/.test(k)) return 'Furniture';
-  if (/^(barrel|crate|box|chest|sack)/.test(k)) return 'Containers';
-  return 'Decor';
-}
 
 /** Hexagon: the pack already buckets by subfolder (buildings / decoration / tiles). */
 function hexagonCategory(file: string): string {
