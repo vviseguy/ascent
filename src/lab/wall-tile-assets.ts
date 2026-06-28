@@ -66,13 +66,18 @@ const EDGE = 1.6;
 const armYaw = (d: Dir): number => (d === 'E' ? 0 : d === 'N' ? Q : d === 'W' ? Math.PI : -Q);
 /** Edge-cap yaw — the proven convention (a cap finishing a wall extending West sits at 0). */
 const capYaw = (d: Dir): number => (d === 'W' ? 0 : d === 'S' ? Q : d === 'E' ? Math.PI : -Q);
-/** Mitered-corner yaw — wall_corner native joins W+N at 0. */
+/**
+ * Mitered-corner yaw. `wall_corner`'s native legs sit on −X and +Z; in THIS file's convention
+ * (E=+X, W=−X, N=−Z, S=+Z) that is W+S at θ=0 — verified by reading the placed mesh's world AABB
+ * (a {N,E} corner must land its mass at +X,−Z). dungeon.ts labels the SAME mesh "W+N" because it
+ * uses N=+Z; copying its values here without flipping N/S left every corner vertically mirrored.
+ */
 function cornerYaw(ds: Dir[]): number {
   const s = new Set(ds);
-  if (s.has('W') && s.has('N')) return 0;
-  if (s.has('N') && s.has('E')) return Q;
-  if (s.has('E') && s.has('S')) return Math.PI;
-  return -Q; // S,W
+  if (s.has('S') && s.has('W')) return 0;
+  if (s.has('E') && s.has('S')) return Q;
+  if (s.has('N') && s.has('E')) return Math.PI;
+  return -Q; // W, N
 }
 
 const wallTypeUrl = (wt: WallType): string =>
