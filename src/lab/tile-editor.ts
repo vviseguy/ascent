@@ -72,9 +72,13 @@ const brush = {
   seg: new Set<Seg>(['wall']),
   wallType: new Set<WallType>(['door']),
   floor: new Set<FloorMaterial>(['stone']),
-  floorWhole: true,
+  floorWhole: false, // default to PER-CORNER so corners can be painted individually
   combo: null as string | null,
 };
+
+/** A structure saved to the server (the game-loadable shape; mirrors src/game/structures.ts). */
+interface ServerStructure { w: number; h: number; cells: TileField[]; derive?: string; seed?: number; savedAt?: string }
+let serverStructures: Record<string, ServerStructure> = {};
 
 const LSKEY = 'tileEditor.combos.v1';
 const combos = loadCombos();
@@ -273,10 +277,15 @@ function buildControls(): void {
       h('button', { onclick: () => { seed = (seed + 1) | 0; buildControls(); render(); } }, 'reseed')));
   }
 
-  ctrlBox.append(h('h2', {}, 'Combos'));
+  ctrlBox.append(h('h2', {}, 'Combos (local)'));
   ctrlBox.append(h('div', { id: 'combos' }));
   buildCombos();
   ctrlBox.append(h('button', { style: 'margin-top:6px', onclick: saveCombo }, '＋ Save active tile'));
+
+  ctrlBox.append(h('h2', {}, 'Structures (server → game)'));
+  ctrlBox.append(h('div', { id: 'structures' }));
+  buildStructures();
+  ctrlBox.append(h('button', { style: 'margin-top:6px', onclick: () => void saveStructure() }, '⬆ Save grid to server'));
 
   ctrlBox.append(h('h2', {}, 'Grid'));
   const wIn = h('input', { type: 'number', value: String(GW), min: '1', max: '14' }) as HTMLInputElement;
@@ -335,6 +344,56 @@ function saveCombo(): void {
   buildCombos();
 }
 
+/* --- server-persisted structures (git-tracked; the game loads these) --- */
+
+const STRUCT_URL = '/__lab/structures';
+async function fetchStructures(): Promise<void> {
+  try {
+    const r = await fetch(STRUCT_URL);
+    serverStructures = ((await r.json()) as { structures?: Record<string, ServerStructure> }).structures ?? {};
+  } catch { serverStructures = {}; }
+  buildStructures();
+}
+function buildStructures(): void {
+  const box = document.getElementById('structures');
+  if (!box) return;
+  box.innerHTML = '';
+  const names = Object.keys(serverStructures).sort();
+  if (!names.length) { box.append(h('div', { style: 'color:#778' }, 'none yet')); return; }
+  for (const name of names) {
+    const s = serverStructures[name];
+    if (!s) continue;
+    box.append(h('div', { class: 'combo' },
+      h('span', { class: 'name', title: `${s.w}×${s.h} — load into the editor`, onclick: () => loadStructure(name) }, `${name} · ${s.w}×${s.h}`),
+      h('button', { title: 'delete from server', onclick: () => void deleteStructure(name) }, '✕')));
+  }
+}
+async function saveStructure(): Promise<void> {
+  const name = prompt('Structure name (saved to the server for the game):', `structure ${Object.keys(serverStructures).length + 1}`);
+  if (!name) return;
+  const structure: ServerStructure = { w: GW, h: GH, cells: grid.cells, derive, seed };
+  try {
+    const r = await fetch(STRUCT_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, structure }) });
+    const res = (await r.json()) as { ok: boolean; count?: number; error?: string };
+    status(res.ok ? `saved “${name}” to server → structures.json (${res.count} total)` : `save failed: ${res.error}`);
+    if (res.ok) await fetchStructures();
+  } catch (e) { status(`save failed: ${String(e)}`); }
+}
+function loadStructure(name: string): void {
+  const s = serverStructures[name];
+  if (!s) return;
+  const g = makeGrid(s.w, s.h);
+  g.cells = s.cells.map(cloneField);
+  grid = g; GW = s.w; GH = s.h; activeTile = 0;
+  if (s.derive === 'none' || s.derive === 'wall' || s.derive === 'barrier' || s.derive === 'random') derive = s.derive;
+  if (typeof s.seed === 'number') seed = s.seed;
+  buildControls(); render();
+}
+async function deleteStructure(name: string): Promise<void> {
+  try { await fetch(STRUCT_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, remove: true }) }); } catch { /* ignore */ }
+  await fetchStructures();
+}
+
 function resizeGrid(w: number, h: number): void {
   w = Math.max(1, Math.min(14, w)); h = Math.max(1, Math.min(14, h));
   const next = blankGrid(w, h);
@@ -359,6 +418,7 @@ window.addEventListener('resize', fit3d);
 
 hintEl.textContent = 'drag to paint · orbit/scroll the 3D · section colour = domain: 🔴none 🟢wall 🔵barrier (mixed = ambiguous, white = any)';
 buildControls();
+void fetchStructures();
 fit3d();
 render();
 
