@@ -24,12 +24,27 @@ import { instance } from './tile-render.ts';
 
 /* ------------------------------- value palettes ------------------------------ */
 
-const SEG_COLOR: Record<Seg, string> = { none: '#1e1e2b', wall: '#bcbcc6', barrier: '#e0903a' };
-const FLOOR_COLOR: Record<FloorMaterial, string> = { none: '#15151f', stone: '#8a8a93', dirt: '#7d6044', wood: '#9c6a38' };
-const WT_LETTER: Record<WallType, string> = { solid: '·', door: 'D', window: 'W', hole: 'H', arch: 'A', low_gate: 'G' };
 const SEGS: Seg[] = ['none', 'wall', 'barrier'];
 const WALLTYPE_LIST: WallType[] = ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'];
 const FLOOR_LIST: FloorMaterial[] = ['none', 'stone', 'dirt', 'wood'];
+const WT_LETTER: Record<WallType, string> = { solid: '·', door: 'D', window: 'W', hole: 'H', arch: 'A', low_gate: 'G' };
+
+// Sections are coloured by their DOMAIN as ADDITIVE RGB — none→red, wall→green, barrier→blue. A
+// multi-option domain MIXES channels (none+wall = yellow, all three = white, empty = black), so the
+// constraint graph reads at a glance: pure colour = pinned, mixed = ambiguous. Bit order none=1,wall=2,barrier=4.
+const ON = 210, OFF = 45;
+const SEG_COLOR: Record<Seg, string> = { none: `rgb(${ON},${OFF},${OFF})`, wall: `rgb(${OFF},${ON},${OFF})`, barrier: `rgb(${OFF},${OFF},${ON})` };
+const segFill = (m: number): string => `rgb(${m & 1 ? ON : OFF},${m & 2 ? ON : OFF},${m & 4 ? ON : OFF})`;
+// Floor keeps recognisable material colours, blended across a multi-material domain.
+const FLOOR_RGB: Record<FloorMaterial, [number, number, number]> = { none: [24, 24, 34], stone: [138, 138, 147], dirt: [125, 96, 68], wood: [156, 106, 56] };
+const floorColor = (v: FloorMaterial): string => `rgb(${FLOOR_RGB[v].join(',')})`;
+const floorFill = (m: number): string => {
+  const vs = FLOOR_LIST.filter((_, i) => m & (1 << i));
+  if (!vs.length) return '#000';
+  const sum: [number, number, number] = [0, 0, 0];
+  for (const v of vs) { const c = FLOOR_RGB[v]; sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2]; }
+  return `rgb(${Math.round(sum[0] / vs.length)},${Math.round(sum[1] / vs.length)},${Math.round(sum[2] / vs.length)})`;
+};
 
 type DeriveMode = 'none' | 'wall' | 'barrier' | 'random';
 
@@ -123,35 +138,27 @@ function rect(x: number, y: number, w: number, h: number, fill: string, stroke: 
   return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1.5" fill="${fill}" stroke="${stroke}" stroke-width="1"${d} ${data}/>`;
 }
 
-function tileSvg(i: number, pick: (cell: string, opts: readonly string[]) => number): string {
+function tileSvg(i: number): string {
   const f = grid.cells[i]!;
-  const t = collapse(f, pick);
   const gx = (i % GW) * (T + GAP), gy = Math.floor(i / GW) * (T + GAP);
   let s = `<g transform="translate(${gx},${gy})">`;
-  // floor quadrants (bottom layer)
+  // floor quadrants (bottom layer) — the (blended) material domain
   for (const c of FLOOR_CORNERS) {
     const [x, y, w, hh] = CORNER_RECT[c];
-    const amb = domainSize(f.floor[c]) > 1;
-    const fill = FLOOR_COLOR[t ? t.floor[c] : 'none'];
-    s += `<rect class="floorLayer" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${fill}" stroke="${amb ? '#3a78ff' : '#0003'}" stroke-width="${amb ? 1 : 0.5}"${amb ? ' stroke-dasharray="3 2"' : ''} data-tile="${i}" data-kind="floor" data-id="${c}"/>`;
+    s += `<rect class="floorLayer" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${floorFill(f.floor[c])}" stroke="#0004" stroke-width="0.5" data-tile="${i}" data-kind="floor" data-id="${c}"/>`;
   }
-  // wall sections (top layer)
+  // wall sections (top layer) — additive RGB of the section's domain
   for (const id of Object.keys(SEG_RECT)) {
     const [x, y, w, hh] = SEG_RECT[id]!;
     const grp = id.split('.')[0] as 'edge' | 'inner';
     const dir = id.split('.')[1] as Dir;
     const mask = id === 'centre' ? f.centre : f[grp][dir];
-    const val: Seg | Centre = !t ? 'none' : id === 'centre' ? t.centre : t[grp][dir];
-    const amb = domainSize(mask) > 1;
-    const isNone = val === 'none';
-    const fill = isNone ? '#00000000' : SEG_COLOR[val as Seg];
-    const stroke = amb ? '#3a78ff' : isNone ? '#2c2c3e' : '#0007';
-    s += rect(x, y, w, hh, fill, stroke, amb, `class="wallLayer" data-tile="${i}" data-kind="seg" data-id="${id}"`);
+    s += rect(x, y, w, hh, segFill(mask), '#0007', false, `class="wallLayer" data-tile="${i}" data-kind="seg" data-id="${id}"`);
   }
-  // wallType badge
-  const wt = t ? t.wallType : 'solid';
-  if (wt !== 'solid') s += `<text x="4" y="14" font-size="11" fill="#ffd27a" font-weight="700">${WT_LETTER[wt]}</text>`;
-  if (domainSize(f.wallType) > 1) s += `<text x="4" y="14" font-size="11" fill="#3a78ff" font-weight="700">∗</text>`;
+  // wall-type badge: the pinned opening letter, or ∗ when its domain is still open
+  const wtVals = WALLTYPE_LIST.filter((_, k) => f.wallType & (1 << k));
+  const badge = wtVals.length > 1 ? '∗' : wtVals[0] && wtVals[0] !== 'solid' ? WT_LETTER[wtVals[0]] : '';
+  if (badge) s += `<text x="4" y="14" font-size="11" fill="#ffd27a" font-weight="700">${badge}</text>`;
   // tile outline + active highlight
   s += `<rect x="0" y="0" width="${T}" height="${T}" fill="none" stroke="${i === activeTile ? '#3a78ff' : '#34344e'}" stroke-width="${i === activeTile ? 2 : 1}" pointer-events="none"/>`;
   s += '</g>';
@@ -162,9 +169,8 @@ function renderSvg(): void {
   gridSvg.setAttribute('width', String(GW * (T + GAP)));
   gridSvg.setAttribute('height', String(GH * (T + GAP)));
   gridSvg.setAttribute('class', `mode-${brush.mode}`);
-  const pick = picker(); // one picker per pass → random varies tile-to-tile, stays seed-stable
   let s = '';
-  for (let i = 0; i < grid.cells.length; i++) s += tileSvg(i, pick);
+  for (let i = 0; i < grid.cells.length; i++) s += tileSvg(i);
   gridSvg.innerHTML = s;
 }
 
@@ -299,7 +305,7 @@ function buildBrushValues(): void {
     box.append(h('div', { class: 'row' }, ...WALLTYPE_LIST.map((v) => valChip(v, null, brush.wallType.has(v), toggleSet(brush.wallType, v)))));
   } else if (brush.mode === 'floor') {
     box.append(h('div', { style: 'color:#99a;margin:6px 0 4px' }, 'click a corner (or whole tile):'));
-    box.append(h('div', { class: 'row' }, ...FLOOR_LIST.map((v) => valChip(v, FLOOR_COLOR[v], brush.floor.has(v), toggleSet(brush.floor, v)))));
+    box.append(h('div', { class: 'row' }, ...FLOOR_LIST.map((v) => valChip(v, floorColor(v), brush.floor.has(v), toggleSet(brush.floor, v)))));
     const wholeCk = h('input', { type: 'checkbox', checked: brush.floorWhole }) as HTMLInputElement;
     wholeCk.addEventListener('change', () => { brush.floorWhole = wholeCk.checked; });
     box.append(h('label', { class: 'ck' }, wholeCk, 'whole tile'));
@@ -351,7 +357,7 @@ gridSvg.addEventListener('mouseover', (e) => { if (painting) handle(e); });
 window.addEventListener('mouseup', () => { painting = false; });
 window.addEventListener('resize', fit3d);
 
-hintEl.textContent = 'drag on the grid to paint · orbit/scroll to look · blue dashes = ambiguous';
+hintEl.textContent = 'drag to paint · orbit/scroll the 3D · section colour = domain: 🔴none 🟢wall 🔵barrier (mixed = ambiguous, white = any)';
 buildControls();
 fit3d();
 render();
