@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCornerGraph, cornerGraphOf, cornerId, reachableFrom, cornerReachable, armBlocks } from './corner-graph.ts';
+import { buildCornerGraph, cornerGraphOf, cornerId, reachableFrom, reachableFromSet, cornerReachable, connectsSides, edgeCorners, armBlocks } from './corner-graph.ts';
 import type { WallTile, Seg } from './wall-tile.ts';
 import { makeGrid, applyBatch } from './tile-grid.ts';
 import { template, segs } from './wall-tile-field.ts';
@@ -65,6 +65,37 @@ describe('corner-graph — two routes per boundary (the flanking-tile pair)', ()
 
   it('only when BOTH flanking arms are full is the corner-pair directly severed', () => {
     expect(linked(T({ eS: 'wall', iS: 'wall' }), T({ eN: 'wall', iN: 'wall' }))).toBe(false);
+  });
+});
+
+describe('corner-graph — side traversal (the solvability bridge)', () => {
+  it('an open grid traverses N↔S and E↔W', () => {
+    const g = buildCornerGraph([OPEN(), OPEN(), OPEN(), OPEN()], 2, 2);
+    expect(connectsSides(g, 'N', 'S')).toBe(true);
+    expect(connectsSides(g, 'E', 'W')).toBe(true);
+  });
+
+  it('a full horizontal wall (E+W arms) blocks N↔S but each half still traverses E↔W', () => {
+    // 1×1 tile, E and W arms full → NE–SE and SW–NW (the vertical pairs) sealed, splitting N from S.
+    // The N and S arms stay open, so the top half {NW,NE} and bottom half {SW,SE} each still run E↔W.
+    const g = buildCornerGraph([T({ eE: 'wall', iE: 'wall', eW: 'wall', iW: 'wall' })], 1, 1);
+    expect(connectsSides(g, 'N', 'S')).toBe(false); // no vertical passage
+    expect(connectsSides(g, 'E', 'W')).toBe(true); // E band {NE,SE} reaches W band {NW,SW} within each half
+  });
+
+  it('edgeCorners lists the band along each side', () => {
+    const g = buildCornerGraph([OPEN(), OPEN()], 2, 1); // w=2,h=1 → corners 3×2
+    expect(edgeCorners(g, 'N')).toEqual([cornerId(2, 0, 0), cornerId(2, 1, 0), cornerId(2, 2, 0)]);
+    expect(edgeCorners(g, 'S')).toEqual([cornerId(2, 0, 1), cornerId(2, 1, 1), cornerId(2, 2, 1)]);
+  });
+
+  it('reachableFromSet unions its sources', () => {
+    // two isolated tiles side by side, no shared open arm between them? they DO share via corners — use
+    // a vertical-split tile so the two halves are separate, then seed both.
+    const g = buildCornerGraph([T({ eN: 'wall', iN: 'wall', eS: 'wall', iS: 'wall' })], 1, 1);
+    const nw = cornerId(1, 0, 0), ne = cornerId(1, 1, 0);
+    expect(reachableFromSet(g, [nw, ne]).filter(Boolean).length).toBe(4); // both halves seeded → all 4
+    expect(reachableFrom(g, nw).filter(Boolean).length).toBe(2); // one half only
   });
 });
 

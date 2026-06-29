@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { makeGrid, resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
-import { cornerGraphOf, reachableFrom, cornerId } from '../floor/corner-graph.ts';
+import { cornerGraphOf, reachableFrom, cornerId, connectsSides } from '../floor/corner-graph.ts';
 import { fullField, template, segs, centres, wallTypes, floors, domainSize, type TileField } from '../floor/wall-tile-field.ts';
 import { DIRS, FLOOR_CORNERS, type Dir, type Seg, type Centre, type WallType, type FloorMaterial, type FloorCorner } from '../floor/wall-tile.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
@@ -302,7 +302,13 @@ function render(): void {
   void render3d();
   const f = grid.cells[activeTile]!;
   const amb = [...DIRS.map((d) => f.edge[d]), ...DIRS.map((d) => f.inner[d]), f.centre].filter((m) => domainSize(m) > 1).length;
-  status(`tile ${activeTile % GW},${Math.floor(activeTile / GW)} · ${amb} ambiguous section(s) · derive: ${derive}`);
+  let msg = `tile ${activeTile % GW},${Math.floor(activeTile / GW)} · ${amb} ambiguous section(s) · derive: ${derive}`;
+  if (showReach) {
+    const pk = picker();
+    const g = cornerGraphOf(grid, (_x, _y, cell, opts) => pk(cell, opts));
+    msg += ` · N↔S ${connectsSides(g, 'N', 'S') ? '✓ traversable' : '✗ blocked'}`;
+  }
+  status(msg);
 }
 const statusEl = document.getElementById('status')!;
 const hintEl = document.getElementById('hint')!;
@@ -371,7 +377,7 @@ function buildControls(): void {
     h('button', { title: 'make the active tile fully ambiguous (every section open) to test the derive modes', onclick: fillActiveOpen }, 'open tile ∗'),
     h('button', { title: 'undo the last change (Ctrl+Z)', onclick: undo }, '↶ undo')));
   const reachCk = h('input', { type: 'checkbox', checked: showReach }) as HTMLInputElement;
-  reachCk.addEventListener('change', () => { showReach = reachCk.checked; renderSvg(); });
+  reachCk.addEventListener('change', () => { showReach = reachCk.checked; render(); });
   ctrlBox.append(h('label', { class: 'ck', title: 'overlay corner-graph reachability from the active tile’s NW corner — blue start, green reachable, red not (the §2 solvability check)' }, reachCk, 'show connectivity'));
 }
 

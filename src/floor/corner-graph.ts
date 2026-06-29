@@ -16,7 +16,7 @@
 // Pure + deterministic — integer node ids, ascending adjacency, BFS over arrays (no float / no
 // Map/Set iteration on an output-affecting path; a Set is used only during construction, then sorted).
 
-import type { WallTile, Seg } from './wall-tile.ts';
+import type { WallTile, Seg, Dir } from './wall-tile.ts';
 import { resolveGrid, type TileGrid } from './tile-grid.ts';
 
 export interface CornerGraph {
@@ -78,13 +78,12 @@ export function cornerGraphOf(
   return buildCornerGraph(resolveGrid(grid, pick), grid.w, grid.h);
 }
 
-/** Corners reachable from `start` (inclusive), as a boolean array indexed by node id. Deterministic
- *  BFS over the directed graph (ascending adjacency, numeric queue). */
-export function reachableFrom(g: CornerGraph, start: number): boolean[] {
+/** Corners reachable from ANY of `starts` (inclusive), as a boolean array indexed by node id.
+ *  Deterministic multi-source BFS over the directed graph (ascending adjacency, numeric queue). */
+export function reachableFromSet(g: CornerGraph, starts: readonly number[]): boolean[] {
   const seen = new Array<boolean>(g.nodeCount).fill(false);
-  if (start < 0 || start >= g.nodeCount) return seen;
-  seen[start] = true;
-  const queue: number[] = [start];
+  const queue: number[] = [];
+  for (const s of starts) if (s >= 0 && s < g.nodeCount && !seen[s]) { seen[s] = true; queue.push(s); }
   for (let qi = 0; qi < queue.length; qi++) {
     const n = queue[qi]!;
     for (const m of g.adj[n]!) {
@@ -97,7 +96,34 @@ export function reachableFrom(g: CornerGraph, start: number): boolean[] {
   return seen;
 }
 
+/** Corners reachable from a single `start`. */
+export function reachableFrom(g: CornerGraph, start: number): boolean[] {
+  return reachableFromSet(g, [start]);
+}
+
 /** Is corner `b` reachable from corner `a` (following directed edges)? */
 export function cornerReachable(g: CornerGraph, a: number, b: number): boolean {
   return reachableFrom(g, a)[b] ?? false;
+}
+
+/** The corner node ids along one outer edge of the grid, ascending. (N = top row cy=0, S = bottom row
+ *  cy=h, W = left col cx=0, E = right col cx=w.) These are the candidate entry/exit bands a floor
+ *  traversal check runs between — the generator decides which side is entry vs exit. */
+export function edgeCorners(g: CornerGraph, side: Dir): number[] {
+  const ids: number[] = [];
+  if (side === 'N' || side === 'S') {
+    const cy = side === 'N' ? 0 : g.h;
+    for (let cx = 0; cx <= g.w; cx++) ids.push(cornerId(g.w, cx, cy));
+  } else {
+    const cx = side === 'W' ? 0 : g.w;
+    for (let cy = 0; cy <= g.h; cy++) ids.push(cornerId(g.w, cx, cy));
+  }
+  return ids;
+}
+
+/** Does any corner on the `from` edge reach any corner on the `to` edge? The generic floor-traversal
+ *  solvability check the §2 bridge needs: a body entering along one side can cross to the other. */
+export function connectsSides(g: CornerGraph, from: Dir, to: Dir): boolean {
+  const seen = reachableFromSet(g, edgeCorners(g, from));
+  return edgeCorners(g, to).some((id) => seen[id] === true);
 }
