@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { makeGrid, resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
+import { cornerGraphOf, reachableFrom, cornerId } from '../floor/corner-graph.ts';
 import { fullField, template, segs, centres, wallTypes, floors, domainSize, type TileField } from '../floor/wall-tile-field.ts';
 import { DIRS, FLOOR_CORNERS, type Dir, type Seg, type Centre, type WallType, type FloorMaterial, type FloorCorner } from '../floor/wall-tile.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
@@ -66,6 +67,7 @@ let grid: TileGrid = blankGrid(GW, GH); // cells start blank (concrete none); pa
 let activeTile = 0;
 let derive: DeriveMode = 'none';
 let seed = 1;
+let showReach = false; // overlay the corner-graph reachability from the active tile's NW corner
 
 const brush = {
   mode: 'section' as 'section' | 'wallType' | 'floor' | 'stamp',
@@ -216,7 +218,30 @@ function renderSvg(): void {
   gridSvg.setAttribute('class', `mode-${brush.mode}`);
   let s = '';
   for (let i = 0; i < grid.cells.length; i++) s += tileSvg(i);
+  if (showReach) s += reachOverlay();
   gridSvg.innerHTML = s;
+}
+
+/** Overlay the corner-graph: a dot at every corner node, coloured by reachability from the active
+ *  tile's NW corner (blue = start, green = reachable, red = unreachable). Proves the §2 verifier on
+ *  the tiles you're authoring — same resolved tiles the game/collision use. */
+function reachOverlay(): string {
+  const pk = picker();
+  const g = cornerGraphOf(grid, (_x, _y, cell, opts) => pk(cell, opts));
+  const start = cornerId(GW, activeTile % GW, Math.floor(activeTile / GW));
+  const seen = reachableFrom(g, start);
+  const px = (cx: number): number => (cx < GW ? cx * (T + GAP) : (GW - 1) * (T + GAP) + T);
+  const py = (cy: number): number => (cy < GH ? cy * (T + GAP) : (GH - 1) * (T + GAP) + T);
+  let o = '<g pointer-events="none">';
+  for (let cy = 0; cy <= GH; cy++) {
+    for (let cx = 0; cx <= GW; cx++) {
+      const id = cornerId(GW, cx, cy);
+      const isStart = id === start;
+      const fill = isStart ? '#3a78ff' : seen[id] ? '#36d07a' : '#e2493f';
+      o += `<circle cx="${px(cx)}" cy="${py(cy)}" r="${isStart ? 5 : 3.5}" fill="${fill}" stroke="#0009" stroke-width="0.5"/>`;
+    }
+  }
+  return o + '</g>';
 }
 
 /* --------------------------------- 3D preview -------------------------------- */
@@ -345,6 +370,9 @@ function buildControls(): void {
     h('button', { onclick: () => { pushUndo(); grid = blankGrid(GW, GH); activeTile = 0; render(); } }, 'clear grid'),
     h('button', { title: 'make the active tile fully ambiguous (every section open) to test the derive modes', onclick: fillActiveOpen }, 'open tile ∗'),
     h('button', { title: 'undo the last change (Ctrl+Z)', onclick: undo }, '↶ undo')));
+  const reachCk = h('input', { type: 'checkbox', checked: showReach }) as HTMLInputElement;
+  reachCk.addEventListener('change', () => { showReach = reachCk.checked; renderSvg(); });
+  ctrlBox.append(h('label', { class: 'ck', title: 'overlay corner-graph reachability from the active tile’s NW corner — blue start, green reachable, red not (the §2 solvability check)' }, reachCk, 'show connectivity'));
 }
 
 function buildBrushValues(): void {
