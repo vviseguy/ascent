@@ -16,8 +16,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { makeGrid, type TileGrid } from '../floor/tile-grid.ts';
-import { fullField, template, collapse, segs, centres, wallTypes, floors, domainSize, type TileField } from '../floor/wall-tile-field.ts';
+import { makeGrid, resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
+import { fullField, template, segs, centres, wallTypes, floors, domainSize, type TileField } from '../floor/wall-tile-field.ts';
 import { DIRS, FLOOR_CORNERS, type Dir, type Seg, type Centre, type WallType, type FloorMaterial, type FloorCorner } from '../floor/wall-tile.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
 import { instance } from './tile-render.ts';
@@ -189,8 +189,11 @@ function tileSvg(i: number): string {
     const [x, y, w, hh] = CORNER_RECT[c];
     s += `<rect class="floorLayer" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${floorFill(f.floor[c])}" stroke="#0004" stroke-width="0.5" data-tile="${i}" data-kind="floor" data-id="${c}"/>`;
   }
-  // wall sections (top layer) — additive RGB of the section's domain
+  // wall sections (top layer) — additive RGB of the section's domain. EDGES are single-owned (§12 #4):
+  // a tile owns only N+W; its E/S are the neighbour's W/N (shown on that neighbour) — so we draw/paint
+  // only edge.N + edge.W here. All 4 inner cells + centre stay per-tile.
   for (const id of Object.keys(SEG_RECT)) {
+    if (id === 'edge.E' || id === 'edge.S') continue; // not owned by this tile
     const [x, y, w, hh] = SEG_RECT[id]!;
     const grp = id.split('.')[0] as 'edge' | 'inner';
     const dir = id.split('.')[1] as Dir;
@@ -250,8 +253,11 @@ async function render3d(): Promise<void> {
   scene.add(group);
   const ox = -((GW - 1) / 2) * CELL, oz = -((GH - 1) / 2) * CELL;
   const pick = picker();
-  for (let i = 0; i < grid.cells.length; i++) {
-    const t = collapse(grid.cells[i]!, pick);
+  // RESOLVE once (owner edges + perimeter borders) — the 3D preview now shows exactly what the game
+  // builds from these tiles (§12 #4), not a per-cell view that could disagree on shared edges.
+  const tiles = resolveGrid(grid, (_x, _y, cell, opts) => pick(cell, opts));
+  for (let i = 0; i < tiles.length; i++) {
+    const t = tiles[i];
     if (!t) continue;
     const wx = ox + (i % GW) * CELL, wz = oz + Math.floor(i / GW) * CELL;
     for (const p of tilePlacements(t)) {
@@ -469,7 +475,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('resize', fit3d);
 
-hintEl.textContent = 'left-drag paints · right-drag = clear/everything · Ctrl+Z undo · section colour = domain: 🔴none 🟢wall 🔵barrier (mixed = ambiguous, white = any)';
+hintEl.textContent = 'left-drag paints · right-drag = clear/everything · Ctrl+Z undo · edges N+W owned (E/S = neighbour’s; 3D shows the resolved result) · colour = domain: 🔴none 🟢wall 🔵barrier';
 buildControls();
 void fetchStructures();
 fit3d();
