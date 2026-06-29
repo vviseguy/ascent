@@ -482,13 +482,18 @@ the green light for every geometry step.
     collision pushes `unit.boxes`. So **`render == collision` stays true by construction (one list)** —
     AND abstract DefaultStyle pieces and tile-units can coexist in one floor. DefaultStyle never sets
     `unit` → consumers that ignore it are unchanged (the additive-IR contract).
-  - **Boxes come from `box-fit`, not hand code (decided 2026-06-28).** A wall piece is just a KayKit
-    GLB, so its collider is the lab's **`box-fit` voxelizer** footprint (the green boxes in the per-model
-    view) — the SAME algorithm used for props, frozen into `approved-assets.json` and read back through
-    the already-built `getApprovedFootprint` loader. A tile's `unit.boxes` = each placed piece's frozen
-    footprint, transformed by the placement. So **collision is literally the box-fit of the rendered
-    mesh** (`render == collision` airtight), there is **no bespoke wall-collider** (the hand-written
-    `tileColliders` was deleted as a duplicate), and this finally consumes the dormant footprint store.
+  - **A piece's `approved-assets` entry is the authoritative source for BOTH collider AND look
+    (decided 2026-06-28).** A wall piece is just a KayKit GLB; its approved entry already freezes
+    `footprint.boxes` (the **`box-fit`** voxelizer — the green boxes, same algorithm props use) AND
+    `materials` (the **recolor + texture-settings** recipe). So **boxing and texturing are co-equal
+    authoritative sources**, frozen at the one approve gate. A tile `unit` references its piece's entry
+    and pulls **both**: `unit.boxes` = each placed piece's frozen footprint transformed by the placement
+    (→ collision); `unit.materials` = the frozen recipe the renderer **applies** (not re-derives). So
+    `render == collision` is airtight (both off the same placed pieces), there is **no bespoke
+    wall-collider** (the hand-written `tileColliders` was deleted as a duplicate), and this finally
+    consumes BOTH dormant frozen stores (`getApprovedFootprint` for collision; the materials recipe for
+    render, the symmetric step to today's live `recolor.ts`). One source per piece, two consumers —
+    the same polymorphism as the IR.
   - **Determinism seam:** `box-fit` runs offline in the lab; its footprints are FROZEN data, so the sim
     only reads constants (Fixed-converted at the seam) — deterministic. The remaining sim-side authority
     is **placement** (which piece, where, what yaw — Option A: port `tilePlacements`' geometry to
