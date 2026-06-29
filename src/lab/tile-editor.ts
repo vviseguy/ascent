@@ -74,7 +74,13 @@ const brush = {
   floor: new Set<FloorMaterial>(['stone']),
   floorWhole: false, // default to PER-CORNER so corners can be painted individually
   combo: null as string | null,
+  rightMode: 'clear' as 'clear' | 'fill', // what a RIGHT-click writes: 'clear' → none, 'fill' → the full domain (everything)
 };
+
+// Right-click writes one of these, per target, depending on brush.rightMode. 'clear' pins the
+// default value (none / solid); 'fill' opens the whole domain (every option) — handy for testing derive.
+const FULL_SEG = segs('none', 'wall', 'barrier'), FULL_CENTRE = centres('none', 'wall', 'barrier');
+const FULL_FLOOR = floors('none', 'stone', 'dirt', 'wood'), FULL_WT = wallTypes(...WALLTYPE_LIST);
 
 /** A structure saved to the server (the game-loadable shape; mirrors src/game/structures.ts). */
 interface ServerStructure { w: number; h: number; cells: TileField[]; derive?: string; seed?: number; savedAt?: string }
@@ -89,6 +95,28 @@ function loadCombos(): Map<string, TileField> {
 function persistCombos(): void { localStorage.setItem(LSKEY, JSON.stringify(Object.fromEntries(combos))); }
 const cloneField = (f: TileField): TileField => ({ floor: { ...f.floor }, edge: { ...f.edge }, inner: { ...f.inner }, centre: f.centre, wallType: f.wallType });
 
+/* ----------------------------------- undo ------------------------------------ */
+// Whole-grid snapshots (dims + cells + cursor). A paint DRAG pushes ONE snapshot at stroke start
+// (markStroke, guarded by strokePushed) so Ctrl+Z undoes the entire stroke, not each cell; discrete
+// actions (clear / open / resize / load / edit-combo) push their own. Cheap: cells are tiny masks.
+interface Snapshot { gw: number; gh: number; cells: TileField[]; active: number }
+const undoStack: Snapshot[] = [];
+const UNDO_MAX = 80;
+let strokePushed = false; // has THIS drag already captured an undo snapshot?
+function pushUndo(): void {
+  undoStack.push({ gw: GW, gh: GH, cells: grid.cells.map(cloneField), active: activeTile });
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+}
+function markStroke(): void { if (!strokePushed) { pushUndo(); strokePushed = true; } }
+function undo(): void {
+  const s = undoStack.pop();
+  if (!s) { status('nothing to undo'); return; }
+  GW = s.gw; GH = s.gh; activeTile = Math.min(s.active, s.gw * s.gh - 1);
+  const g = makeGrid(GW, GH); g.cells = s.cells.map(cloneField); grid = g;
+  buildControls(); render();
+  status(`undo · ${undoStack.length} step(s) left`);
+}
+
 /* ----------------------------- ambiguity → value ----------------------------- */
 
 function mulberry32(a: number): () => number {
@@ -102,23 +130,33 @@ function picker(): (cell: string, opts: readonly string[]) => number {
 
 /* ----------------------------------- paint ----------------------------------- */
 
-function paint(i: number, kind: string, id: string): void {
+function paint(i: number, kind: string, id: string, button: number): void {
   const f = grid.cells[i]!;
+  const right = button === 2;           // right-click writes clear/everything (brush.rightMode), not the brush value
+  const fill = brush.rightMode === 'fill';
   if (brush.mode === 'section' && kind === 'seg') {
-    if (brush.seg.size === 0) return;
-    if (id === 'centre') f.centre = centres(...([...brush.seg] as Centre[]));
-    else { const [grp, dir] = id.split('.') as ['edge' | 'inner', Dir]; f[grp][dir] = segs(...brush.seg); }
+    let m: number;
+    if (right) m = id === 'centre' ? (fill ? FULL_CENTRE : centres('none')) : (fill ? FULL_SEG : segs('none'));
+    else { if (brush.seg.size === 0) return; m = id === 'centre' ? centres(...([...brush.seg] as Centre[])) : segs(...brush.seg); }
+    markStroke();
+    if (id === 'centre') f.centre = m;
+    else { const [grp, dir] = id.split('.') as ['edge' | 'inner', Dir]; f[grp][dir] = m; }
   } else if (brush.mode === 'floor' && kind === 'floor') {
-    if (brush.floor.size === 0) return;
-    const m = floors(...brush.floor);
+    let m: number;
+    if (right) m = fill ? FULL_FLOOR : floors('none');
+    else { if (brush.floor.size === 0) return; m = floors(...brush.floor); }
+    markStroke();
     if (brush.floorWhole) for (const c of FLOOR_CORNERS) f.floor[c] = m;
     else f.floor[id as FloorCorner] = m;
   } else if (brush.mode === 'wallType') {
-    if (brush.wallType.size === 0) return;
-    f.wallType = wallTypes(...brush.wallType);
-  } else if (brush.mode === 'stamp' && brush.combo) {
-    const c = combos.get(brush.combo);
-    if (c) grid.cells[i] = cloneField(c);
+    let m: number;
+    if (right) m = fill ? FULL_WT : wallTypes('solid');
+    else { if (brush.wallType.size === 0) return; m = wallTypes(...brush.wallType); }
+    markStroke();
+    f.wallType = m;
+  } else if (brush.mode === 'stamp') {
+    if (right) { markStroke(); grid.cells[i] = fill ? fullField() : blank(); }
+    else { if (!brush.combo) return; const c = combos.get(brush.combo); if (!c) return; markStroke(); grid.cells[i] = cloneField(c); }
   } else return;
   activeTile = i;
   render();
@@ -266,6 +304,11 @@ function buildControls(): void {
   ctrlBox.append(h('div', { id: 'brushValues' }));
   buildBrushValues();
 
+  ctrlBox.append(h('h2', { title: 'what a RIGHT-click writes (instead of the brush value)' }, 'Right-click ↦'));
+  const rmodes: [typeof brush.rightMode, string][] = [['clear', 'clear (none)'], ['fill', 'everything ∗']];
+  ctrlBox.append(h('div', { class: 'row' }, ...rmodes.map(([m, label]) =>
+    h('div', { class: `chip${brush.rightMode === m ? ' on' : ''}`, onclick: () => { brush.rightMode = m; buildControls(); } }, label))));
+
   ctrlBox.append(h('h2', {}, 'Ambiguity →'));
   const dmodes: [DeriveMode, string][] = [['none', 'all none'], ['wall', 'all wall'], ['barrier', 'all barrier'], ['random', 'random']];
   ctrlBox.append(h('div', { class: 'row' }, ...dmodes.map(([m, label]) =>
@@ -293,8 +336,9 @@ function buildControls(): void {
   ctrlBox.append(h('div', { class: 'row', style: 'align-items:center' }, wIn, '×', hIn,
     h('button', { onclick: () => resizeGrid(Number(wIn.value) | 0, Number(hIn.value) | 0) }, 'resize')));
   ctrlBox.append(h('div', { class: 'row', style: 'margin-top:6px' },
-    h('button', { onclick: () => { grid = blankGrid(GW, GH); activeTile = 0; render(); } }, 'clear grid'),
-    h('button', { title: 'make the active tile fully ambiguous (every section open) to test the derive modes', onclick: fillActiveOpen }, 'open tile ∗')));
+    h('button', { onclick: () => { pushUndo(); grid = blankGrid(GW, GH); activeTile = 0; render(); } }, 'clear grid'),
+    h('button', { title: 'make the active tile fully ambiguous (every section open) to test the derive modes', onclick: fillActiveOpen }, 'open tile ∗'),
+    h('button', { title: 'undo the last change (Ctrl+Z)', onclick: undo }, '↶ undo')));
 }
 
 function buildBrushValues(): void {
@@ -330,7 +374,7 @@ function buildCombos(): void {
   for (const name of [...combos.keys()].sort()) {
     box.append(h('div', { class: `combo${brush.combo === name ? ' sel' : ''}` },
       h('span', { class: 'name', title: 'select for the Stamp brush', onclick: () => { brush.combo = name; brush.mode = 'stamp'; buildControls(); renderSvg(); } }, name),
-      h('button', { title: 'load onto active tile to edit', onclick: () => { grid.cells[activeTile] = cloneField(combos.get(name)!); render(); } }, 'edit'),
+      h('button', { title: 'load onto active tile to edit', onclick: () => { pushUndo(); grid.cells[activeTile] = cloneField(combos.get(name)!); render(); } }, 'edit'),
       h('button', { title: 'delete', onclick: () => { combos.delete(name); if (brush.combo === name) brush.combo = null; persistCombos(); buildCombos(); } }, '✕')));
   }
 }
@@ -382,6 +426,7 @@ async function saveStructure(): Promise<void> {
 function loadStructure(name: string): void {
   const s = serverStructures[name];
   if (!s) return;
+  pushUndo();
   const g = makeGrid(s.w, s.h);
   g.cells = s.cells.map(cloneField);
   grid = g; GW = s.w; GH = s.h; activeTile = 0;
@@ -396,27 +441,35 @@ async function deleteStructure(name: string): Promise<void> {
 
 function resizeGrid(w: number, h: number): void {
   w = Math.max(1, Math.min(14, w)); h = Math.max(1, Math.min(14, h));
+  pushUndo();
   const next = blankGrid(w, h);
   for (let y = 0; y < Math.min(h, GH); y++) for (let x = 0; x < Math.min(w, GW); x++) next.cells[y * w + x] = grid.cells[y * GW + x]!;
   GW = w; GH = h; grid = next; activeTile = Math.min(activeTile, w * h - 1);
   render();
 }
-function fillActiveOpen(): void { grid.cells[activeTile] = fullField(); render(); }
+function fillActiveOpen(): void { pushUndo(); grid.cells[activeTile] = fullField(); render(); }
 
 /* --------------------------------- wiring ------------------------------------ */
 
 let painting = false;
-function handle(e: Event): void {
+let strokeButton = 0; // which mouse button started the current drag (0 left = brush value, 2 right = clear/everything)
+function handle(e: MouseEvent): void {
   const el = (e.target as Element).closest('[data-tile]');
   if (!el) return;
-  paint(Number(el.getAttribute('data-tile')), el.getAttribute('data-kind') ?? '', el.getAttribute('data-id') ?? '');
+  paint(Number(el.getAttribute('data-tile')), el.getAttribute('data-kind') ?? '', el.getAttribute('data-id') ?? '', strokeButton);
 }
-gridSvg.addEventListener('mousedown', (e) => { painting = true; handle(e); });
+gridSvg.addEventListener('mousedown', (e) => { painting = true; strokeButton = e.button; strokePushed = false; handle(e); });
 gridSvg.addEventListener('mouseover', (e) => { if (painting) handle(e); });
 window.addEventListener('mouseup', () => { painting = false; });
+gridSvg.addEventListener('contextmenu', (e) => e.preventDefault()); // right-drag paints; no browser menu
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !(document.activeElement instanceof HTMLInputElement)) {
+    e.preventDefault(); undo();
+  }
+});
 window.addEventListener('resize', fit3d);
 
-hintEl.textContent = 'drag to paint · orbit/scroll the 3D · section colour = domain: 🔴none 🟢wall 🔵barrier (mixed = ambiguous, white = any)';
+hintEl.textContent = 'left-drag paints · right-drag = clear/everything · Ctrl+Z undo · section colour = domain: 🔴none 🟢wall 🔵barrier (mixed = ambiguous, white = any)';
 buildControls();
 void fetchStructures();
 fit3d();
