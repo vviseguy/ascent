@@ -11,7 +11,7 @@ import {
   centres,
   type TileField,
 } from './wall-tile-field.ts';
-import { armOf, type WallTile, type Seg, type CornerFloors, type FloorMaterial } from './wall-tile.ts';
+import { type WallTile, type Seg, type CornerFloors, type FloorMaterial, type TileCore } from './wall-tile.ts';
 
 const F = (m: FloorMaterial = 'stone'): CornerFloors => ({ nw: m, ne: m, sw: m, se: m });
 const side = (N: Seg, E: Seg, S: Seg, W: Seg) => ({ N, E, S, W });
@@ -25,9 +25,17 @@ const T = (p: Partial<WallTile>): WallTile => ({
 });
 
 describe('wall-tile-field — domains + round-trip', () => {
-  it('a concrete tile collapses back to itself (fromTile → collapse is identity)', () => {
-    const t = T({ edge: side('wall', 'barrier', 'none', 'wall'), inner: side('wall', 'none', 'none', 'wall'), centre: 'wall', wallType: 'door', floor: { nw: 'stone', ne: 'dirt', sw: 'wood', se: 'none' } });
-    expect(collapse(fromTile(t))).toEqual(t);
+  it('a concrete core collapses back to itself (fromTile → collapse is identity on owned data)', () => {
+    // a tile owns only N/W edges; E/S aren't stored (the resolver fills them), so the round-trip is on
+    // the TileCore, not a 4-edge tile.
+    const core: TileCore = {
+      floor: { nw: 'stone', ne: 'dirt', sw: 'wood', se: 'none' },
+      edge: { N: 'wall', W: 'wall' },
+      inner: side('wall', 'none', 'none', 'wall'),
+      centre: 'wall',
+      wallType: 'door',
+    };
+    expect(collapse(fromTile(core))).toEqual(core);
   });
 
   it('fullField is conflict-free and collapses to the canonical (all-first-option) tile', () => {
@@ -69,11 +77,11 @@ describe('wall-tile-field — templates + AND-gate (stamping)', () => {
 
 describe('wall-tile-field — conflict (the NOR guard)', () => {
   it('stamping incompatible templates → an empty domain → conflict → collapse null', () => {
-    const onlyWall = template({ edge: { E: segs('wall') } });
-    const onlyNone = template({ edge: { E: segs('none') } });
+    const onlyWall = template({ edge: { W: segs('wall') } });
+    const onlyNone = template({ edge: { W: segs('none') } });
     const clash = andGate(andGate(fullField(), onlyWall), onlyNone);
     expect(hasConflict(clash)).toBe(true);
-    expect(conflicts(clash)).toEqual(['edge.E']);
+    expect(conflicts(clash)).toEqual(['edge.W']);
     expect(collapse(clash)).toBeNull();
   });
 
@@ -90,7 +98,6 @@ describe('wall-tile-field — collapse is deterministic + seeded-pickable', () =
     const pickLast = (_cell: string, opts: readonly string[]) => opts.length - 1;
     const t = collapse(f, pickLast)!;
     expect(t.edge.N).toBe('barrier'); // last option of {none,wall,barrier}
-    // and the collapsed tile is a valid WallTile the resolver can read
-    expect(armOf(t, 'N').type).toBe('barrier');
+    expect(t.inner.N).toBe('barrier'); // the seeded pick applies per cell
   });
 });

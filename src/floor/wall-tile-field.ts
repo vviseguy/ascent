@@ -19,7 +19,7 @@
 import {
   DIRS,
   FLOOR_CORNERS,
-  type WallTile,
+  OWNED_EDGES,
   type Seg,
   type Centre,
   type WallType,
@@ -27,6 +27,8 @@ import {
   type Dir,
   type FloorCorner,
   type SideSet,
+  type OwnedEdge,
+  type TileCore,
 } from './wall-tile.ts';
 
 /** A domain over some enum, as a bitmask (bit i set = the i-th value is allowed). */
@@ -43,34 +45,37 @@ const bitOf = <T>(vals: readonly T[], v: T): Mask => 1 << vals.indexOf(v);
 const maskOf = <T>(vals: readonly T[], allowed: readonly T[]): Mask => allowed.reduce((m, v) => m | bitOf(vals, v), 0);
 const valuesOf = <T>(vals: readonly T[], mask: Mask): T[] => vals.filter((_, i) => (mask & (1 << i)) !== 0);
 
-/** A tile of domains. A concrete tile = all singletons; a template = some multi-option. */
+/** A tile of domains. A concrete tile = all singletons; a template = some multi-option. `edge` is the
+ *  OWNED pair only (N + W, §12 #4); E/S live on the neighbours and are filled by the grid resolver. */
 export interface TileField {
   floor: Record<FloorCorner, Mask>;
-  edge: Record<Dir, Mask>;
+  edge: Record<OwnedEdge, Mask>;
   inner: Record<Dir, Mask>;
   centre: Mask;
   wallType: Mask;
 }
 
 const sideAll = (): Record<Dir, Mask> => ({ N: full(SEGS), E: full(SEGS), S: full(SEGS), W: full(SEGS) });
+const edgeAll = (): Record<OwnedEdge, Mask> => ({ N: full(SEGS), W: full(SEGS) });
 
 /** The "anything" field — every cell allows everything. The map's initial state before stamping. */
 export function fullField(): TileField {
   return {
     floor: { nw: full(FLOORS), ne: full(FLOORS), sw: full(FLOORS), se: full(FLOORS) },
-    edge: sideAll(),
+    edge: edgeAll(),
     inner: sideAll(),
     centre: full(CENTRES),
     wallType: full(WALLTYPES),
   };
 }
 
-/** A concrete tile as singleton domains. */
-export function fromTile(t: WallTile): TileField {
+/** A concrete tile (core) as singleton domains. Only the owned `edge.N`/`edge.W` are taken — a tile's
+ *  E/S are the neighbour's and aren't stored. (A full `WallTile` is accepted too: its extra E/S are ignored.) */
+export function fromTile(t: TileCore): TileField {
   const side = (s: SideSet): Record<Dir, Mask> => ({ N: bitOf(SEGS, s.N), E: bitOf(SEGS, s.E), S: bitOf(SEGS, s.S), W: bitOf(SEGS, s.W) });
   return {
     floor: { nw: bitOf(FLOORS, t.floor.nw), ne: bitOf(FLOORS, t.floor.ne), sw: bitOf(FLOORS, t.floor.sw), se: bitOf(FLOORS, t.floor.se) },
-    edge: side(t.edge),
+    edge: { N: bitOf(SEGS, t.edge.N), W: bitOf(SEGS, t.edge.W) },
     inner: side(t.inner),
     centre: bitOf(CENTRES, t.centre),
     wallType: bitOf(WALLTYPES, t.wallType),
@@ -94,7 +99,8 @@ export const domainSize = (m: Mask): number => { let c = 0; for (let x = m; x; x
 
 export interface TemplateSpec {
   floor?: Partial<Record<FloorCorner, Mask>>;
-  edge?: Partial<Record<Dir, Mask>>;
+  /** Owned edges only (N/W). A tile cannot author its E/S — those belong to the neighbour (§12 #4). */
+  edge?: Partial<Record<OwnedEdge, Mask>>;
   inner?: Partial<Record<Dir, Mask>>;
   centre?: Mask;
   wallType?: Mask;
@@ -104,7 +110,7 @@ export interface TemplateSpec {
 export function template(spec: TemplateSpec): TileField {
   const f = fullField();
   if (spec.floor) for (const c of FLOOR_CORNERS) if (spec.floor[c] !== undefined) f.floor[c] = spec.floor[c]!;
-  if (spec.edge) for (const d of DIRS) if (spec.edge[d] !== undefined) f.edge[d] = spec.edge[d]!;
+  if (spec.edge) for (const d of OWNED_EDGES) if (spec.edge[d] !== undefined) f.edge[d] = spec.edge[d]!;
   if (spec.inner) for (const d of DIRS) if (spec.inner[d] !== undefined) f.inner[d] = spec.inner[d]!;
   if (spec.centre !== undefined) f.centre = spec.centre;
   if (spec.wallType !== undefined) f.wallType = spec.wallType;
@@ -118,7 +124,7 @@ export function andGate(a: TileField, b: TileField): TileField {
   const sand = (x: Record<Dir, Mask>, y: Record<Dir, Mask>): Record<Dir, Mask> => ({ N: x.N & y.N, E: x.E & y.E, S: x.S & y.S, W: x.W & y.W });
   return {
     floor: { nw: a.floor.nw & b.floor.nw, ne: a.floor.ne & b.floor.ne, sw: a.floor.sw & b.floor.sw, se: a.floor.se & b.floor.se },
-    edge: sand(a.edge, b.edge),
+    edge: { N: a.edge.N & b.edge.N, W: a.edge.W & b.edge.W },
     inner: sand(a.inner, b.inner),
     centre: a.centre & b.centre,
     wallType: a.wallType & b.wallType,
@@ -129,10 +135,8 @@ export function andGate(a: TileField, b: TileField): TileField {
 export function conflicts(f: TileField): string[] {
   const out: string[] = [];
   for (const c of FLOOR_CORNERS) if (f.floor[c] === 0) out.push(`floor.${c}`);
-  for (const d of DIRS) {
-    if (f.edge[d] === 0) out.push(`edge.${d}`);
-    if (f.inner[d] === 0) out.push(`inner.${d}`);
-  }
+  for (const d of OWNED_EDGES) if (f.edge[d] === 0) out.push(`edge.${d}`);
+  for (const d of DIRS) if (f.inner[d] === 0) out.push(`inner.${d}`);
   if (f.centre === 0) out.push('centre');
   if (f.wallType === 0) out.push('wallType');
   return out;
@@ -145,31 +149,27 @@ export function isOpen(f: TileField): boolean {
   const o = fullField();
   return (
     FLOOR_CORNERS.every((c) => f.floor[c] === o.floor[c]) &&
-    DIRS.every((d) => f.edge[d] === o.edge[d] && f.inner[d] === o.inner[d]) &&
+    OWNED_EDGES.every((d) => f.edge[d] === o.edge[d]) &&
+    DIRS.every((d) => f.inner[d] === o.inner[d]) &&
     f.centre === o.centre &&
     f.wallType === o.wallType
   );
 }
 
 /**
- * Collapse a field to a concrete tile by choosing one value per cell. `pick(cell, options)` selects
- * an index into the allowed value strings (default 0 = the canonical lowest option) — seeing the
- * values lets a caller PREFER one (e.g. derive ambiguity toward 'wall'). Swap in a seeded hash for
- * real generation. Returns null if any cell is empty (a conflict).
+ * Collapse a field to a concrete tile CORE by choosing one value per cell. `pick(cell, options)`
+ * selects an index into the allowed value strings (default 0 = the canonical lowest option) — seeing
+ * the values lets a caller PREFER one (e.g. derive ambiguity toward 'wall'). Returns null if any cell
+ * is empty (a conflict). The core carries only the OWNED edges (N/W); the grid resolver fills E/S from
+ * the neighbours to produce a full `WallTile`.
  */
-export function collapse(f: TileField, pick?: (cell: string, options: readonly string[]) => number): WallTile | null {
+export function collapse(f: TileField, pick?: (cell: string, options: readonly string[]) => number): TileCore | null {
   if (hasConflict(f)) return null;
   const choose = <T extends string>(cell: string, vals: readonly T[], mask: Mask): T => {
     const opts = valuesOf(vals, mask);
     const i = pick ? ((pick(cell, opts) % opts.length) + opts.length) % opts.length : 0;
     return opts[i]!;
   };
-  const side = (which: 'edge' | 'inner', s: Record<Dir, Mask>): SideSet => ({
-    N: choose(`${which}.N`, SEGS, s.N),
-    E: choose(`${which}.E`, SEGS, s.E),
-    S: choose(`${which}.S`, SEGS, s.S),
-    W: choose(`${which}.W`, SEGS, s.W),
-  });
   return {
     floor: {
       nw: choose('floor.nw', FLOORS, f.floor.nw),
@@ -177,8 +177,13 @@ export function collapse(f: TileField, pick?: (cell: string, options: readonly s
       sw: choose('floor.sw', FLOORS, f.floor.sw),
       se: choose('floor.se', FLOORS, f.floor.se),
     },
-    edge: side('edge', f.edge),
-    inner: side('inner', f.inner),
+    edge: { N: choose('edge.N', SEGS, f.edge.N), W: choose('edge.W', SEGS, f.edge.W) },
+    inner: {
+      N: choose('inner.N', SEGS, f.inner.N),
+      E: choose('inner.E', SEGS, f.inner.E),
+      S: choose('inner.S', SEGS, f.inner.S),
+      W: choose('inner.W', SEGS, f.inner.W),
+    },
     centre: choose('centre', CENTRES, f.centre),
     wallType: choose('wallType', WALLTYPES, f.wallType),
   };

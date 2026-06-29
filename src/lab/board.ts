@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { makeGrid, applyBatch, collapseGrid, type TileGrid, type Region, type Stamp } from '../floor/tile-grid.ts';
+import { makeGrid, applyBatch, resolveGrid, type TileGrid, type Region, type Stamp } from '../floor/tile-grid.ts';
 import { isOpen } from '../floor/wall-tile-field.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
 import { basicRoom, ROOMS } from '../floor/room-templates.ts';
@@ -69,7 +69,7 @@ async function show(gw: number, gh: number, build: (g: TileGrid) => void): Promi
 
   const ox = -((gw - 1) / 2) * CELL;
   const oz = -((gh - 1) / 2) * CELL;
-  const tiles = collapseGrid(grid);
+  const tiles = resolveGrid(grid); // owner-resolved (E/S from neighbours, perimeter at the border)
   for (let i = 0; i < tiles.length; i++) {
     const wx = ox + (i % gw) * CELL;
     const wz = oz + Math.floor(i / gw) * CELL;

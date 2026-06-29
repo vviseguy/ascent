@@ -19,7 +19,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { makeGrid, resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
 import { cornerGraphOf, reachableFrom, cornerId, connectsSides } from '../floor/corner-graph.ts';
 import { fullField, template, segs, centres, wallTypes, floors, domainSize, type TileField } from '../floor/wall-tile-field.ts';
-import { DIRS, FLOOR_CORNERS, type Dir, type Seg, type Centre, type WallType, type FloorMaterial, type FloorCorner } from '../floor/wall-tile.ts';
+import { DIRS, FLOOR_CORNERS, OWNED_EDGES, type Dir, type Seg, type Centre, type WallType, type FloorMaterial, type FloorCorner, type OwnedEdge } from '../floor/wall-tile.ts';
 import { tilePlacements } from './wall-tile-assets.ts';
 import { instance } from './tile-render.ts';
 
@@ -55,7 +55,7 @@ type DeriveMode = 'none' | 'wall' | 'barrier' | 'random';
 function blank(): TileField {
   return template({
     floor: { nw: floors('none'), ne: floors('none'), sw: floors('none'), se: floors('none') },
-    edge: { N: segs('none'), E: segs('none'), S: segs('none'), W: segs('none') },
+    edge: { N: segs('none'), W: segs('none') }, // owned edges only (§12 #4)
     inner: { N: segs('none'), E: segs('none'), S: segs('none'), W: segs('none') },
     centre: centres('none'), wallType: wallTypes('solid'),
   });
@@ -142,7 +142,11 @@ function paint(i: number, kind: string, id: string, button: number): void {
     else { if (brush.seg.size === 0) return; m = id === 'centre' ? centres(...([...brush.seg] as Centre[])) : segs(...brush.seg); }
     markStroke();
     if (id === 'centre') f.centre = m;
-    else { const [grp, dir] = id.split('.') as ['edge' | 'inner', Dir]; f[grp][dir] = m; }
+    else {
+      const [grp, dir] = id.split('.') as ['edge' | 'inner', Dir];
+      if (grp === 'inner') f.inner[dir] = m;
+      else f.edge[dir as OwnedEdge] = m; // the UI only exposes the owned edges (N/W)
+    }
   } else if (brush.mode === 'floor' && kind === 'floor') {
     let m: number;
     if (right) m = fill ? FULL_FLOOR : floors('none');
@@ -199,7 +203,7 @@ function tileSvg(i: number): string {
     const [x, y, w, hh] = SEG_RECT[id]!;
     const grp = id.split('.')[0] as 'edge' | 'inner';
     const dir = id.split('.')[1] as Dir;
-    const mask = id === 'centre' ? f.centre : f[grp][dir];
+    const mask = id === 'centre' ? f.centre : grp === 'inner' ? f.inner[dir] : f.edge[dir as OwnedEdge];
     s += rect(x, y, w, hh, segFill(mask), '#0007', false, `class="wallLayer" data-tile="${i}" data-kind="seg" data-id="${id}"`);
   }
   // wall-type badge: the pinned opening letter, or ∗ when its domain is still open
@@ -301,7 +305,7 @@ function render(): void {
   renderSvg();
   void render3d();
   const f = grid.cells[activeTile]!;
-  const amb = [...DIRS.map((d) => f.edge[d]), ...DIRS.map((d) => f.inner[d]), f.centre].filter((m) => domainSize(m) > 1).length;
+  const amb = [...OWNED_EDGES.map((d) => f.edge[d]), ...DIRS.map((d) => f.inner[d]), f.centre].filter((m) => domainSize(m) > 1).length;
   let msg = `tile ${activeTile % GW},${Math.floor(activeTile / GW)} · ${amb} ambiguous section(s) · derive: ${derive}`;
   if (showReach) {
     const pk = picker();

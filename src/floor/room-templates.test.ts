@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { ROOMS, basicRoom, library, hallway, throneRoom } from './room-templates.ts';
-import { makeGrid, applyBatch, collapseGrid, at } from './tile-grid.ts';
-import { collapse, segs, isOpen, type TileField } from './wall-tile-field.ts';
+import { makeGrid, applyBatch, collapseGrid, tileView, at } from './tile-grid.ts';
+import { segs, isOpen, type TileField } from './wall-tile-field.ts';
 import { label } from './wall-tile.ts';
 
 const OPEN = segs('none', 'wall', 'barrier'); // a fully-open segment domain
 const fieldAt = (g: ReturnType<typeof makeGrid>, x: number, y: number): TileField => at(g, x, y) as TileField;
-const tileAt = (g: ReturnType<typeof makeGrid>, x: number, y: number) => collapse(fieldAt(g, x, y))!;
+// label()/wallType reads need the RESOLVED tile (E/S come from neighbours, §12 #4), not a lone core.
+const tileAt = (g: ReturnType<typeof makeGrid>, x: number, y: number) => tileView(g, x, y)!;
 const labelAt = (g: ReturnType<typeof makeGrid>, x: number, y: number): string => label(tileAt(g, x, y));
 const stamp = (name: string, w: number, h: number) => {
   const g = makeGrid(w, h);

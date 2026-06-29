@@ -17,7 +17,7 @@
 // index-sorted, never Map-order, so output is deterministic.
 
 import { type TileField, fullField, andGate, conflicts as cellConflicts, collapse } from './wall-tile-field.ts';
-import type { WallTile, Seg } from './wall-tile.ts';
+import type { WallTile, TileCore, Seg } from './wall-tile.ts';
 
 export interface TileGrid {
   readonly w: number;
@@ -120,12 +120,13 @@ export function applyBatch(
   return { ok, conflicts };
 }
 
-/** Collapse every cell to a concrete tile (null where a domain is empty). `pick` is the entropy
- *  seam — a seeded `(x,y,cell,options) → index` for real generation; default = canonical. */
+/** Collapse every cell to a concrete tile CORE in ISOLATION (owned edges only; E/S unresolved; null
+ *  where a domain is empty). For the renderer/collision use `resolveGrid` instead — this is the raw
+ *  per-cell collapse (lab board / tests). `pick` is the entropy seam, default = canonical. */
 export function collapseGrid(
   grid: TileGrid,
   pick?: (x: number, y: number, cell: string, options: readonly string[]) => number,
-): (WallTile | null)[] {
+): (TileCore | null)[] {
   return grid.cells.map((f, i) => {
     const x = i % grid.w;
     const y = Math.floor(i / grid.w);
@@ -177,7 +178,7 @@ export function tileView(
   y: number,
   pick?: (px: number, py: number, cell: string, options: readonly string[]) => number,
 ): WallTile | null {
-  const core = (cx: number, cy: number): WallTile | null =>
+  const core = (cx: number, cy: number): TileCore | null =>
     inBounds(grid, cx, cy)
       ? collapse(grid.cells[cellIndex(grid, cx, cy)]!, pick ? (cell, opts) => pick(cx, cy, cell, opts) : undefined)
       : null;

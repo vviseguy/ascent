@@ -20,7 +20,7 @@
 // are open by construction. Rooms differ STRUCTURALLY; object content (shelves, beds, thrones) is
 // the later placement-machine layer.
 
-import { DIRS, type Seg, type Centre, type WallType, type FloorMaterial, type Dir, type FloorCorner } from './wall-tile.ts';
+import { DIRS, type Seg, type Centre, type WallType, type FloorMaterial, type Dir, type FloorCorner, type OwnedEdge } from './wall-tile.ts';
 import { template, segs, centres, floors, wallTypes, type Mask, type TileField } from './wall-tile-field.ts';
 import type { Stamp } from './tile-grid.ts';
 
@@ -45,11 +45,16 @@ function cell(s: CellSpec): TileField {
 
   // only the room's OWN arms are constrained (wall + its run edge); the rest stays open so the
   // wall can join the outside however it needs to (corner / tee / cross — the room doesn't care).
-  const edge: Partial<Record<Dir, Mask>> = {};
+  // Edges are single-owned (§12 #4): a tile authors only its N/W edge; an E/S arm sets just the inner
+  // here — the matching edge is the neighbour's W/N, which the resolver fills (perimeter at the border).
+  const edge: Partial<Record<OwnedEdge, Mask>> = {};
   const inner: Partial<Record<Dir, Mask>> = {};
   for (const d of DIRS) {
     const a = s.arms?.[d];
-    if (a && a !== 'none') { inner[d] = segs(a); edge[d] = segs(a); }
+    if (a && a !== 'none') {
+      inner[d] = segs(a);
+      if (d === 'N' || d === 'W') edge[d] = segs(a);
+    }
   }
   return template({
     floor,

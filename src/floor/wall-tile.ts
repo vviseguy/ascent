@@ -62,7 +62,9 @@ export function uniformFloor(f: CornerFloors): Exclude<FloorMaterial, 'none'> | 
   return f.nw === f.ne && f.ne === f.sw && f.sw === f.se && f.nw !== 'none' ? f.nw : null;
 }
 
-/** The full parameterization of one 4u square. A plain floor = all-`none` arms + `centre:'none'`. */
+/** The full parameterization of one 4u square — the RESOLVED tile (all four edges known). Produced by
+ *  the grid resolver (tile-grid.ts), consumed by tilePlacements/collision/the corner-graph. A plain
+ *  floor = all-`none` arms + `centre:'none'`. */
 export interface WallTile {
   floor: CornerFloors;
   /** Outer cells, at the tile boundary — the connection to each neighbour. */
@@ -72,6 +74,26 @@ export interface WallTile {
   /** Additive centre column. */
   centre: Centre;
   /** Opening kind for a full straight wall line. */
+  wallType: WallType;
+}
+
+/** The two edges a tile OWNS (§12 #4): a tile owns its N + W; its E/S are the neighbour's W/N, filled
+ *  in only by the grid resolver. So a lone tile cannot even describe a shared boundary twice. */
+export type OwnedEdge = 'N' | 'W';
+export const OWNED_EDGES: readonly OwnedEdge[] = ['N', 'W'];
+export interface OwnedSides {
+  N: Seg;
+  W: Seg;
+}
+
+/** A tile WITHOUT its resolved E/S edges — everything a lone tile knows. `collapse` yields this; the
+ *  resolver (`resolveGrid`/`tileView`) fills E (= east neighbour's W) and S (= south neighbour's N) to
+ *  produce a full `WallTile`. The `inner` cells are all four — they are interior, per-tile. */
+export interface TileCore {
+  floor: CornerFloors;
+  edge: OwnedSides;
+  inner: SideSet;
+  centre: Centre;
   wallType: WallType;
 }
 
