@@ -173,8 +173,9 @@ o-----------o     o = corner node (shared by the 4 tiles meeting at it → a dua
    edge — `edge.E of A` *is* `edge.W of B`, the same cell — so adjacent tiles can never disagree about
    their shared boundary, and "how it tiles" is well-defined by construction. (The inner cells + centre
    stay per-tile; only the outer ring is shared.) **Lock this into the data model first** — it's free if
-   designed in, a retrofit nightmare if not. *(Today `WallTile.edge` is per-tile; this is the one schema
-   change the graph needs — see §12.)*
+   designed in, a retrofit nightmare if not. *(✅ LOCKED §12 #4: single-owner — a tile owns its `N+W`
+   edges, reads its neighbour's for `E+S`, resolved through one `tileView(grid,x,y)`. Today's per-tile
+   `WallTile.edge` is the schema change this needs.)*
 2. **Graph == collision.** Derive **both** the traversal graph and the collision AABBs from the same
    9-cell data — `tilePlacements()` is already the single source the renderer + collision share, so the
    verifier checks the same truth the sim collides on. The graph must be the **conservative** read:
@@ -487,10 +488,23 @@ At no point is `main` left with a dual IR producer, two lattices, or a broken re
 2. **`hallStatus`** — a durable field on `Cell` or a generation-time scratch artifact (lean: scratch;
    `cellType` is the durable projection the blueprint already reads).
 3. **Tag taxonomy** — flat strings vs a small hierarchy (lean: flat strings, for hashability).
-4. **Shared edge-cell ownership (the corner-graph prerequisite, §2-graph #1).** Today `WallTile.edge` is
-   per-tile, so two neighbours can *describe* their shared boundary independently. To make the traversal
-   graph well-defined, the outer-ring cell must be owned **once** on the shared grid edge (`edge.E of A`
-   == `edge.W of B`). Decide the representation — a separate `EdgeGrid` the tiles read, vs. a "tile owns
-   its N+W edges, reads its neighbour's for S+E" convention — and lock it before building the verifier.
-5. **Where to start the real build** — Phase 1 (one lattice) is the natural first refactor after this
-   doc + Phase 0.
+4. **Shared edge-cell ownership** — ✅ **LOCKED 2026-06-28: single-owner, "a tile owns its N+W edges"
+   (NO separate `EdgeGrid`).** Each tile owns only the two outer cells on its lower-coordinate sides
+   (`edge.N`, `edge.W`); its `E`/`S` are *read* from the neighbour at +1 — `edge.E of A` **is** the
+   `edge.W` of the tile east of A; `edge.S of A` **is** the `edge.N` of the tile south of A. A missing
+   neighbour (grid border) resolves to the PERIMETER wall (the existing "safe shell"). The full 9-cell
+   view consumers need is produced by **one resolver** — `tileView(grid, x, y) → WallTile` — so the
+   asymmetry lives in exactly one place and every consumer (`tilePlacements`, the corner-graph,
+   collision) stays a pure function of a *resolved* tile.
+   - **Why not a separate `EdgeGrid`:** it re-introduces a parallel edge-addressed lattice — the very
+     "two lattices for one truth" debt Phase 1 *deletes* (`wallgrid.ts`). "Edges are a property of the
+     square cell" is the North Star; single-ownership just adds a canonical-owner rule to dedupe the
+     shared ones, keeping everything in tile-space. **Disagreement becomes unrepresentable** (one cell,
+     not two mirrored copies to keep in sync) — strictly stronger than enforcing two mirrors agree.
+   - **Ripple (its own step, prerequisite for the corner-graph — NOT on Phase 4's critical path, since
+     collapse can run per-tile):** `WallTile`/`TileField` store owned `{N,W}` + inner(4) + centre + floor
+     + wallType; the editor routes a paint on *any* of the 4 sides to its owner; `structures.json`
+     re-serializes; `tilePlacements` takes a resolved view.
+5. **Where to start the real build** — ✅ Phase 0 **DONE** (2026-06-28); edge ownership **LOCKED** (#4).
+   Next: the edge-ownership schema change (the `tileView` resolver + owned-`{N,W}` model), then Phase 1
+   (one lattice).
