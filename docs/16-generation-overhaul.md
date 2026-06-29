@@ -442,11 +442,12 @@ Gates: **T** typecheck · **U** vitest · **P** all proofs (esp. `prove:floor`/`
 in-game render parity. The solvability gates (`verify.ts`, `route-check.ts`) + `render==collision` are
 the green light for every geometry step.
 
-- **Phase 0 — kill dead code + un-stale the map** (no behavior change): delete `themes.ts`; fix the
-  stale coloring-debt docs; remove `Cell.chunkType` + its substream. *[this commit]*
+- **Phase 0 — kill dead code + un-stale the map** (no behavior change): ✅ **DONE** — `themes.ts` and
+  `Cell.chunkType` were already deleted in earlier work; the coloring-debt docs (§9, docs/13 §debt) read
+  correctly; the residual stale `themes.ts`/chunk-type code comments were swept (2026-06-28).
 - **Phase 1 — one lattice:** port wallgrid's rules (edge-wins-over-cell-type, openCells forced-open,
-  junction classification) into `blueprint` deriving directly from `floor`; cut consumers over behind an
-  equivalence test; delete `wallgrid.ts`. Resolves debt #1.
+  junction classification) into `blueprint` deriving directly from `floor`; cut consumers over directly
+  (no equivalence test — decided 2026-06-28); delete `wallgrid.ts`. Resolves debt #1.
 - **Phase 2 — finish the coloring publish:** move recolor tables to a neutral home; delete
   `retexture.ts`; demote `materials.ts` to the flame/no-atlas fallback.
 - **Phase 3 — IR extension for composable units:** extend `Placement`/`WorldPlacement` with a unit-id +

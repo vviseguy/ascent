@@ -4,8 +4,8 @@
  * This is the "one data structure" the generator produces and the verifier
  * consumes. It is intentionally a coarse CELL GRID whose adjacent cells are joined
  * by TRAVERSAL EDGES (GENERATION-SOLVABILITY.md §"Generation"). The model is the
- * minimal graph needed to PROVE solvability; authored chunk geometry is layered on
- * later and is out of scope here (we only tag each cell with a chunk-type hook).
+ * minimal graph needed to PROVE solvability; authored wall/room geometry is layered
+ * on later and is out of scope here (a cell only carries its layout role + room id).
  *
  * DESIGN PRINCIPLES
  *  - Plain data only: no classes-with-behavior, no methods. Everything is a struct
