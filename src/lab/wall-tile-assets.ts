@@ -64,8 +64,10 @@ const EDGE = 1.6;
 
 /** Point a +X-extending half toward direction d (from the centre). */
 const armYaw = (d: Dir): number => (d === 'E' ? 0 : d === 'N' ? Q : d === 'W' ? Math.PI : -Q);
-/** Edge-cap yaw — the proven convention (a cap finishing a wall extending West sits at 0). */
-const capYaw = (d: Dir): number => (d === 'W' ? 0 : d === 'S' ? Q : d === 'E' ? Math.PI : -Q);
+/** `wall_half_endcap` yaw. Its body extends −X natively — the OPPOSITE of `wall_half`'s +X — so to
+ *  point the body toward d it needs armYaw(d)+π (verified by reading the placed mesh's world AABB).
+ *  Used for the wall inner stub AND the wall/barrier edge cap. */
+const endcapYaw = (d: Dir): number => (d === 'W' ? 0 : d === 'S' ? Q : d === 'E' ? Math.PI : -Q);
 /**
  * Mitered-corner yaw. `wall_corner`'s native legs sit on −X and +Z; in THIS file's convention
  * (E=+X, W=−X, N=−Z, S=+Z) that is W+S at θ=0 — verified by reading the placed mesh's world AABB
@@ -148,9 +150,16 @@ function wallPlacements(tile: WallTile): Placement[] {
     if (a.reachesCentre && a.reachesEdge) {
       out.push(at(isB ? PIECE.barrierHalf : PIECE.half, armYaw(d))); // full arm, centre→edge
     } else if (a.reachesCentre) {
-      out.push(at(isB ? PIECE.barrierHalf : PIECE.halfCap, armYaw(d))); // inner stub
+      // inner stub: body must extend centre→d (OUTWARD). barrier_half is +X-native → armYaw;
+      // wall_half_endcap is −X-native → endcapYaw (= armYaw+π), else the stub points inward.
+      out.push(isB ? at(PIECE.barrierHalf, armYaw(d)) : at(PIECE.halfCap, endcapYaw(d)));
     } else {
-      out.push(at(isB ? PIECE.barrierHalf : PIECE.halfCap, capYaw(d), dx * EDGE, dz * EDGE)); // edge cap
+      // edge cap pushed to the boundary; wall cap is −X-native → endcapYaw, barrier is +X → armYaw.
+      out.push(
+        isB
+          ? at(PIECE.barrierHalf, armYaw(d), dx * EDGE, dz * EDGE)
+          : at(PIECE.halfCap, endcapYaw(d), dx * EDGE, dz * EDGE),
+      ); // edge cap
     }
   }
 
