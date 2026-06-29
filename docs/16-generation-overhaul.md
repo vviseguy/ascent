@@ -501,10 +501,19 @@ At no point is `main` left with a dual IR producer, two lattices, or a broken re
      square cell" is the North Star; single-ownership just adds a canonical-owner rule to dedupe the
      shared ones, keeping everything in tile-space. **Disagreement becomes unrepresentable** (one cell,
      not two mirrored copies to keep in sync) — strictly stronger than enforcing two mirrors agree.
+   - **The S/E *map* borders (the fencepost).** `W` interior tiles own `W` vertical edges but there are
+     `W+1` boundaries, so the **east** (`x=W`) and **south** (`y=H`) outer walls have no interior owner —
+     they are the resolver's **perimeter constant**. This is correct, not a gap: (a) the outer ring is
+     never an opening — entries/exits pierce *vertically* via stairs, so there is nothing to author
+     there; (b) an interior room connects through its **neighbours'** owned edges, so a structure only
+     ever authors its own **N+W interface** — its S+E *is* the neighbour's N+W. The editor mirrors this
+     (N/W outer walls owned & paintable; S/E default to the shell). A sentinel rim (to make the map
+     perimeter itself *openable*) is **deferred — YAGNI** until a perimeter opening is ever needed.
    - **Ripple (its own step, prerequisite for the corner-graph — NOT on Phase 4's critical path, since
      collapse can run per-tile):** `WallTile`/`TileField` store owned `{N,W}` + inner(4) + centre + floor
-     + wallType; the editor routes a paint on *any* of the 4 sides to its owner; `structures.json`
-     re-serializes; `tilePlacements` takes a resolved view.
+     + wallType; the editor routes a paint on an interior `E`/`S` side to its owner (the neighbour's
+     `W`/`N`), and a map-border `E`/`S` to the perimeter; `structures.json` re-serializes; `tilePlacements`
+     takes a resolved view.
 5. **Where to start the real build** — ✅ Phase 0 **DONE** (2026-06-28); edge ownership **LOCKED** (#4).
    Next: the edge-ownership schema change (the `tileView` resolver + owned-`{N,W}` model), then Phase 1
    (one lattice).
