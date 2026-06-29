@@ -149,6 +149,9 @@ staircase. They claim N adjacent squares from one anchor and map onto the IR's e
 
 ### The traversal graph — corners as nodes (the bridge to solvability) {#2-graph}
 
+> **Predicate ✅ PINNED 2026-06-28** (before building the verifier): per-arm gating · two routes per
+> corner-pair (one through each flanking tile) · **directed** edges (gravity, `RouteProbe`-gated).
+
 The thing you pathfind and *verify* on is the **open space**, which is the dual of the walls. So make
 the tile-grid **CORNERS the graph nodes** (plus an optional per-tile **centre node**):
 
@@ -160,10 +163,24 @@ o-----------o     o = corner node (shared by the 4 tiles meeting at it → a dua
 ```
 
 - A **corner is shared by 4 tiles**, so corner-nodes form a grid offset by half a tile.
-- A corner↔corner (or corner↔centre) connection is **OPEN unless fully walled** — blocked only when the
-  `edge` *and* the `inner` cell between them are wall (the centre column counts too). A **partial** wall
-  (just the edge, or just the inner) leaves a gap you slip through. That's a clean, **local,
-  deterministic** predicate over the 9 cells — the graph falls out of the tile mechanically.
+- **A corner↔corner connection crosses exactly one ARM** — the `edge` + `inner` cell on the side
+  between them. It is **blocked ⟺ that arm is FULL** (`edge` *and* `inner` both wall; the centre column
+  counts for corner↔centre). A **partial** arm — just the edge, or just the inner — leaves a gap you
+  slip through. A clean, **local, deterministic** predicate over the 9 cells; the graph falls out of the
+  tile mechanically.
+- **Two routes per corner-pair — one through each flanking tile.** Adjacent corners P, Q are crossed
+  *inside* the tile on either side of their shared boundary: through tile A (A's arm on that side) OR
+  through tile B (B's arm). The two routes share the **one owned edge cell** (§12 #4) but have
+  **separate inner cells**, so they are genuinely distinct edges — *not* a second copy of the wall data.
+  Reachability takes whichever is open.
+- **Edges are DIRECTED — two per route — because gravity is asymmetric.** Descending a connection is
+  free; ascending it is gated by what the body can do (jump/climb height, the `profile` FULL/LOW/GAP). A
+  symmetric "open/closed" would call a region you can only *fall into* "reachable" and miss the exact
+  failure an escort racing *up* a tower hits. Each directed edge's passability = `(its owned edge + that
+  tile's inner + the vertical profile)` — the same capability model `route-check.ts`'s `RouteProbe`
+  already walks, so the corner-graph *is* the collision/movement truth, not a symmetric proxy. *(Fully
+  expanded, a single P–Q boundary is up to **2 routes × 2 directions = 4 directed edges**; the data
+  underneath stays **one owned cell**. The multiplicity lives only in the graph, derived from the cells.)*
 - The **centre node** appears only when the interior is actually subdivided (a centre column, or
   perpendicular inner walls); its corner-spokes model going around / through.
 
@@ -178,8 +195,9 @@ o-----------o     o = corner node (shared by the 4 tiles meeting at it → a dua
    `WallTile.edge` is the schema change this needs.)*
 2. **Graph == collision.** Derive **both** the traversal graph and the collision AABBs from the same
    9-cell data — `tilePlacements()` is already the single source the renderer + collision share, so the
-   verifier checks the same truth the sim collides on. The graph must be the **conservative** read:
-   claim a connection only when a body actually fits the gap.
+   verifier checks the same truth the sim collides on. The graph must be the **conservative, per-direction**
+   read: claim a *directed* connection only when a body actually fits the gap **and** can make that
+   traversal (descend vs ascend — the `RouteProbe` capability test), never a symmetric over-claim.
 3. **Conditional centre node.** Keep it out unless the interior is subdivided — keeps the graph small and
    contains the diagonal "can a body squeeze past a corner" question.
 
