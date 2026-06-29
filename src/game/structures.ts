@@ -11,10 +11,12 @@
 // The JSON is written by the Vite dev middleware (`/__lab/structures`, see vite.config.ts); this is
 // the typed read side. Each structure stores the editor's TileFIELDS (domains, not yet collapsed) so
 // it round-trips back into the editor AND lets the game collapse with its OWN seeded `pick` — the
-// derive/seed the author previewed with are kept only as metadata. `structureTiles` collapses to the
-// concrete WallTiles the renderer/collision place via tilePlacements.
+// derive/seed the author previewed with are kept only as metadata. `structureTiles` RESOLVES to the
+// concrete WallTiles the renderer/collision place via tilePlacements — resolved, so shared edges are
+// owned once (docs/16 §12 #4) rather than each tile describing its boundary independently.
 
-import { collapse, type TileField } from '../floor/wall-tile-field.ts';
+import type { TileField } from '../floor/wall-tile-field.ts';
+import { resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
 import type { WallTile } from '../floor/wall-tile.ts';
 import data from './structures.json';
 
@@ -43,11 +45,18 @@ export const listStructures = (): string[] => Object.keys(store.structures);
 export const getStructure = (name: string): SavedStructure | undefined => store.structures[name];
 
 /**
- * Collapse a saved structure to concrete tiles (row-major, length w*h; null where a cell conflicts).
- * `pick` is the entropy seam — pass a seeded `(cell, options) → index` for deterministic generation;
- * default is the canonical lowest option. Returns undefined if the name is unknown.
+ * Resolve a saved structure to concrete tiles (row-major, length w*h; null where a cell conflicts).
+ * Shared edges are owner-resolved (§12 #4) via `resolveGrid`, so the tiles are exactly what the
+ * renderer/collision place. `pick` is the entropy seam — a seeded coordinate-hash
+ * `(x,y,cell,options) → index` for deterministic generation; default is the canonical lowest option.
+ * Returns undefined if the name is unknown.
  */
-export function structureTiles(name: string, pick?: (cell: string, options: readonly string[]) => number): (WallTile | null)[] | undefined {
+export function structureTiles(
+  name: string,
+  pick?: (x: number, y: number, cell: string, options: readonly string[]) => number,
+): (WallTile | null)[] | undefined {
   const s = store.structures[name];
-  return s?.cells.map((c) => collapse(c, pick));
+  if (!s) return undefined;
+  const grid: TileGrid = { w: s.w, h: s.h, cells: s.cells };
+  return resolveGrid(grid, pick);
 }

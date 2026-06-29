@@ -17,7 +17,7 @@
 // index-sorted, never Map-order, so output is deterministic.
 
 import { type TileField, fullField, andGate, conflicts as cellConflicts, collapse } from './wall-tile-field.ts';
-import type { WallTile } from './wall-tile.ts';
+import type { WallTile, Seg } from './wall-tile.ts';
 
 export interface TileGrid {
   readonly w: number;
@@ -131,4 +131,59 @@ export function collapseGrid(
     const y = Math.floor(i / grid.w);
     return collapse(f, pick ? (cell, opts) => pick(x, y, cell, opts) : undefined);
   });
+}
+
+/* ----------------------------- resolved read path ---------------------------- */
+// `collapseGrid` collapses each cell in ISOLATION (a tile keeps its own 4 edges). The runtime/render
+// path wants the OWNER-resolved view (docs/16 §12 #4): a shared boundary belongs to ONE tile, so two
+// neighbours can never disagree. `resolveGrid` is that view — and it materialises ONCE (collapse each
+// cell a single time, then fill E/S from the neighbour cores) so consumers read a flat array instead
+// of re-resolving per access.
+
+/** The closed map perimeter. The outer ring is always the WALL "safe shell" — an opening there would
+ *  breach the dungeon; entries/exits pierce vertically (stairs), never the perimeter. A tile's E/S
+ *  with no neighbour (the east/south map border, or a conflicted neighbour) resolves to this. */
+const PERIMETER: Seg = 'wall';
+
+/**
+ * Collapse the grid AND resolve every shared edge to its single owner: a tile owns its N+W edges; its
+ * E is the east neighbour's W, its S the south neighbour's N (a missing/conflicted neighbour → the
+ * PERIMETER wall). Each cell collapses ONCE into a core, then E/S are filled from the neighbour cores
+ * — so this is the materialise-once read path for tilePlacements / collision / the corner-graph. `pick`
+ * is the coordinate-hash entropy seam (seeded `(x,y,cell,options) → index`); default = canonical.
+ */
+export function resolveGrid(
+  grid: TileGrid,
+  pick?: (x: number, y: number, cell: string, options: readonly string[]) => number,
+): (WallTile | null)[] {
+  const cores = grid.cells.map((f, i) =>
+    collapse(f, pick ? (cell, opts) => pick(i % grid.w, Math.floor(i / grid.w), cell, opts) : undefined),
+  );
+  return cores.map((core, i) => {
+    if (!core) return null;
+    const x = i % grid.w;
+    const y = Math.floor(i / grid.w);
+    const east = x + 1 < grid.w ? cores[i + 1] : null; // owner of this tile's E edge is the east neighbour's W
+    const south = y + 1 < grid.h ? cores[i + grid.w] : null; // …its S edge is the south neighbour's N
+    return { ...core, edge: { N: core.edge.N, W: core.edge.W, E: east ? east.edge.W : PERIMETER, S: south ? south.edge.N : PERIMETER } };
+  });
+}
+
+/** Resolve ONE tile to its full 9-cell view (E/S from the neighbour owners; border/conflict →
+ *  PERIMETER). Convenience for one-off access; for a whole grid use `resolveGrid` (collapses once). */
+export function tileView(
+  grid: TileGrid,
+  x: number,
+  y: number,
+  pick?: (px: number, py: number, cell: string, options: readonly string[]) => number,
+): WallTile | null {
+  const core = (cx: number, cy: number): WallTile | null =>
+    inBounds(grid, cx, cy)
+      ? collapse(grid.cells[cellIndex(grid, cx, cy)]!, pick ? (cell, opts) => pick(cx, cy, cell, opts) : undefined)
+      : null;
+  const self = core(x, y);
+  if (!self) return null;
+  const east = core(x + 1, y);
+  const south = core(x, y + 1);
+  return { ...self, edge: { N: self.edge.N, W: self.edge.W, E: east ? east.edge.W : PERIMETER, S: south ? south.edge.N : PERIMETER } };
 }
