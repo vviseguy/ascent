@@ -9,3 +9,6 @@ coverage/
 lab-shots/
 dist-lab-*/
 tmp/
+
+# Claude Code preview launch config (local)
+.claude/launch.json
