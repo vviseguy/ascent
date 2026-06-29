@@ -482,20 +482,29 @@ the green light for every geometry step.
     collision pushes `unit.boxes`. So **`render == collision` stays true by construction (one list)** —
     AND abstract DefaultStyle pieces and tile-units can coexist in one floor. DefaultStyle never sets
     `unit` → consumers that ignore it are unchanged (the additive-IR contract).
-  - **Determinism seam:** the unit's transform + `boxes` are **fixed-point**, built sim-side (collision
-    must be deterministic). The unit is produced by one sim-side authority from the 9 cells, so
-    `graph == collision == render` (corner-graph, the unit's boxes, and the unit's mesh all read the same
-    cells; a partial-arm gap = no box = passable in the graph). The lab's float `tilePlacements` stays
-    the editor-preview reader of that same geometry.
-  - **Increments:** **3a** add `WorldPlacement.unit?` + the (dormant) render/collision branches —
-    additive, nothing emits a unit yet → zero behavior change. **3b** the sim-side tile→unit authority
-    (mesh transform + `boxes` from the 9 cells) + a structural test (box ⟺ non-`none` cell; barrier→LIP).
-    **4a** a flagged `TileStyle` (`Floor → TileGrid` via `room-templates` → `resolveGrid` → units),
-    **default-off**, per-floor (no pack-mixing — tile-mode = remastered pack, DefaultStyle = legacy
-    fallback). **4b** flip the flag on a test floor; verify in-game + `render==collision`. **4c**
+  - **Boxes come from `box-fit`, not hand code (decided 2026-06-28).** A wall piece is just a KayKit
+    GLB, so its collider is the lab's **`box-fit` voxelizer** footprint (the green boxes in the per-model
+    view) — the SAME algorithm used for props, frozen into `approved-assets.json` and read back through
+    the already-built `getApprovedFootprint` loader. A tile's `unit.boxes` = each placed piece's frozen
+    footprint, transformed by the placement. So **collision is literally the box-fit of the rendered
+    mesh** (`render == collision` airtight), there is **no bespoke wall-collider** (the hand-written
+    `tileColliders` was deleted as a duplicate), and this finally consumes the dormant footprint store.
+  - **Determinism seam:** `box-fit` runs offline in the lab; its footprints are FROZEN data, so the sim
+    only reads constants (Fixed-converted at the seam) — deterministic. The remaining sim-side authority
+    is **placement** (which piece, where, what yaw — Option A: port `tilePlacements`' geometry to
+    `src/floor` fixed-point, the lab's float version becomes a view-adapter). `graph == collision ==
+    render` because all three trace to the same placement + piece: corner-graph from the 9 cells, boxes
+    from the piece's frozen footprint, mesh from the piece's GLB.
+  - **Increments:** **3a** box-fit + approve the wall pieces in the lab (footprints frozen). **3b** add
+    `WorldPlacement.unit?` + the render/collision branches (clone `unit.url`; push `unit.boxes`). **3c**
+    Option A: sim-side fixed-point placement authority. **4a** a flagged `TileStyle`
+    (`Floor → TileGrid` via `room-templates` → `resolveGrid` → compose placements × frozen footprints →
+    units), **default-off**, per-floor (no pack-mixing — tile-mode = remastered pack, DefaultStyle =
+    legacy fallback). **4b** flip the flag on a test floor; verify in-game + `render==collision`. **4c**
     solvability gate via `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`.
-  - **Principle:** minimal surface — one polymorphic field, no speculative unit registry / socket-tag
-    fields until a real second unit type needs them (defer §3/§8's catalog machinery).
+  - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
+    (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
+    speculative unit registry / socket-tag fields until a real second unit type needs them.
 - **Phase 5 — authored dressing** replaces `decorateRoomCell`; the editor's `structure` level + a small
   tag vocabulary land alongside.
 - **Phase 6 — retire the last projections** (`wallMask`, fold `profile` into the unit descriptor while
@@ -556,7 +565,9 @@ At no point is `main` left with a dual IR producer, two lattices, or a broken re
 5. **Where to start the real build** — ✅ done so far (2026-06-28): Phase 0; edge ownership locked +
    the resolver (`resolveGrid`/`tileView`); the directed corner-graph + `connectsSides` solvability;
    the edge-ownership purity refactor (`TileCore`); editor wired to `resolveGrid` + connectivity overlay.
-   **Next: Phases 3–4 (Path A, polymorphic IR)** — `WorldPlacement.unit?` (mesh + boxes) → the sim-side
-   tile→unit authority → a flagged `TileStyle` tile-floor builder → render/collision branch on `unit` →
-   solvability gate. Phase 1 (fold `wallgrid`) and Phase 2 (coloring publish) remain independent
-   cleanups, not blockers.
+   **Next: Phases 3–4 (Path A, polymorphic IR)** — box-fit + approve the wall pieces (collider boxes
+   via the one `box-fit` voxelizer, reusing `getApprovedFootprint`) → `WorldPlacement.unit?` + branches
+   → sim-side placement authority → a flagged `TileStyle` builder (placements × frozen footprints →
+   units) → render/collision branch on `unit` → solvability gate. (`tileColliders` was deleted — box-fit
+   is the single collider generator.) Phase 1 (fold `wallgrid`) and Phase 2 (coloring publish) remain
+   independent cleanups.
