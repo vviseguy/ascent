@@ -49,7 +49,7 @@ import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-
 import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catalog.ts';
 import { buildRecolorLegend } from './recolor-legend.ts';
 import { buildTextureSettings } from './texture-settings.ts';
-import { buildApproveButton } from './approve.ts';
+import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam } from './texture-catalog.ts';
 
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
@@ -66,6 +66,8 @@ type LabWindow = Window & {
   __labList?: () => string[];
   /** The fitted footprint of the shown object (for box-fit tooling/verification). */
   __labFootprint?: Footprint | null;
+  /** Headless approve (scripts/lab-approve.mjs): refit at `edgeDensity` then publish. Object mode only. */
+  __labApprove?: (edgeDensity?: number) => Promise<unknown>;
 };
 const W = window as LabWindow;
 
@@ -568,6 +570,20 @@ async function boot(): Promise<void> {
         present: (built as WorldObjectBuild).presentSwatches,
       }),
     });
+
+    // Headless approval (scripts/lab-approve.mjs): refit at a chosen edge density, then approve —
+    // so the wall pieces can be box-fit + frozen in bulk without manual clicks. autoEdge off → honour `ed`.
+    W.__labApprove = (ed = 0.4): Promise<unknown> => {
+      refit({ ...fitState, autoEdge: false, edgeDensity: ed });
+      return approveObject(objId, {
+        footprint,
+        stats: lastFitStats,
+        seedMode: fitState.seedMode,
+        autoEdge: false,
+        recolor: (built as WorldObjectBuild).recolor,
+        present: (built as WorldObjectBuild).presentSwatches,
+      });
+    };
   }
 
   // ---- CONTENT PICKER (both modes): TEXT-ONLY double-nested clickable list ----
