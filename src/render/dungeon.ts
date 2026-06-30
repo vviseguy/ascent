@@ -37,6 +37,10 @@ import { DungeonMaterials, classifySurface } from './materials.ts';
 // per-triangle retexture/theme path is gone). See src/lab/CLAUDE.md (authoritative).
 import { applyRecolor } from '../lab/recolor.ts';
 import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
+// Phase-4b (docs/16 §10): the remastered tile-unit pieces are referenced BY URL from the IR's
+// `WorldPlacement.unit`. PIECE is the sim-side registry naming those urls (pure string data) — the
+// renderer preloads them as templates keyed by url and clones them through the same recolor path.
+import { PIECE } from '../floor/tile-place.ts';
 
 const DIR = 'models/kaykit_dungeon/';
 /** The KayKit tiles we use (CC0, downloaded to public/models/kaykit_dungeon/). */
@@ -181,6 +185,9 @@ function capYaw(dirs: number): number {
 export class Dungeon {
   readonly group = new THREE.Group();
   private readonly tpl = new Map<string, THREE.Object3D>();
+  /** Phase-4b tile-unit templates, keyed BY URL (the IR's `WorldPlacement.unit.url`). Preloaded in
+   *  load() from the remastered pack and recolored like the shell; cloned by `placeUnit`. */
+  private readonly unitTpl = new Map<string, THREE.Object3D>();
   /** Per-stratum subgroups (+ their surface Y) so floors ABOVE the player can be culled. */
   private strata: { surfaceY: number; group: THREE.Group }[] = [];
   /** Per-cell records for fog-of-war + smooth reveal. */
@@ -234,6 +241,21 @@ export class Dungeon {
       return [k, g.scene] as const;
     }));
     for (const [k, scene] of loaded) this.tpl.set(k, scene);
+
+    // Phase-4b (docs/16 §10): preload the remastered TILE-UNIT pieces, keyed by url. The IR's
+    // `WorldPlacement.unit.url` references these directly (the same urls PIECE names sim-side), so the
+    // renderer can clone them in `placeUnit`. First pass uses LIVE recolor (applyRecolor by url) — the
+    // same pure-function coloring the shell uses; applying the FROZEN `unit.materials` recipe (which
+    // box-fit/approve already saved) is the follow-up (docs/16 §10: "the renderer applies, not
+    // re-derives"). A url that fails recolor keeps its original atlas (still visible), never untextured.
+    const unitUrls = [...new Set(Object.values(PIECE))];
+    const unitLoaded = await Promise.all(unitUrls.map(async (url) => {
+      const g = await loader.loadAsync(url);
+      if (!this.rawColoring && !this.classicShell) applyRecolor(g.scene, url, 'position');
+      g.scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      return [url, g.scene] as const;
+    }));
+    for (const [url, scene] of unitLoaded) this.unitTpl.set(url, scene);
   }
 
   /** Tiles with live flames keep the emissive applyMaterial path so the torch/candle glow
@@ -446,6 +468,7 @@ export class Dungeon {
    */
   private buildWallsFromSlots(grid: StratumCellGrid, scale: number, _cs: number, sy: number): void {
     for (const wp of grid.wallPlacements) {
+      if (wp.unit) { this.placeUnit(grid, wp, sy); continue; } // Phase-4b: a concrete tile UNIT.
       const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
       const host = this.placementHost(grid, x, z);
       if (!host) continue; // a perimeter line beside a VOID cell — no floor cell to host/reveal it.
@@ -485,6 +508,53 @@ export class Dungeon {
         }
       }
     }
+  }
+
+  /** turn (quarter-turns CCW 0..3) → Three.js yaw. Matches `tile-units.ts rot()` so mesh == collider. */
+  private static readonly TURN_YAW = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+
+  /**
+   * Phase-4b (docs/16 §10, Path A): place ONE concrete tile UNIT — a remastered-pack GLB referenced by
+   * `wp.unit.url` — through the SAME recolor + fog-reveal + occlusion-cutaway path the abstract pieces
+   * use, so render == collision (both branch on `wp.unit`) and the unit fades/reveals like its cell.
+   *
+   * Transform is the IR's: position (wp.x, sy + unit.y, wp.z); rotation.y = turn·90° CCW; uniform
+   * scale = toFloat(unit.scale) (CELL_SIZE 4 / NATIVE 4 → 1). The materials are LIVE-recolored at
+   * preload (see load()); applying the frozen `unit.materials` recipe instead is the noted follow-up.
+   * Parented to the nearest walkable cell (placementHost) so it reveals/culls with that cell's fog;
+   * materials are CLONED so the occlusion cutaway can fade this piece independently (as placeWall does).
+   */
+  private placeUnit(grid: StratumCellGrid, wp: WorldPlacement, sy: number): void {
+    const u = wp.unit!;
+    const t = this.unitTpl.get(u.url);
+    if (!t) return;
+    const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
+    const host = this.placementHost(grid, x, z);
+    if (!host) return; // a tile beside a VOID seam with no walkable cell to host/reveal it.
+    const o = t.clone(true);
+    o.position.set(x, sy + toFloat(u.y), z);
+    o.rotation.y = Dungeon.TURN_YAW[((u.turn % 4) + 4) % 4]!;
+    o.scale.setScalar(toFloat(u.scale));
+    // Clone this unit's materials so the occlusion cutaway drives THIS piece's opacity alone (the
+    // recolor material is shared across every piece). Mirrors placeWall. View-only.
+    const cloneMat = (m: THREE.Material): THREE.Material => {
+      const cl = m.clone();
+      cl.userData = { ...cl.userData, occ: true };
+      cl.transparent = true;
+      host.mats.push(cl);
+      return cl;
+    };
+    o.traverse((mn) => {
+      const mesh = mn as THREE.Mesh;
+      const mm = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mm)) mesh.material = mm.map(cloneMat);
+      else if (mm) mesh.material = cloneMat(mm);
+    });
+    host.group.add(o);
+    // Occlusion face axis (approx from the quarter-turn: 0/180 face ±Z, 90/270 face ±X) — good enough
+    // for the cutaway; a corner unit picks one axis. Render==collision doesn't depend on this.
+    const faceAxis: 'X' | 'Z' = (((u.turn % 2) + 2) % 2 === 0) ? 'Z' : 'X';
+    this.walls.push({ obj: o, x, z, axis: faceAxis, occ: 1 });
   }
 
   /**

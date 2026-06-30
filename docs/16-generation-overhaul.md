@@ -507,13 +507,23 @@ the green light for every geometry step.
     (objId bridge + quarter-turn AABB transform; collider boxes + materials). **4a-floor ✅** the
     TileStyle seam `floorTiles(floor)` (`src/floor/floor-tiles.ts`): `Floor → TileGrid` (rooms via
     `basicRoom`, corridors a plain floor) → `resolveGrid` → concrete tiles. So the **pure data path
-    Floor → tiles → units is complete + tested, no tower/dungeon edits yet.** **— remaining (4b) —**
-    add `WorldPlacement.unit?`, a **flag** to select tile-mode per floor (default-off; no pack-mixing),
-    and wire the branches: tower collision pushes `unit.boxes` offset by the cell centre; renderer clones
-    `unit.url` + applies `unit.materials`. Then **verify in-game** (`render==collision` + the
-    footprint→tile SCALE — the one thing only the running game settles). **4c** solvability gate via
-    `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`. Richer mapping (per-room roles,
-    door reconciliation vs `floor.doors`) is iterative on top.
+    Floor → tiles → units is complete + tested.** **4b ✅ (the live wiring + in-game confirm)** —
+    `WorldPlacement.unit?` added (the polymorphic IR: `{url; y; turn; scale; boxes: FixedBox[];
+    materials}`, additive — DefaultStyle never sets it, every existing test/proof untouched); a
+    default-off module flag (`TILE_MODE`/`tileModeFor(idx)` in `tower.ts`, whole-floor, no pack-mixing);
+    `buildCellGrid` builds `wallPlacements` from `floorTiles(floor)`×`tileUnits(tile)` (cell-centre
+    offset) when on; `emitWallsFromSlots` pushes `unit.boxes` (+baseY); `dungeon.ts` preloads the 13
+    remastered pieces keyed by url + `placeUnit` routes them through the SAME recolor/occlusion/fog path
+    (turn→yaw, scale, host-cell reveal). **In-game verified (seed=1, flag on):** 16 templates load (no
+    errors), 2055 wall units render as recolored stone at **native 4u** (mesh y 0→4); a stratum-agnostic
+    3D-overlap check matched **294/294** sampled units to a collision box (center + 4.0 height align) →
+    `render==collision` + the footprint→tile SCALE both settled. **Noted follow-ups:** apply the FROZEN
+    `unit.materials` recipe (today: live recolor by url, a pure-fn first pass); lower the tile's FLOOR
+    pieces too (today the per-cell slab+floor mesh stays, floor units skipped to avoid z-fight);
+    occlusion face-axis is approximated from the quarter-turn. **4c (next)** solvability gate via
+    `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`; **door reconciliation** (tile
+    wall-rings vs `floor.doors`/DOORWAY cells) is the gating piece (a tile floor isn't fully solvable
+    until then — the U-shaped wall rings seen in-game are expected). Richer per-room roles iterate on top.
   - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
     (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
     speculative unit registry / socket-tag fields until a real second unit type needs them.

@@ -14,7 +14,11 @@
 // changes). Pure data — no DOM, no float/determinism constraints here (it's authoring output).
 // ============================================================================
 
-import data from './approved-assets.json';
+// `with { type: 'json' }` is REQUIRED by Node's `--experimental-strip-types` runner (the determinism
+// proofs): tower.ts → tile-units.ts → here pulls this JSON into `prove:game`'s static graph, and the
+// strip-types loader rejects a bare JSON import. tsc (module ESNext) + Vite/Vitest all accept the
+// attribute, so it satisfies every consumer.
+import data from './approved-assets.json' with { type: 'json' };
 
 /** A collision box in object-local space (centre + half-extents, metres). */
 export interface ApprovedBox { cx: number; cy: number; cz: number; hx: number; hy: number; hz: number; }
