@@ -34,24 +34,26 @@ describe('tile-units — transformBox (quarter-turn AABB transform)', () => {
     expect(toFloat(b.hz)).toBeCloseTo(e.hz, 3);
   };
 
-  it('turn 0 is identity (no rotation)', () => {
-    expectBox(transformBox(box, placed(0)), { cx: 1, cz: 0, hx: 0.5, hz: 0.2 });
+  // NB: footprints are lab-½-scale, so transformBox doubles them (FOOTPRINT_SCALE = 2) to match the
+  // natively-rendered mesh — every expected value below is the input box × 2 (× the placement scale).
+  it('turn 0 is identity (footprint doubled to native)', () => {
+    expectBox(transformBox(box, placed(0)), { cx: 2, cz: 0, hx: 1, hz: 0.4 });
   });
   it('turn 1 (90° CCW) maps (x,z)→(z,−x) and swaps the x/z half-extents', () => {
-    expectBox(transformBox(box, placed(1)), { cx: 0, cz: -1, hx: 0.2, hz: 0.5 });
+    expectBox(transformBox(box, placed(1)), { cx: 0, cz: -2, hx: 0.4, hz: 1 });
   });
   it('turn 2 (180°) negates the centre, keeps extents', () => {
-    expectBox(transformBox(box, placed(2)), { cx: -1, cz: 0, hx: 0.5, hz: 0.2 });
+    expectBox(transformBox(box, placed(2)), { cx: -2, cz: 0, hx: 1, hz: 0.4 });
   });
-  it('the offset is added after rotate+scale', () => {
+  it('the offset is added after rotate+scale (offset is native, not doubled)', () => {
     const b = transformBox(box, placed(0, 2, -3));
-    expect(toFloat(b.cx)).toBe(3); // 1 + 2
-    expect(toFloat(b.cz)).toBe(-3); // 0 + -3
+    expect(toFloat(b.cx)).toBe(4); // 1×2 + 2
+    expect(toFloat(b.cz)).toBe(-3); // 0×2 + -3
   });
-  it('scale multiplies centre and extents', () => {
+  it('the placement scale multiplies on top of the footprint correction', () => {
     const b = transformBox(box, { url: 'x', x: fromInt(0), z: fromInt(0), turn: 0, scale: fromFloatConst(0.5) });
-    expect(toFloat(b.cx)).toBe(0.5);
-    expect(toFloat(b.hx)).toBe(0.25);
+    expect(toFloat(b.cx)).toBe(1); // 1 × (0.5 × 2)
+    expect(toFloat(b.hx)).toBe(0.5); // 0.5 × 1
   });
 });
 

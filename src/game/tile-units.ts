@@ -56,6 +56,12 @@ export function objIdOf(url: string): string {
 
 const F = fromFloatConst; // frozen-JSON float → Fixed at the seam (deterministic for frozen data)
 
+// Approved footprints were box-fit in the LAB, where the object is scaled by the pack's display scale
+// (0.5 for dungeon_remastered — `world-object.ts` wraps the mesh in an `inner` group at 0.5 and box-fit
+// voxelises root-local, INCLUDING that scale). The game renders the GLB at NATIVE (cs/NATIVE_CELL = 1),
+// so a footprint is HALF-size and must be doubled to match the rendered mesh. (= 1 / pack-scale 0.5.)
+const FOOTPRINT_SCALE = fromFloatConst(2);
+
 /** Rotate a tile-local (x,z) by `turn` quarter-turns CCW about +Y — the same Three.js Y-rotation the
  *  renderer applies, so collider and mesh agree. (x,z) → 0:(x,z) 1:(z,−x) 2:(−x,−z) 3:(−z,x). */
 function rot(x: Fixed, z: Fixed, turn: number): readonly [Fixed, Fixed] {
@@ -71,17 +77,18 @@ function rot(x: Fixed, z: Fixed, turn: number): readonly [Fixed, Fixed] {
  *  rotate the centre by the quarter-turn, scale, then offset by (p.x, p.z). Half-extents swap on a
  *  90°/270° turn (an AABB stays axis-aligned under quarter rotation). */
 export function transformBox(b: ApprovedBox, p: TilePlacement): FixedBox {
+  const s = mul(p.scale, FOOTPRINT_SCALE); // placement scale × the lab→native footprint correction
   const [rcx, rcz] = rot(F(b.cx), F(b.cz), p.turn);
   const swap = ((p.turn % 2) + 2) % 2 === 1;
   const hx = swap ? F(b.hz) : F(b.hx);
   const hz = swap ? F(b.hx) : F(b.hz);
   return {
-    cx: add(mul(rcx, p.scale), p.x),
-    cy: mul(F(b.cy), p.scale),
-    cz: add(mul(rcz, p.scale), p.z),
-    hx: mul(hx, p.scale),
-    hy: mul(F(b.hy), p.scale),
-    hz: mul(hz, p.scale),
+    cx: add(mul(rcx, s), p.x), // footprint centre scaled (rotate→scale), then the tile-local offset
+    cy: mul(F(b.cy), s),
+    cz: add(mul(rcz, s), p.z),
+    hx: mul(hx, s),
+    hy: mul(F(b.hy), s),
+    hz: mul(hz, s),
   };
 }
 
