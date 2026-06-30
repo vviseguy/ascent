@@ -500,13 +500,16 @@ the green light for every geometry step.
     `src/floor` fixed-point, the lab's float version becomes a view-adapter). `graph == collision ==
     render` because all three trace to the same placement + piece: corner-graph from the 9 cells, boxes
     from the piece's frozen footprint, mesh from the piece's GLB.
-  - **Increments:** **3a** box-fit + approve the wall pieces in the lab (footprints frozen). **3b** add
-    `WorldPlacement.unit?` + the render/collision branches (clone `unit.url`; push `unit.boxes`). **3c**
-    Option A: sim-side fixed-point placement authority. **4a** a flagged `TileStyle`
-    (`Floor → TileGrid` via `room-templates` → `resolveGrid` → compose placements × frozen footprints →
-    units), **default-off**, per-floor (no pack-mixing — tile-mode = remastered pack, DefaultStyle =
-    legacy fallback). **4b** flip the flag on a test floor; verify in-game + `render==collision`. **4c**
-    solvability gate via `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`.
+  - **Increments:** **3a ✅** box-fit + approve the 13 wall pieces at edge density 0.4 (`scripts/lab-approve.mjs`
+    headless harness + `window.__labApprove`; frozen in `approved-assets.json`). **3c ✅** the sim-side
+    placement authority (`src/floor/tile-place.ts`; lab = float adapter). **4a ✅** the composer
+    `tileUnits(tile)` (`src/game/tile-units.ts`): placements × frozen footprints+materials → `TileUnit[]`
+    (objId bridge + quarter-turn AABB transform; collider boxes + materials). **— remaining —** **3b/4b**
+    add `WorldPlacement.unit?` + a flagged `TileStyle` (`Floor → TileGrid` via `room-templates` →
+    `resolveGrid` → `tileUnits`), wire the render/collision branches (clone `unit.url` + apply
+    `unit.materials`; push `unit.boxes` offset by the cell centre), **default-off**, per-floor (no
+    pack-mixing); flip on a test floor + verify in-game (`render==collision`, and the footprint→tile
+    SCALE). **4c** solvability gate via `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`.
   - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
     (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
     speculative unit registry / socket-tag fields until a real second unit type needs them.
