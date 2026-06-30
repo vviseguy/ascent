@@ -504,12 +504,16 @@ the green light for every geometry step.
     headless harness + `window.__labApprove`; frozen in `approved-assets.json`). **3c ✅** the sim-side
     placement authority (`src/floor/tile-place.ts`; lab = float adapter). **4a ✅** the composer
     `tileUnits(tile)` (`src/game/tile-units.ts`): placements × frozen footprints+materials → `TileUnit[]`
-    (objId bridge + quarter-turn AABB transform; collider boxes + materials). **— remaining —** **3b/4b**
-    add `WorldPlacement.unit?` + a flagged `TileStyle` (`Floor → TileGrid` via `room-templates` →
-    `resolveGrid` → `tileUnits`), wire the render/collision branches (clone `unit.url` + apply
-    `unit.materials`; push `unit.boxes` offset by the cell centre), **default-off**, per-floor (no
-    pack-mixing); flip on a test floor + verify in-game (`render==collision`, and the footprint→tile
-    SCALE). **4c** solvability gate via `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`.
+    (objId bridge + quarter-turn AABB transform; collider boxes + materials). **4a-floor ✅** the
+    TileStyle seam `floorTiles(floor)` (`src/floor/floor-tiles.ts`): `Floor → TileGrid` (rooms via
+    `basicRoom`, corridors a plain floor) → `resolveGrid` → concrete tiles. So the **pure data path
+    Floor → tiles → units is complete + tested, no tower/dungeon edits yet.** **— remaining (4b) —**
+    add `WorldPlacement.unit?`, a **flag** to select tile-mode per floor (default-off; no pack-mixing),
+    and wire the branches: tower collision pushes `unit.boxes` offset by the cell centre; renderer clones
+    `unit.url` + applies `unit.materials`. Then **verify in-game** (`render==collision` + the
+    footprint→tile SCALE — the one thing only the running game settles). **4c** solvability gate via
+    `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`. Richer mapping (per-room roles,
+    door reconciliation vs `floor.doors`) is iterative on top.
   - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
     (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
     speculative unit registry / socket-tag fields until a real second unit type needs them.
