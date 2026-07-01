@@ -464,9 +464,11 @@ the green light for every geometry step.
 - **Phase 0 — kill dead code + un-stale the map** (no behavior change): ✅ **DONE** — `themes.ts` and
   `Cell.chunkType` were already deleted in earlier work; the coloring-debt docs (§9, docs/13 §debt) read
   correctly; the residual stale `themes.ts`/chunk-type code comments were swept (2026-06-28).
-- **Phase 1 — one lattice:** port wallgrid's rules (edge-wins-over-cell-type, openCells forced-open,
-  junction classification) into `blueprint` deriving directly from `floor`; cut consumers over directly
-  (no equivalence test — decided 2026-06-28); delete `wallgrid.ts`. Resolves debt #1.
+- **Phase 1 — one lattice:** ✅ **RESOLVED by the Phase 3–4 conversion (a different route than planned).**
+  The plan was to fold `wallgrid` into `blueprint`; instead the 9-cell TILE lattice superseded the whole
+  abstract-piece pipeline, so `blueprint.ts` + `wall-style.ts` + `wall-model.ts` were DELETED outright.
+  `wallgrid.ts` survives only as the `wallMask`/fog projection source (no longer a wall producer); folding
+  its remaining `wallMask` role into the tile lattice is the last bit of debt #1, deferred to Phase 6.
 - **Phase 2 — finish the coloring publish:** move recolor tables to a neutral home; delete
   `retexture.ts`; demote `materials.ts` to the flame/no-atlas fallback.
 - **Phases 3–4 — feed the live IR from tiles. ✅ LOWERING DECISION 2026-06-28: Path A (concrete units),
@@ -517,13 +519,21 @@ the green light for every geometry step.
     (turn→yaw, scale, host-cell reveal). **In-game verified (seed=1, flag on):** 16 templates load (no
     errors), 2055 wall units render as recolored stone at **native 4u** (mesh y 0→4); a stratum-agnostic
     3D-overlap check matched **294/294** sampled units to a collision box (center + 4.0 height align) →
-    `render==collision` + the footprint→tile SCALE both settled. **Noted follow-ups:** apply the FROZEN
-    `unit.materials` recipe (today: live recolor by url, a pure-fn first pass); lower the tile's FLOOR
-    pieces too (today the per-cell slab+floor mesh stays, floor units skipped to avoid z-fight);
-    occlusion face-axis is approximated from the quarter-turn. **4c (next)** solvability gate via
-    `cornerGraphOf`+`connectsSides` alongside the unchanged `verify.ts`; **door reconciliation** (tile
-    wall-rings vs `floor.doors`/DOORWAY cells) is the gating piece (a tile floor isn't fully solvable
-    until then — the U-shaped wall rings seen in-game are expected). Richer per-room roles iterate on top.
+    `render==collision` + the footprint→tile SCALE both settled. **DOOR RECONCILIATION ✅** —
+    `floorTiles` now opens each room wall-ring where `floor.edges` actually connects (clearing the inset
+    arms ACROSS the passage direction — corner-safe; the fixed south door dropped), so tiled levels are
+    completable. Confirmed: `prove:game`'s GEOMETRY SOLVABILITY finds an Anchor route entry→top for all
+    13 seeds on the compiled tile AABBs + a real input-driven climb succeeds — i.e. the existing
+    independent `route-check.ts` already gates tiled solvability (4c is satisfied by it; a tile-native
+    `cornerGraphOf` check is optional redundancy, deferred). **FULL CONVERSION ✅** — with doors + the
+    solvability proof in hand, the abstract-piece pipeline is RETIRED: the `TILE_MODE` flag and the
+    Blueprint→Style→`Placement[]` else-branch are gone, `WorldPlacement` is just `{x, z, unit}` (tiles
+    are the SOLE wall producer, render==collision with no branch), and `blueprint.ts`/`wall-style.ts`/
+    `wall-model.ts` were deleted. `wallgrid` survives only as the `wallMask`/fog source. **Noted
+    follow-ups:** apply the FROZEN `unit.materials` recipe (today: live recolor by url); lower the tile's
+    FLOOR pieces (today the per-cell slab+floor mesh stays, floor units skipped to avoid z-fight);
+    occlusion face-axis is approximated from the quarter-turn; break/button/weight LOW-lip walls are not
+    yet rendered as tile units (passable either way, so solvability holds). Richer per-room roles iterate.
   - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
     (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
     speculative unit registry / socket-tag fields until a real second unit type needs them.

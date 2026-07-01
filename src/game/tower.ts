@@ -321,9 +321,9 @@ export interface StratumCellGrid {
   /** Dense row-major tiles, length width*height, index = row*width + col. */
   cells: CellTile[];
   /**
-   * Layer C — the explicit WALL/EDGE GRID (coordinate-free slot states). The blueprint derives
-   * from it; the per-cell `CellTile.wallMask` is a lossy projection kept for the renderer's fog
-   * BFS + decoration. See WallGrid.
+   * The WALL/EDGE GRID (coordinate-free slot states). Kept ONLY as the source of the per-cell
+   * `CellTile.wallMask` (a lossy projection for the renderer's fog BFS + decoration) — the walls
+   * themselves now come from the tiles (`wallPlacements`), not this grid. See WallGrid.
    */
   wallGrid: WallGrid;
   /**
