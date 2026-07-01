@@ -126,40 +126,30 @@ describe('Layer-C WallGrid exposed on the cellGrid (the render/collision contrac
     }
   });
 
-  it('wallPlacements (the unified IR) is populated with valid pieces/variants/profiles', () => {
+  it('wallPlacements (the wall IR) are concrete tile units with valid transforms', () => {
     const t = tower(0x5a17ed_1234n, 5);
-    const pieces = new Set(['STRAIGHT', 'CORNER', 'TEE', 'CROSS', 'CAP', 'PILLAR', 'DOORWAY']);
-    const variants = new Set(['PLAIN', 'BROKEN', 'ARCHED', 'GATED', 'WINDOW']);
-    const profiles = new Set(['FULL', 'LOW', 'GAP']);
     const g = t.cellGrid![0]!;
     expect(g.wallPlacements.length).toBeGreaterThan(0);
     for (const wp of g.wallPlacements) {
-      expect(pieces.has(wp.piece)).toBe(true);
-      expect(variants.has(wp.variant)).toBe(true);
-      expect(profiles.has(wp.profile)).toBe(true);
-      expect(wp.axis === 'X' || wp.axis === 'Z').toBe(true);
-      // DOORWAY → GAP profile; everything else FULL or LOW.
-      if (wp.piece === 'DOORWAY') expect(wp.profile).toBe('GAP');
-      else expect(wp.profile === 'GAP').toBe(false);
-      // no puzzles placed by generateFloor → no locked doors.
-      expect(wp.doorId).toBe(-1);
+      // every entry is a concrete tile unit (the single wall producer — docs/16 §10 Path A)
+      expect(typeof wp.unit.url).toBe('string');
+      expect(wp.unit.url.endsWith('.glb')).toBe(true);
+      // floor pieces are NOT lowered as wall units (the slab + per-cell floor mesh carry the floor)
+      expect(wp.unit.url.includes('floor_')).toBe(false);
+      expect(wp.unit.turn).toBeGreaterThanOrEqual(0);
+      expect(wp.unit.turn).toBeLessThanOrEqual(3);
+      expect(Array.isArray(wp.unit.boxes)).toBe(true);
     }
   });
 
-  it('a cell-square wall placement lands on its cell center (native-4u lattice projection)', () => {
+  it('every wall unit carries collider boxes (render==collision coverage)', () => {
+    // the 13 wall/barrier/pillar pieces are all approved, so every rendered wall unit also has a
+    // collider — there is no rendered-but-uncollidable wall (and no collider without a mesh).
     const t = tower(11n, 3, 8);
     const g = t.cellGrid![0]!;
-    // CELL_SIZE-spaced, origin-centered: cell (col,row) center is (col-offX)*cs / (row-offZ)*cs.
-    const cs = RAW(g.cellSize);
-    const offX = ((g.width - 1) / 2) | 0;
-    const offZ = ((g.height - 1) / 2) | 0;
-    // Every placement's x,z must land on the 2u lattice (cell centers OR half-cell lines).
-    const halfStep = cs / 2;
+    expect(g.wallPlacements.length).toBeGreaterThan(0);
     for (const wp of g.wallPlacements) {
-      const gx = (RAW(wp.x) - (0 - offX) * cs) / halfStep; // lattice steps from cell-0 center
-      const gz = (RAW(wp.z) - (0 - offZ) * cs) / halfStep;
-      expect(Math.abs(gx - Math.round(gx))).toBeLessThan(1e-4);
-      expect(Math.abs(gz - Math.round(gz))).toBeLessThan(1e-4);
+      expect(wp.unit.boxes.length).toBeGreaterThan(0);
     }
   });
 });

@@ -36,7 +36,6 @@ import { DungeonMaterials, classifySurface } from './materials.ts';
 // in-game dungeon and the lab use the SAME coloring engine and can't drift apart (the old
 // per-triangle retexture/theme path is gone). See src/lab/CLAUDE.md (authoritative).
 import { applyRecolor } from '../lab/recolor.ts';
-import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
 // Phase-4b (docs/16 §10): the remastered tile-unit pieces are referenced BY URL from the IR's
 // `WorldPlacement.unit`. PIECE is the sim-side registry naming those urls (pure string data) — the
 // renderer preloads them as templates keyed by url and clones them through the same recolor path.
@@ -46,14 +45,6 @@ const DIR = 'models/kaykit_dungeon/';
 /** The KayKit tiles we use (CC0, downloaded to public/models/kaykit_dungeon/). */
 const TILES: Record<string, string> = {
   floor: 'floor_tile_large.glb',
-  wall: 'wall.glb',
-  wallHalf: 'wall_half.glb',
-  wallCorner: 'wall_corner.glb',
-  wallTee: 'wall_Tsplit.glb',
-  wallCross: 'wall_crossing.glb',
-  wallEndcap: 'wall_endcap.glb',
-  doorway: 'wall_doorway.glb',
-  pillar: 'pillar.glb',
   stairs: 'stairs.glb',
   torch: 'torch_lit.glb',
   // ---- themed furniture / decoration props ----
@@ -150,36 +141,6 @@ interface CellRec {
   reveal: number;
   /** materials in this cell whose opacity we drive for the reveal fade. */
   mats: THREE.Material[];
-}
-
-// ---- JUNCTION-PIECE YAW (measured KayKit native orientations) ----------------------------
-// Three.js rotation.y is CCW about +Y; a piece's local +X maps to world (cos θ, 0, −sin θ).
-// All values verified against the GLB bounds: wall_corner joins W(−X)+N(+Z) at θ=0; wall_Tsplit
-// has its crossbar on W+E with the stem to N (open side S) at θ=0; wall_endcap points +X at θ=0.
-
-/** Yaw for `wall_corner` (native joins West+North) given the two perpendicular wall dirs. */
-function cornerYaw(dirs: number): number {
-  if (dirs === (DIR_W | DIR_N)) return 0;
-  if (dirs === (DIR_N | DIR_E)) return Math.PI / 2;
-  if (dirs === (DIR_E | DIR_S)) return Math.PI;
-  return -Math.PI / 2; // S | W
-}
-
-/** Yaw for `wall_Tsplit` (native open side = South) given the 3 wall dirs (open = the 4th). */
-function teeYaw(dirs: number): number {
-  const open = 15 & ~dirs;
-  if (open === DIR_S) return 0;
-  if (open === DIR_W) return Math.PI / 2;
-  if (open === DIR_N) return Math.PI;
-  return -Math.PI / 2; // open E
-}
-
-/** Yaw for `wall_endcap` (native points +X, capping a wall extending West) given the wall dir. */
-function capYaw(dirs: number): number {
-  if (dirs === DIR_W) return 0;
-  if (dirs === DIR_S) return Math.PI / 2;
-  if (dirs === DIR_E) return Math.PI;
-  return -Math.PI / 2; // N
 }
 
 export class Dungeon {
@@ -410,9 +371,9 @@ export class Dungeon {
         this.cellIndex.set(this.cellKey(grid.stratum, c.col, c.row), rec);
       }
 
-      // WALLS / DOORWAYS / PILLARS from the unified wall IR (after both cell passes so every host
-      // CellRec exists). One mesh per placement — inherently deduped, no edge-key sets.
-      this.buildWallsFromSlots(grid, scale, cs, sy);
+      // WALLS from the wall IR (after both cell passes so every host CellRec exists). One tile unit
+      // per placement — inherently deduped, no edge-key sets.
+      this.buildWallsFromSlots(grid, sy);
 
       // KAYKIT STAIRS (issue 7 / boss #2): place each staircase from the sim's EXACT
       // StairInfo so the model lines up with the collision treads + the ascent hole. One
@@ -436,78 +397,13 @@ export class Dungeon {
   }
 
   /**
-   * Place walls / doorways / junction pieces from the UNIFIED IR (`grid.wallPlacements`) — the
-   * SAME pieces the collision compiler reads (tower.ts emitWallsFromSlots), at the SAME world
-   * positions, so render == masonry by construction (docs/13 §C-bis). One mesh per placement.
-   *
-   * The world is now NATIVE KayKit scale (CELL_SIZE=4 → scale = cs/4 = 1) and each lattice step
-   * is HALF a cell = 2u = exactly one KayKit wall module. So every placement maps to one native
-   * piece centred on its lattice-square centre (x,z):
-   *   - STRAIGHT → `wall_half` (the 2u module). Native span is local x∈[0,2] (anchored at the
-   *     LOW end, not centred), so we offset it back 1u along its run to CENTRE it on (x,z) — see
-   *     `recenterHalf`. axis 'X' (E-W, runs along X) → yaw 0; axis 'Z' (N-S) → yaw π/2. Registered
-   *     for the occlusion cutaway (per-wall material clone) like the old `placeWall`.
-   *   - CORNER/TEE/CROSS/CAP → the matching junction piece, yaw from the `dirs` bitmask via the
-   *     `cornerYaw`/`teeYaw`/`capYaw` helpers (CROSS is symmetric → yaw 0). These are already
-   *     centred on origin natively, so they land on (x,z) with no offset.
-   *   - PILLAR → `pillar` (centred post).
-   *   - DOORWAY → `doorway` (the arch). `wall_doorway` runs along local X natively, so it shares
-   *     the STRAIGHT yaw convention (axis 'X' → 0, axis 'Z' → π/2) and stays parallel to the
-   *     STRAIGHT modules in its run. profile GAP means "no collider", but the arch MESH is still
-   *     drawn (only the collision side skips it).
-   *
-   * PROFILE: 'LOW' renders the same piece for now (a later registry row will swap a low/partial
-   * asset); 'GAP' only occurs on DOORWAY (still drawn). VARIANT 'BROKEN' renders the plain module
-   * for now — the kit's `wall_broken.glb` is a 4u CENTRED wall, not the 2u LOW-anchored module a
-   * STRAIGHT needs, so it can't drop in without re-anchoring; it's a later registry row.
-   *
-   * Each piece is parented to a floor cell's group (nearest walkable cell to (x,z), via
-   * `placementHost`) so it reveals / culls / fades with that cell's fog. View-only — no offset
-   * into the sim. NOTE: junction YAW is keyed to the measured KayKit native orientations; if a
-   * piece reads rotated in-game, flip the corresponding *Yaw helper.
+   * Place wall meshes from the wall IR (`grid.wallPlacements`) — one concrete tile UNIT per entry, the
+   * SAME units the collision compiler reads (tower.ts emitWallsFromSlots), so render == collision by
+   * construction (docs/16 §10 Path A). Each unit is the remastered-pack GLB at its (x,z) with its
+   * turn/scale/y; `placeUnit` clones it through the recolor + fog-reveal + occlusion-cutaway path.
    */
-  private buildWallsFromSlots(grid: StratumCellGrid, scale: number, _cs: number, sy: number): void {
-    for (const wp of grid.wallPlacements) {
-      if (wp.unit) { this.placeUnit(grid, wp, sy); continue; } // Phase-4b: a concrete tile UNIT.
-      const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
-      const host = this.placementHost(grid, x, z);
-      if (!host) continue; // a perimeter line beside a VOID cell — no floor cell to host/reveal it.
-      switch (wp.piece) {
-        case 'STRAIGHT': {
-          // run along X (axis 'X', yaw 0) or Z (axis 'Z', yaw π/2). `wall_half` is anchored at its
-          // LOW end (local x∈[0,2]); recenter it 1u back along the run so it straddles (x,z).
-          const yaw = wp.axis === 'X' ? 0 : Math.PI / 2;
-          const [ox, oz] = this.recenterHalf(yaw, scale);
-          // WallRec.axis is the FACE convention ('X' = faces ±X / spans Z), which is the OPPOSITE
-          // of WorldPlacement.axis (the RUN direction): a wall running along X faces ±Z → 'Z'.
-          const faceAxis: 'X' | 'Z' = wp.axis === 'X' ? 'Z' : 'X';
-          this.placeWall(host.group, 'wallHalf', x + ox, sy, z + oz, yaw, scale, faceAxis, host.mats);
-          break;
-        }
-        case 'CORNER':
-          this.place(host.group, 'wallCorner', x, sy, z, cornerYaw(wp.dirs), scale, host.mats);
-          break;
-        case 'TEE':
-          this.place(host.group, 'wallTee', x, sy, z, teeYaw(wp.dirs), scale, host.mats);
-          break;
-        case 'CROSS':
-          this.place(host.group, 'wallCross', x, sy, z, 0, scale, host.mats);
-          break;
-        case 'CAP':
-          this.place(host.group, 'wallEndcap', x, sy, z, capYaw(wp.dirs), scale, host.mats);
-          break;
-        case 'PILLAR':
-          this.place(host.group, 'pillar', x, sy, z, 0, scale, host.mats);
-          break;
-        case 'DOORWAY': {
-          // the arch runs parallel to its STRAIGHT neighbours → same yaw convention as STRAIGHT
-          // (wall_doorway runs along local X natively). Always drawn, even for profile GAP.
-          const yaw = wp.axis === 'X' ? 0 : Math.PI / 2;
-          this.place(host.group, 'doorway', x, sy, z, yaw, scale, host.mats);
-          break;
-        }
-      }
-    }
+  private buildWallsFromSlots(grid: StratumCellGrid, sy: number): void {
+    for (const wp of grid.wallPlacements) this.placeUnit(grid, wp, sy);
   }
 
   /** turn (quarter-turns CCW 0..3) → Three.js yaw. Matches `tile-units.ts rot()` so mesh == collider. */
@@ -555,16 +451,6 @@ export class Dungeon {
     // for the cutaway; a corner unit picks one axis. Render==collision doesn't depend on this.
     const faceAxis: 'X' | 'Z' = (((u.turn % 2) + 2) % 2 === 0) ? 'Z' : 'X';
     this.walls.push({ obj: o, x, z, axis: faceAxis, occ: 1 });
-  }
-
-  /**
-   * World (dx,dz) that re-centres a `wall_half` (native span local x∈[0,2], so its midpoint is at
-   * local +X=1) onto its lattice-square centre. We shift the mesh by −1·scale along the world
-   * direction of its local +X axis — which, for a yaw θ, is (cos θ, −sin θ) in (x,z) (the file's
-   * convention: local +X → world (cos θ, 0, −sin θ)). So the offset is (−scale·cos θ, +scale·sin θ).
-   */
-  private recenterHalf(yaw: number, scale: number): [number, number] {
-    return [-scale * Math.cos(yaw), scale * Math.sin(yaw)];
   }
 
   /**
@@ -970,38 +856,4 @@ export class Dungeon {
     return o;
   }
 
-  /**
-   * Place a cell-edge wall piece (`tile`: a full `wall` or a `wallHalf`) and register it for the
-   * occlusion cutaway. Both are placed by their NATIVE origin at (x,z): `wall` is centred (spans
-   * the full 4u edge under uniform `scale`), `wallHalf` is anchored at the slot centre and extends
-   * toward +localX (so the caller's yaw points it at the FAR half). No ×2 stretch / recenter — we
-   * now use the real native pieces, so the mesh lands exactly on its collider centerline.
-   */
-  private placeWall(target: THREE.Group, tile: string, x: number, y: number, z: number, rotY: number, scale: number, axis: 'X' | 'Z', mats: THREE.Material[]): void {
-    const t = this.tpl.get(tile);
-    if (!t) return;
-    const o = t.clone(true);
-    o.position.set(x, y, z);
-    o.rotation.y = rotY;
-    o.scale.setScalar(scale);
-    // CLONE this wall's material so the OCCLUSION CUTAWAY can fade THIS wall's opacity
-    // independently (the shared recolor material is reused across every wall, so we must give each
-    // occluding wall its own instance to drive). Handle a material ARRAY defensively (recolor
-    // assigns a single material per mesh, but a source GLB could carry several). View-only.
-    const cloneMat = (m: THREE.Material): THREE.Material => {
-      const cl = m.clone();
-      cl.userData = { ...cl.userData, occ: true };
-      cl.transparent = true;
-      mats.push(cl);
-      return cl;
-    };
-    o.traverse((mn) => {
-      const mesh = mn as THREE.Mesh;
-      const mm = mesh.material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(mm)) mesh.material = mm.map(cloneMat);
-      else if (mm) mesh.material = cloneMat(mm);
-    });
-    target.add(o);
-    this.walls.push({ obj: o, x, z, axis, occ: 1 });
-  }
 }
