@@ -15,7 +15,7 @@
 import { cellId, edgeKey, type Floor } from './types.ts';
 import { makeGrid, applyBatch, resolveGrid, type TileGrid, type Region, type Stamp } from './tile-grid.ts';
 import { template, floors, type TileField } from './wall-tile-field.ts';
-import { basicRoom } from './room-templates.ts';
+import { roomRole, roomStamp } from './room-roles.ts';
 import { DIRS, type WallTile, type Dir } from './wall-tile.ts';
 
 /** A plain walkable floor tile (stone, no walls) — for corridors and doorways. */
@@ -32,11 +32,14 @@ export function floorToTileGrid(floor: Floor): TileGrid {
   const grid = makeGrid(floor.width, floor.height);
   const stamps: { region: Region; stamp: Stamp }[] = [];
 
-  // each room → its template over its (inclusive) rectangle
+  // each room → its ROLE's template over its (inclusive) rectangle (role = seeded hash of the room)
+  const seed = BigInt(floor.meta.runSeed);
   for (const room of floor.rooms ?? []) {
     const w = room.x1 - room.x0 + 1;
     const h = room.y1 - room.y0 + 1;
-    if (w > 0 && h > 0) stamps.push({ region: { x: room.x0, y: room.y0, w, h }, stamp: basicRoom(w, h) });
+    if (w > 0 && h > 0) {
+      stamps.push({ region: { x: room.x0, y: room.y0, w, h }, stamp: roomStamp(roomRole(room.id, seed), w, h) });
+    }
   }
   // corridors + doorways → a plain walkable floor (single-cell stamps)
   for (const c of floor.cells) {

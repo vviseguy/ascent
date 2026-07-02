@@ -67,6 +67,7 @@ import { type AABB, type Terrain, makeBox } from '../sim/collide/terrain.ts';
 import { type Floor, type CellType, cellXY, cellId } from '../floor/types.ts';
 import { type WallGrid, buildWallGrid, wallMaskFor } from '../floor/wallgrid.ts';
 import { floorTiles } from '../floor/floor-tiles.ts';
+import { roomRoleIndex } from '../floor/room-roles.ts';
 import { PIECE } from '../floor/tile-place.ts';
 import { tileUnits, type FixedBox } from './tile-units.ts';
 import type { ApprovedAsset } from './approved-assets.ts';
@@ -255,6 +256,9 @@ export interface CellTile {
   type: CellType;
   /** Room index this cell belongs to (into the stratum's floor.rooms), or -1. */
   roomId: number;
+  /** The room's ROLE index (into ROOM_ROLES), or -1 for non-room cells. The renderer dresses the
+   *  cell to match this role, so a room's structure (sim) and its objects (render) agree. */
+  roomRole: number;
   /** True if this cell's slab tile is OMITTED in collision (the ascent hole). */
   hole: boolean;
   /** True if this cell is part of this stratum's switchback stair footprint. */
@@ -581,11 +585,13 @@ function buildCellGrid(
     const fc = floor.cells[c]!;
     const { x: cx, z: cz } = cellCenter(floor, c);
     const type: CellType = fc.cellType ?? 'ROOM';
+    const rid = fc.roomId ?? -1;
     cells.push({
       col: fc.x,
       row: fc.y,
       type,
-      roomId: fc.roomId ?? -1,
+      roomId: rid,
+      roomRole: rid >= 0 ? roomRoleIndex(rid, BigInt(floor.meta.runSeed)) : -1,
       hole: holeCells.has(c),
       stair: stairCells.has(c),
       cx: toRaw(cx),

@@ -149,17 +149,18 @@ export function buildSandbox(crewSizeOrOpts: number | SandboxOpts = 3): SceneHan
  * wires the floor generator into the playable game (the audit's `floor-module-not-
  * wired`). Win = race to the top stratum's height.
  */
-export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?: bigint } = {}): SceneHandle {
+export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?: bigint; gridSize?: number } = {}): SceneHandle {
   const crewSize = Math.max(1, opts.crewSize ?? 3);
   const numStrata = Math.max(2, opts.numStrata ?? 5);
   const seed = opts.seed ?? 0x5a17ed_1234n;
+  const gridSize = Math.max(4, opts.gridSize ?? GAME_GRID_SIZE);
 
   // generate + compile the tower
   const floors = [];
   for (let s = 0; s < numStrata; s++) {
     // openness 0.40 = "40% edges": ~40% of interior seams get an extra connection, so the
     // now-SOLID Layer-C walls don't read as a claustrophobic maze (more doorways/openings).
-    floors.push(generateFloor({ gridSize: GAME_GRID_SIZE, openness: 0.40, guaranteedRoutes: 2, seed, stratumIndex: s }));
+    floors.push(generateFloor({ gridSize, openness: 0.40, guaranteedRoutes: 2, seed, stratumIndex: s }));
   }
   const groundY = fromInt(0);
   const killPlaneY = fromInt(-10);

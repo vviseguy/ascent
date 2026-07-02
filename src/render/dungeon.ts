@@ -166,6 +166,11 @@ export class Dungeon {
   /** DEBUG A/B (?shell=classic): texture the shell the OLD way — one fixed PBR material per
    *  surface KIND (classifySurface → get()), no per-pixel recolor. For comparison. */
   private classicShell = false;
+  /** DEV (?fog=off): reveal every cell at build (no black fog cubes) — for inspecting generation. */
+  private fogOff = false;
+  /** DEV (?bare=1): floor mesh ONLY on ROOM (template) cells, so corridors read as empty and the
+   *  placed room templates stand out — "constrain to emptiness to see what templates are placed". */
+  private bareTemplates = false;
   /** Shared opaque BLACK material for the fog cubes (the "black liquid shadow" fill). */
   private readonly fogMat = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
   /** Index from a packed (stratum,row,col) key → CellRec, for the reachable-cell BFS. */
@@ -195,6 +200,8 @@ export class Dungeon {
     const themeParam = params.get('theme');
     this.rawColoring = params.get('raw') === '1' || themeParam === 'raw' || themeParam === 'none';
     this.classicShell = params.get('shell') === 'classic';
+    this.fogOff = params.get('fog') === 'off';
+    this.bareTemplates = params.get('bare') === '1';
     const loader = new GLTFLoader();
     const loaded = await Promise.all(Object.entries(TILES).map(async ([k, file]) => {
       const g = await loader.loadAsync(DIR + file);
@@ -316,7 +323,9 @@ export class Dungeon {
         const cg = new THREE.Group();
         const mats: THREE.Material[] = [];
         const walkable = (c.type === 'ROOM' || c.type === 'CORRIDOR' || c.type === 'DOORWAY' || c.stair) && !c.hole;
-        if (walkable) this.place(cg, 'floor', cx, sy, cz, 0, scale, mats);
+        // ?bare: floor only on template (ROOM) cells so corridors read as empty and templates pop.
+        // Floor mesh is chosen by the room's ROLE material (wood/dirt/stone) so rooms read distinctly.
+        if (walkable && (!this.bareTemplates || c.roomId >= 0)) this.placeRoleFloor(cg, c.roomRole, cx, sy, cz, scale, mats);
         // (KayKit STAIRS are placed in a dedicated pass below from the sim's exact StairInfo,
         //  not per-cell — see placeStairsExact, so the model lines up with the collision.)
 
@@ -340,16 +349,17 @@ export class Dungeon {
           this.decorateRoomCell(cg, c, grid, byRC, isFloor, cx, sy, cz, scale, h, mats);
         }
 
-        cg.visible = false;     // fog: hidden until explored
+        cg.visible = this.fogOff;     // fog: hidden until explored (?fog=off → shown immediately)
         sub.add(cg);
         // BLACK FOG CUBE (boss #3): a grid-aligned black box filling this cell's column,
         // shown while UNexplored, hidden on reveal. Grid geometry → always lines up.
         const fog = this.makeFogCube(cx, sy, cz, cs);
+        fog.visible = !this.fogOff;
         sub.add(fog);
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
           wallMask: c.wallMask, walkable, group: cg, fog,
-          explored: false, reveal: 0, mats,
+          explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats,
         };
         this.cells.push(rec);
         this.cellIndex.set(this.cellKey(grid.stratum, c.col, c.row), rec);
@@ -361,11 +371,12 @@ export class Dungeon {
         if (c.type !== 'VOID') continue;
         const cx = toFloat(fromRaw(c.cx)), cz = toFloat(fromRaw(c.cz));
         const fog = this.makeFogCube(cx, sy, cz, cs);
+        fog.visible = !this.fogOff;
         sub.add(fog);
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
           wallMask: 15, walkable: false, group: new THREE.Group(), fog,
-          explored: false, reveal: 0, mats: [],
+          explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats: [],
         };
         this.cells.push(rec);
         this.cellIndex.set(this.cellKey(grid.stratum, c.col, c.row), rec);
@@ -577,7 +588,10 @@ export class Dungeon {
     const roll = this.hash(c.col, c.row, 101);
     if (roll % 100 >= 48) return;
 
-    const theme = (c.roomId >= 0 ? c.roomId : (c.col + c.row)) % 7;
+    // theme = the room's ROLE (set sim-side in tower.ts, so structure + objects agree). Index order
+    // matches floor/room-roles.ts ROOM_ROLES: 0 hall · 1 library · 2 dining · 3 bedroom · 4 storage ·
+    // 5 armory · 6 treasure · 7 shrine. Fall back to a coord hash for a room cell missing a role.
+    const theme = c.roomRole >= 0 ? c.roomRole : (c.col + c.row) % 8;
     // a wall this cell sits against (for "against the wall" placement + facing into room)
     const m = c.wallMask;
     const againstWall = m !== 0;
@@ -596,35 +610,41 @@ export class Dungeon {
     let pick: Spec | null = null;
     const r2 = this.hash(c.col, c.row, 211) % 100;
     switch (theme) {
-      case 0: // LIBRARY — tall bookshelves against walls + a reading table
+      case 0: // HALL — a feast/throne hall: banners high on walls, long tables down the middle, braziers
+        if (againstWall) pick = r2 < 55 ? { name: r2 < 28 ? 'bannerRed' : 'bannerBlue', s: scale, hug: true, faceWall: true, yOff: 1.6 }
+          : r2 < 80 ? { name: 'candleTriple', s: scale, hug: true } : null;
+        else pick = r2 < 55 ? { name: r2 < 30 ? 'tableCloth' : 'tableLong', s: scale * 0.95, hug: false }
+          : r2 < 75 ? { name: 'chair', s: scale, hug: false } : { name: 'coinsM', s: scale, hug: false };
+        break;
+      case 1: // LIBRARY — tall bookshelves against walls + a reading table
         if (againstWall) pick = r2 < 70 ? { name: 'shelves', s: scale, hug: true, faceWall: true } : { name: 'shelfLarge', s: scale, hug: true, faceWall: true };
         else if (r2 < 40) pick = { name: 'tableMedium', s: scale * 0.9, hug: false };
         break;
-      case 1: // DINING — long tables (center) + chairs + plates/bottles
+      case 2: // DINING — long tables (center) + chairs + plates/bottles
         if (!againstWall && r2 < 55) pick = { name: r2 < 28 ? 'tableCloth' : 'tableLong', s: scale * 0.9, hug: false };
         else if (againstWall && r2 < 60) pick = { name: 'chair', s: scale, hug: true, faceWall: false };
         else if (r2 < 80) pick = { name: r2 < 70 ? 'plates' : 'bottleA', s: scale, hug: false, yOff: 0 };
         break;
-      case 2: // BEDROOM — beds against walls, a small table
+      case 3: // BEDROOM — beds against walls, a small table
         if (againstWall) pick = r2 < 75 ? { name: 'bed', s: scale * 0.9, hug: true, faceWall: true } : { name: 'bedFrame', s: scale * 0.9, hug: true, faceWall: true };
         else if (r2 < 35) pick = { name: 'tableSmall', s: scale, hug: false };
         break;
-      case 3: // STORAGE — barrels, crates, boxes (anywhere)
+      case 4: // STORAGE — barrels, crates, boxes (anywhere)
         pick = r2 < 30 ? { name: 'crates', s: scale * 0.85, hug: againstWall }
           : r2 < 55 ? { name: 'barrel', s: scale * 0.85, hug: againstWall }
           : r2 < 78 ? { name: 'barrelStack', s: scale * 0.9, hug: againstWall }
           : { name: 'boxStack', s: scale * 0.85, hug: againstWall };
         break;
-      case 4: // ARMORY — weapon racks (sword_shield) on walls + crates
+      case 5: // ARMORY — weapon racks (sword_shield) on walls + crates
         if (againstWall) pick = r2 < 65 ? { name: 'swordShield', s: scale, hug: true, faceWall: true, yOff: 1.4 } : { name: 'shelfCandles', s: scale, hug: true, faceWall: true };
         else if (r2 < 35) pick = { name: 'crates', s: scale * 0.85, hug: false };
         break;
-      case 5: // TREASURE — chests, coins, a gold chest center
+      case 6: // TREASURE — chests, coins, a gold chest center
         if (!againstWall && r2 < 40) pick = { name: 'chestGold', s: scale, hug: false };
         else if (r2 < 70) pick = { name: r2 < 50 ? 'chest' : 'coinsL', s: scale, hug: againstWall };
         else pick = { name: 'coinsM', s: scale, hug: againstWall };
         break;
-      default: // 6 SHRINE / RUINED — rubble, candles, banners, a shrine table
+      default: // 7 SHRINE / RUINED — rubble, candles, banners, a shrine table
         if (againstWall && r2 < 45) pick = { name: 'bannerRed', s: scale, hug: true, faceWall: true, yOff: 0 };
         else if (r2 < 60) pick = { name: 'rubbleHalf', s: scale * 0.8, hug: againstWall };
         else if (r2 < 80) pick = { name: 'candleTriple', s: scale, hug: againstWall };
@@ -842,6 +862,22 @@ export class Dungeon {
     const wrap = new THREE.Group();
     wrap.add(o);
     return wrap;
+  }
+
+  /** Place a floor tile chosen by the room's ROLE material (mirrors floor/room-roles.ts roleFloor):
+   *  library/bedroom → wood, storage/armory/shrine → dirt, else (incl. corridors, role -1) → stone.
+   *  Uses the remastered floor pieces (same pack as the walls) so the shell reads consistently. */
+  private placeRoleFloor(cg: THREE.Group, roomRole: number, cx: number, sy: number, cz: number, scale: number, mats: THREE.Material[]): void {
+    const url = (roomRole === 1 || roomRole === 3) ? PIECE.floorWood
+      : (roomRole === 4 || roomRole === 5 || roomRole === 7) ? PIECE.floorDirt
+      : PIECE.floorStone;
+    const t = this.unitTpl.get(url);
+    if (!t) return;
+    const o = t.clone(true);
+    o.position.set(cx, sy, cz);
+    o.scale.setScalar(scale);
+    o.traverse((m) => { const mm = (m as THREE.Mesh).material as THREE.Material | undefined; if (mm) mats.push(mm); });
+    cg.add(o);
   }
 
   private place(target: THREE.Group, name: string, x: number, y: number, z: number, rotY: number, scale: number, mats?: THREE.Material[]): THREE.Object3D | null {
