@@ -24,8 +24,8 @@
 // Pure + deterministic — masks are integers, BFS runs over dense arrays with ascending adjacency, and
 // the only Set/Map use is during construction (sorted before it can affect output).
 
-import { type Dir, DIRS } from './wall-tile.ts';
-import { type TileField, type Mask, segs, hasConflict, template } from './wall-tile-field.ts';
+import { type Dir, DIRS, OPEN_WALL_TYPES } from './wall-tile.ts';
+import { type TileField, type Mask, segs, wallTypes, hasConflict, template } from './wall-tile-field.ts';
 import { type TileGrid, cellIndex, inBounds, type Tx, stamp } from './tile-grid.ts';
 import {
   type CornerGraph,
@@ -105,11 +105,39 @@ export function armPassable(at: FieldAt, x: number, y: number, d: Dir, p: Polari
   return m ? armOpen(p)(m.edge, m.inner) : false;
 }
 
+/** The wall types that are a real hole, as a domain mask. */
+const OPEN_TYPES: Mask = wallTypes(...OPEN_WALL_TYPES);
+
+/**
+ * Does this tile CERTAINLY have a walk-through opening — a door or arch on a full wall line?
+ *
+ * Deliberately certain-only, in BOTH polarities. An opening only ever ADDS reachability, so counting
+ * a merely-possible one would inflate `may` (we would keep a wall believing a maybe-door rescues the
+ * route) and inflate `must` (we would call a route guaranteed on a maybe-door). Requiring certainty
+ * under-claims instead, which costs a few refused walls and can never call an unreachable floor
+ * reachable. Authored structures pin their wallType, so the real cases are certain anyway.
+ */
+export function tileOpeningCertain(at: FieldAt, x: number, y: number): boolean {
+  const f = at(x, y);
+  if (!f) return false;
+  if (f.wallType === 0 || (f.wallType & ~OPEN_TYPES) !== 0) return false; // could collapse to something solid
+  const lineCertain = (a: Dir, b: Dir): boolean =>
+    [a, b].every((d) => {
+      const m = armMasks(at, x, y, d);
+      return m !== null && m.edge === WALL && m.inner === WALL; // both cells pinned to exactly `wall`
+    });
+  return lineCertain('E', 'W') || lineCertain('N', 'S');
+}
+
 /* ------------------------------- the graph ------------------------------- */
 
 /** The corner-graph of a field under one polarity — same builder, same topology, domain predicate. */
 export function domainCornerGraph(at: FieldAt, w: number, h: number, p: Polarity): CornerGraph {
-  return buildCornerGraphFrom(w, h, (x, y, d) => armPassable(at, x, y, d, p));
+  return buildCornerGraphFrom(
+    w, h,
+    (x, y, d) => armPassable(at, x, y, d, p),
+    (x, y) => tileOpeningCertain(at, x, y),
+  );
 }
 
 /** One arm as a graph edge: the corner pair it links, and the tile+direction that owns it (so a route

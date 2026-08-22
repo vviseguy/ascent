@@ -144,6 +144,27 @@ export function label(tile: WallTile): string {
 }
 
 /** Is this axis a full straight WALL line (so `wallType` applies)? */
+/** The wall types that are a REAL HOLE you can walk through. A window is too high, a broken wall is
+ *  rubble, and a low_gate is barred — those are cosmetic variants of a solid wall, not passages. */
+export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch'];
+
+/**
+ * Does this tile have a walk-through OPENING? Only when a full straight wall LINE actually exists —
+ * which is exactly when `tile-place.ts` swaps the two arms for a single spanning piece and draws the
+ * arch. Matching that condition is the point: the graph must agree with what is drawn, cell for cell.
+ *
+ * WHY THIS MATTERS TO THE GRAPH: the opening sits at the tile's CENTRE, but a wall's blocking effect
+ * shows up on the tile's SIDES (an arm gates the corner pair on its side). The corner lattice has no
+ * node in the middle of a tile, so an opening is invisible to a per-arm test — a door rendered as a
+ * clear archway was reported BLOCKED. See `buildCornerGraph`.
+ */
+export function tileOpening(tile: WallTile): boolean {
+  return (
+    OPEN_WALL_TYPES.includes(tile.wallType) &&
+    (fullWallLine(tile, 'EW') || fullWallLine(tile, 'NS'))
+  );
+}
+
 export function fullWallLine(tile: WallTile, axis: 'EW' | 'NS'): boolean {
   const ds: Dir[] = axis === 'EW' ? ['E', 'W'] : ['N', 'S'];
   return ds.every((d) => tile.inner[d] === 'wall' && tile.edge[d] === 'wall');

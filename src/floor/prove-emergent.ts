@@ -18,7 +18,8 @@
 // bookkeeping were wrong, the two would disagree.
 
 import { generateEmergent, resolveEmergent, type EmergentConfig } from './emergent.ts';
-import { buildCornerGraph, reachableFromSet, cornerCount } from './corner-graph.ts';
+import { buildCornerGraph, reachableFromSet, cornerCount, cornerId, cornerReachable } from './corner-graph.ts';
+import { tileOpening } from './wall-tile.ts';
 import { gridAt, reaches, routeGuaranteed } from './tile-reach.ts';
 import { seamDisagreements } from './seams.ts';
 import { domainSize } from './wall-tile-field.ts';
@@ -108,6 +109,28 @@ controls.push({
   pass: cohered > floors * 100 && seamDrift < floors,
   detail: `${cohered} seams cohered, ${seamDrift} still disagree across ${floors} floors (<1 per floor)`,
 });
+// RENDER == GRAPH for openings. A door/arch draws a clear archway; if the graph still calls that
+// tile's corners disconnected, the floor has walls you can see through and not walk through.
+{
+  let drawn = 0, connected = 0;
+  for (const seed of [3n, 23n, 101n, 42n]) {
+    const r = generateEmergent({ width: 18, height: 14, seed });
+    const tiles = resolveEmergent(r, seed);
+    const g = buildCornerGraph(tiles, 18, 14);
+    tiles.forEach((t, i) => {
+      if (!t || !tileOpening(t)) return;
+      drawn++;
+      const x = i % 18, y = Math.floor(i / 18);
+      if (cornerReachable(g, cornerId(18, x, y), cornerId(18, x + 1, y + 1))) connected++;
+    });
+  }
+  controls.push({
+    name: 'every DRAWN opening is walkable in the graph (render == graph)',
+    pass: drawn > 0 && connected === drawn,
+    detail: `${connected}/${drawn} door/arch tiles have all four corners connected`,
+  });
+}
+
 controls.push({
   name: 'the floors are actually walled (not empty rooms)',
   pass: totalWalls > floors * 20,

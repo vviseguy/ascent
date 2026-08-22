@@ -16,7 +16,7 @@
 // Pure + deterministic — integer node ids, ascending adjacency, BFS over arrays (no float / no
 // Map/Set iteration on an output-affecting path; a Set is used only during construction, then sorted).
 
-import type { WallTile, Seg, Dir } from './wall-tile.ts';
+import { tileOpening, type WallTile, type Seg, type Dir } from './wall-tile.ts';
 import { resolveGrid, type TileGrid } from './tile-grid.ts';
 
 export interface CornerGraph {
@@ -57,6 +57,7 @@ export function buildCornerGraphFrom(
   w: number,
   h: number,
   armPassable: (tx: number, ty: number, dir: Dir) => boolean,
+  tileOpen?: (tx: number, ty: number) => boolean,
 ): CornerGraph {
   const nodeCount = cornerCount(w, h);
   const out: Set<number>[] = Array.from({ length: nodeCount }, () => new Set<number>());
@@ -74,6 +75,12 @@ export function buildCornerGraphFrom(
       if (armPassable(tx, ty, 'E')) link(ne, se); // E arm gates the right pair
       if (armPassable(tx, ty, 'S')) link(se, sw); // S arm gates the bottom pair
       if (armPassable(tx, ty, 'W')) link(sw, nw); // W arm gates the left pair
+      // AN OPENING JOINS ALL FOUR CORNERS. A door or arch clears the tile's CENTRE, and every corner
+      // can reach the centre — so all four end up in one component, whatever the arms say. That is
+      // why it is not "re-open the two arms of the spanning axis": with the centre open you can also
+      // slip around the inner end of a PERPENDICULAR arm, so NE↔SW is real too. Four links (a cycle)
+      // are enough to merge them.
+      if (tileOpen?.(tx, ty)) { link(nw, ne); link(ne, se); link(se, sw); link(sw, nw); }
     }
   }
   const adj = out.map((s) => [...s].sort((a, b) => a - b));
@@ -85,10 +92,17 @@ export function buildCornerGraphFrom(
  * conflicted/void tile and contributes no edges).
  */
 export function buildCornerGraph(tiles: ReadonlyArray<WallTile | null>, w: number, h: number): CornerGraph {
-  return buildCornerGraphFrom(w, h, (tx, ty, d) => {
-    const t = tiles[ty * w + tx];
-    return t ? !armBlocks(t.edge[d], t.inner[d]) : false;
-  });
+  return buildCornerGraphFrom(
+    w, h,
+    (tx, ty, d) => {
+      const t = tiles[ty * w + tx];
+      return t ? !armBlocks(t.edge[d], t.inner[d]) : false;
+    },
+    (tx, ty) => {
+      const t = tiles[ty * w + tx];
+      return t ? tileOpening(t) : false;
+    },
+  );
 }
 
 /** Convenience: collapse + owner-resolve a grid, then build its corner-graph. The resolved tiles are
