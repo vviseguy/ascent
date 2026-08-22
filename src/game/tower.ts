@@ -116,7 +116,13 @@ export const CELL_SIZE: Fixed = fromFloatConst(4.0);
  */
 export const GAME_GRID_SIZE = 30;
 /** Vertical spacing between strata floors (meters). */
-export const FLOOR_HEIGHT: Fixed = fromInt(6);
+/**
+ * ONE STOREY. Measured off the art, not chosen: a `wall` is 4.00 tall and every staircase in the kit
+ * climbs exactly 4.00 (8 treads of 0.50 — see `tmp/glb-levels.mjs`; the 5.10 on a bounding box is the
+ * banister, not the climb). At 6 the decks floated two units apart and no staircase reached the next
+ * one, which is what "the floors are separated way too much" was.
+ */
+export const FLOOR_HEIGHT: Fixed = fromInt(4);
 /** Thickness of a platform slab (meters). */
 const SLAB: Fixed = fromFloatConst(0.5);
 

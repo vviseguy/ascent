@@ -20,9 +20,9 @@
 // Sim-side and deterministic: transforms are CELL-LOCAL fixed-point (centre = 0, half-extent 1) and
 // yaws are quarter-turns. No floats at runtime beyond the compile-time `fromFloatConst` constants.
 
-import { type Fixed, fromInt, fromFloatConst, neg } from '../sim/fixed/fixed.ts';
+import { type Fixed, add, fromInt, fromFloatConst, mul, neg } from '../sim/fixed/fixed.ts';
 import {
-  FLOOR_MATERIALS, blocks, isOpenType,
+  blocks, isOpenType, isStairFloor,
   type Axis, type Cell, type Dir, type FloorMaterial, type Seg, type WallType,
 } from './cell.ts';
 
@@ -59,6 +59,9 @@ export interface CellPlacement {
   url: string;
   x: Fixed;
   z: Fixed;
+  /** Height above the cell's floor plane, in WORLD units — not half-cells like x/z. A slab is a slab;
+   *  its thickness does not change when the cell size does. Zero for everything that sits on the deck. */
+  y: Fixed;
   turn: number;
   scale: Fixed;
 }
@@ -71,7 +74,7 @@ const HALF = fromFloatConst(0.5); // a 4u floor piece rendered as a 2u cell
 /** Point a +X-extending piece toward a direction. Matches the 4u convention exactly. */
 const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
 
-const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs'>, string> = {
+const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
   stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
 };
 
@@ -83,8 +86,28 @@ export const wallTypeUrl = (wt: WallType): string =>
         : wt === 'hole' ? PIECE.broken
           : PIECE.wall;
 
-const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE): CellPlacement =>
-  ({ url, x, z, turn, scale });
+const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z): CellPlacement =>
+  ({ url, x, y, z, turn, scale });
+
+/**
+ * THE KIT IS BUILT AROUND A 4.00 STOREY, and these are measured, not guessed (`tmp/glb-levels.mjs`
+ * reports the area of upward-facing faces at each height, which is the only way to find a stair's last
+ * TREAD — its bounding box top is the banister):
+ *
+ *   wall              4.00 tall
+ *   every staircase   climbs exactly 4.00, in 8 treads of 0.50   (bbox says 5.10; that is the newel post)
+ *   floor_tile_large  0.15 thick, walking surface at +0.05
+ *
+ * So a flight lifted by the floor's surface height starts flush with the deck it leaves AND ends flush
+ * with the deck it reaches, because 0.05 + 4.00 = the next storey's surface. That is not a coincidence
+ * to be tuned — it is the kit's own grid, and `FLOOR_HEIGHT` should equal it.
+ */
+const FLOOR_SURFACE = fromFloatConst(0.05);
+/** How far a flight actually climbs. `FLOOR_HEIGHT` must equal this or the stairs stop reaching. */
+export const STAIR_CLIMB: Fixed = fromInt(4);
+/** Pushed DOWNHILL by this much so the flight clears the trim that protrudes from the wall at its head.
+ *  Small on purpose: any more and the gap at the top reads as a missing tread. */
+const STAIR_OUT = fromFloatConst(0.12);
 
 /** The mesh for one wall segment. `sloped` HAS NO ASSET YET — it stands in as a solid wall, which is
  *  right for collision (it blocks) and wrong for looks. Replace the moment the ramp mesh exists. */
@@ -190,14 +213,20 @@ export interface StairFlight {
  * cell's own wall beside it, which looks the same.
  */
 const STAIR_MESHES = [
-  //  url                          run  across  walls   wood        measured w x d (world units)
-  { url: PIECE.stairsWood, run: 3, across: 2, walls: 0, wood: true },        // 3.30 x 6.00
-  { url: PIECE.stairsWide, run: 2, across: 3, walls: 0, wood: false },       // 7.00 x 4.00 = 6u + 0.5
-  { url: PIECE.stairsWalled, run: 2, across: 2, walls: 2, wood: false },     // 5.00 x 4.00 = 4u + 0.5
-  { url: PIECE.stairsWallLeft, run: 2, across: 2, walls: -1, wood: false },  // 4.00 x 5.00, wall at -X
-  { url: PIECE.stairsWallRight, run: 2, across: 2, walls: 1, wood: false },  // 4.00 x 5.00, wall at +X
-  { url: PIECE.stairs, run: 2, across: 2, walls: 0, wood: false },           // 4.00 x 4.00, bare
-] as const;
+  //  url                      mat      run  across  walls          measured w x d (world units)
+  { url: PIECE.stairsWood, mat: 'stairs_wood', run: 3, across: 2, walls: 0 },   // 3.30 x 6.00
+  { url: PIECE.stairsWide, mat: 'stairs', run: 2, across: 3, walls: 0 },        // 7.00 x 4.00 = 6u + 0.5
+  { url: PIECE.stairsWalled, mat: 'stairs', run: 2, across: 2, walls: 2 },      // 5.00 x 4.00 = 4u + 0.5
+  { url: PIECE.stairsWallLeft, mat: 'stairs', run: 2, across: 2, walls: -1 },   // 4.00 x 5.00, wall at -X
+  { url: PIECE.stairsWallRight, mat: 'stairs', run: 2, across: 2, walls: 1 },   // 4.00 x 5.00, wall at +X
+  { url: PIECE.stairs, mat: 'stairs', run: 2, across: 2, walls: 0 },            // 4.00 x 4.00, bare
+] as const satisfies readonly { url: string; mat: FloorMaterial; run: number; across: number; walls: number }[];
+
+/** How long a flight of each material has to be, in cells. Authored material, not sensed: a wooden
+ *  flight is shallower and spans THREE cells where a stone one spans two, so the choice changes the
+ *  footprint and cannot be a dressing applied afterwards. */
+export const STAIR_RUN: Partial<Record<FloorMaterial, number>> =
+  Object.fromEntries(STAIR_MESHES.map((m) => [m.mat, m.run]));
 
 /** Stairs rise toward -Z natively, so N is the unturned case. NOT the table walls use — a wall runs
  *  along X, so its unturned case is E. */
@@ -209,8 +238,14 @@ const STEP: Record<Dir, readonly [number, number]> = { N: [0, -1], S: [0, 1], W:
 const LEFT_OF: Record<Dir, Dir> = { N: 'W', W: 'S', S: 'E', E: 'N' };
 const RIGHT_OF: Record<Dir, Dir> = { W: 'N', S: 'W', E: 'S', N: 'E' };
 
-const isStairs = (cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): boolean =>
-  cellAt(cells, w, h, x, y)?.floor === 'stairs';
+/** The stair material at (x,y), or null if it is not a stair cell. A flight is ONE material all the
+ *  way through — two materials touching are two flights, because they are different depths. */
+const stairMat = (cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): FloorMaterial | null => {
+  const f = cellAt(cells, w, h, x, y)?.floor;
+  return f !== undefined && isStairFloor(f) ? f : null;
+};
+const isStairs = (cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, mat: FloorMaterial): boolean =>
+  stairMat(cells, w, h, x, y) === mat;
 
 /** Is EVERY cell along one side of the block walled on that side? A flight's end is only "closed" if
  *  the whole width is, otherwise you could walk around it. */
@@ -233,13 +268,14 @@ function sideClosed(
 export function stairFlight(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
 ): StairFlight | null {
-  if (!isStairs(cells, w, h, x, y)) return null;
-  if (isStairs(cells, w, h, x - 1, y) || isStairs(cells, w, h, x, y - 1)) return null; // not the origin
+  const mat = stairMat(cells, w, h, x, y);
+  if (mat === null) return null;
+  if (isStairs(cells, w, h, x - 1, y, mat) || isStairs(cells, w, h, x, y - 1, mat)) return null; // not the origin
 
-  let bw = 1; while (isStairs(cells, w, h, x + bw, y)) bw++;
-  let bh = 1; while (isStairs(cells, w, h, x, y + bh)) bh++;
+  let bw = 1; while (isStairs(cells, w, h, x + bw, y, mat)) bw++;
+  let bh = 1; while (isStairs(cells, w, h, x, y + bh, mat)) bh++;
   for (let j = 0; j < bh; j++) {
-    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j)) return null; // ragged, not a flight
+    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return null; // ragged
   }
 
   const closed = {
@@ -260,50 +296,25 @@ export function stairFlight(
   const walls: -1 | 0 | 1 | 2 =
     closed[left] && closed[right] ? 2 : closed[left] ? -1 : closed[right] ? 1 : 0;
 
-  // MATERIAL is sensed from the ground the flight connects to — a staircase in a wooden room is a
-  // wooden staircase. Nothing extra is stored for it.
-  const wood = neighbourFloor(cells, w, h, x, y, bw, bh) === 'wood';
-
-  /* The first mesh that FITS. Run length is a hard requirement — a 4u flight in a 6u hole leaves a step
-     missing — while width, walls and material are preferences, so an unusual block degrades to a plainer
-     mesh instead of vanishing. A block no mesh can span reports nothing and draws ordinary ground, the
-     same under-claiming rule the ambiguous cases use. */
-  const fits = STAIR_MESHES.filter((m) => m.run === run);
-  const best = fits.find((m) => m.wood === wood && m.across === width && m.walls === walls)
-    ?? fits.find((m) => m.wood === wood && m.across === width)
+  /* The first mesh that FITS. MATERIAL and RUN LENGTH are hard requirements — a stone flight is not a
+     wooden one, and a 4u mesh in a 6u hole leaves a step missing — while width and walls are
+     preferences, so an unusual block degrades to a plainer mesh instead of vanishing. A block nothing
+     can span reports nothing and draws ordinary ground, the same under-claiming rule as elsewhere. */
+  const fits = STAIR_MESHES.filter((m) => m.mat === mat && m.run === run);
+  const best = fits.find((m) => m.across === width && m.walls === walls)
     ?? fits.find((m) => m.across === width)
-    ?? fits.find((m) => m.wood === wood)
     ?? fits[0];
   if (!best) return null;
 
   return { x, y, bw, bh, up, width, run, walls: best.walls, url: best.url };
 }
 
-/** The most common walkable material immediately around the block, for sensing the flight's material. */
-function neighbourFloor(
-  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, bw: number, bh: number,
-): FloorMaterial | null {
-  const tally = new Map<FloorMaterial, number>();
-  const look = (cx: number, cy: number): void => {
-    const c = cellAt(cells, w, h, cx, cy);
-    if (!c || c.floor === 'stairs' || c.floor === 'none' || c.floor === 'rock') return;
-    tally.set(c.floor, (tally.get(c.floor) ?? 0) + 1);
-  };
-  for (let i = -1; i <= bw; i++) { look(x + i, y - 1); look(x + i, y + bh); }
-  for (let j = -1; j <= bh; j++) { look(x - 1, y + j); look(x + bw, y + j); }
-  let best: FloorMaterial | null = null, n = 0;
-  for (const m of FLOOR_MATERIALS) { // fixed order, so ties resolve deterministically
-    const c = tally.get(m) ?? 0;
-    if (c > n) { n = c; best = m; }
-  }
-  return best;
-}
-
 /** Is this cell inside a flight owned by another cell? Such a cell contributes no ground of its own. */
 function insideFlight(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): StairFlight | null {
-  if (!isStairs(cells, w, h, x, y)) return null;
-  for (let oy = y; oy >= 0 && isStairs(cells, w, h, x, oy); oy--) {
-    for (let ox = x; ox >= 0 && isStairs(cells, w, h, ox, oy); ox--) {
+  const mat = stairMat(cells, w, h, x, y);
+  if (mat === null) return null;
+  for (let oy = y; oy >= 0 && isStairs(cells, w, h, x, oy, mat); oy--) {
+    for (let ox = x; ox >= 0 && isStairs(cells, w, h, ox, oy, mat); ox--) {
       const f = stairFlight(cells, w, h, ox, oy);
       if (f && x >= f.x && x < f.x + f.bw && y >= f.y && y < f.y + f.bh) return f;
     }
@@ -365,11 +376,11 @@ export function cellPlacements(
     /* The block centre, relative to the origin cell centre, in cell-local (= world) units — then pushed
        UP-SLOPE by half the run, because the mesh pivots on its top end rather than its middle. */
     const [sx, sz] = STEP[flight.up];
-    out.push(at(
-      flight.url, STAIR_TURN[flight.up],
-      fromInt(flight.bw - 1 + sx * flight.run), fromInt(flight.bh - 1 + sz * flight.run),
-    ));
-  } else if (c.floor === 'stairs') {
+    // LIFTED to the deck's walking surface and pushed a little DOWNHILL — see FLOOR_SURFACE/STAIR_OUT.
+    const cx = add(fromInt(flight.bw - 1 + sx * flight.run), mul(fromInt(-sx), STAIR_OUT));
+    const cz = add(fromInt(flight.bh - 1 + sz * flight.run), mul(fromInt(-sz), STAIR_OUT));
+    out.push(at(flight.url, STAIR_TURN[flight.up], cx, cz, ONE, FLOOR_SURFACE));
+  } else if (isStairFloor(c.floor)) {
     if (!insideFlight(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
   } else if (c.floor !== 'none' && inFloor) {
     out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));

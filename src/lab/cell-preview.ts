@@ -72,8 +72,9 @@ async function instance(p: CellPlacement, cx: number, cz: number): Promise<THREE
   // red box appears with nothing in `loadFailures` to explain it
   if (!src) failures.set(p.url, failures.get(p.url) ?? 'loaded but produced no scene');
   const node = src ? src.clone(true) : missing();
-  // cell-local offsets are in HALF-CELL units (±1 is an edge), so they scale by CELL/2
-  node.position.set(cx + toFloat(p.x) * (CELL / 2), 0, cz + toFloat(p.z) * (CELL / 2));
+  // cell-local offsets are in HALF-CELL units (±1 is an edge), so they scale by CELL/2 — but `y` is
+  // already in world units and must NOT be scaled with them
+  node.position.set(cx + toFloat(p.x) * (CELL / 2), toFloat(p.y), cz + toFloat(p.z) * (CELL / 2));
   node.rotation.y = TURN_RAD[p.turn] ?? 0;
   const s = toFloat(p.scale);
   node.scale.setScalar(s);

@@ -42,7 +42,8 @@ import { buildGrid, CELL } from './cell-preview.ts';
 
 const SEG_COLOR: Record<Seg, string> = { none: '#333a44', wall: '#e8e3da', barrier: '#7fa8c9', sloped: '#c9a87f' };
 const FLOOR_COLOR: Record<FloorMaterial, string> = {
-  none: '#101318', stone: '#6f6a63', dirt: '#6b5540', wood: '#8a6136', rock: '#241c14', stairs: '#b08d57',
+  none: '#101318', stone: '#6f6a63', dirt: '#6b5540', wood: '#8a6136', rock: '#241c14',
+  stairs: '#b08d57', stairs_wood: '#9a6b3a',
 };
 const CORNER_COLOR: Record<Corner, string> = { solid: '#8a939d', column: '#e8e3da', air: '#5ad98b' };
 const AMBIGUOUS = '#4a5568';
@@ -111,22 +112,17 @@ const hasW = (py: number): boolean => ownsWallW(py, H);
 const hasFloor = (px: number, py: number): boolean => ownsFloor(px, py, W, H);
 
 /**
- * A copy with every field that does not geometrically exist pinned to `none`, so the padding can never
- * contribute a phantom wall or a floor tile the structure does not own.
- *
- * A TRANSFORM, not a mutation — deliberately. Pinning the live grid looked simpler and was wrong: the
- * padding is defined RELATIVE to the current size, so growing the grid turns yesterday's padding into
- * a real cell, and a destructive pin left it stuck as a pit. (It did: `+E` then `+S` produced twelve
- * pits out of nowhere.) The editor keeps what you painted; the rule is applied on the way OUT, to the
- * preview and to what gets saved.
- */
-/**
  * The padding, PINNED to nothing — for DISPLAY only. The schematic must not draw a phantom floor or
  * wall out where the structure owns nothing, and an abstaining floor settles to `stone`, so it would.
  *
  * This is the opposite of what gets SAVED (`abstainUnowned`), and deliberately so: drawing nothing and
  * claiming nothing are different requirements over the same slots. Saving this form would have the
  * structure stamp a void along its own south and east faces.
+ *
+ * A TRANSFORM, not a mutation — deliberately. Pinning the live grid looked simpler and was wrong: the
+ * padding is defined RELATIVE to the current size, so growing the grid turns yesterday's padding into
+ * a real cell, and a destructive pin left it stuck as a pit. (It did: `+E` then `+S` produced twelve
+ * pits out of nowhere.) The editor keeps what you painted; the rule applies on the way OUT.
  */
 function forDisplay(): CellField[] {
   return cells.map((f, i) => {

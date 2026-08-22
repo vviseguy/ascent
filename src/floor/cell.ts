@@ -75,15 +75,27 @@ export const BLOCKING_SEGS: readonly Seg[] = ['wall', 'sloped'];
  *   rock            SOLID FILL — the cell is not a place at all. This is the fallback that turns an
  *                   unreachable pocket into filled stone, so a floor reads as carved OUT of rock
  *                   rather than as an open field someone put walls on.
- *   stairs          part of a STAIR RUN. Two adjacent `stairs` cells make one 4u flight; which way it
- *                   climbs is derived from the walls at its two ends, never stored (see
- *                   `cell-place.ts:stairRun`). A lone `stairs` cell is not a flight and draws as
- *                   ordinary ground.
+ *   stairs          part of a STAIR FLIGHT — a rectangular block of stair cells. Which way it climbs
+ *                   and which mesh it uses are DERIVED from the walls around it, never stored (see
+ *                   `cell-place.ts:stairFlight`). A block that is not a flight draws as ordinary
+ *                   ground.
+ *   stairs_wood     the same, in wood. A separate material rather than a dressing, because a wooden
+ *                   flight is shallower and needs a THREE-cell run where a stone one needs two.
  *
  * APPEND-ONLY, like `SEGS` — masks are serialised by bit position.
  */
-export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock' | 'stairs';
-export const FLOOR_MATERIALS: readonly FloorMaterial[] = ['none', 'stone', 'dirt', 'wood', 'rock', 'stairs'];
+export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock' | 'stairs' | 'stairs_wood';
+export const FLOOR_MATERIALS: readonly FloorMaterial[] =
+  ['none', 'stone', 'dirt', 'wood', 'rock', 'stairs', 'stairs_wood'];
+
+/** The stair materials, and how deep a flight of each has to be. A stone flight climbs its storey in
+ *  2 cells; the wooden one is a shallower stair and needs 3. So the material is not a skin — it
+ *  changes the footprint, which is why it is AUTHORED rather than guessed from the surroundings. */
+export const STAIR_FLOORS: readonly FloorMaterial[] = ['stairs', 'stairs_wood'];
+// a TYPE GUARD, not a boolean: the placement code narrows `floor` through it to prove the
+// remaining branch handles only the materials that have a plain ground mesh
+export const isStairFloor = (f: FloorMaterial): f is 'stairs' | 'stairs_wood' =>
+  f === 'stairs' || f === 'stairs_wood';
 
 /** Is this cell solid fill — somewhere a body can never be? Unlike every other floor value this one
  *  affects TRAVERSAL: a rock cell contributes no edges at all, walls notwithstanding. */

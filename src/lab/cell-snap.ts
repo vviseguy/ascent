@@ -15,6 +15,7 @@
 //   &turn=0..3 &flip=1         orient the structure first — the placement must survive all eight
 //   &angle=<deg> &pitch=<deg>  camera around / above
 //   &zoom=<f>                  distance multiplier
+//   &stack=<n>&rise=<h>        n storeys h apart (default FLOOR_HEIGHT) — does a flight REACH the next?
 //
 // `window.__CELL_READY` flips true when the last GLB has landed and a frame has been drawn.
 
@@ -25,6 +26,8 @@ import { getStructure, listStructures } from '../floor/cell-structures.ts';
 import { orientStructure } from '../floor/cell-orient.ts';
 import { generateEmergent } from '../floor/cell-emergent.ts';
 import { resolveGrid } from '../floor/cell-grid.ts';
+import { FLOOR_HEIGHT } from '../game/tower.ts';
+import { toFloat } from '../sim/fixed/fixed.ts';
 import type { Cell } from '../floor/cell.ts';
 
 declare global {
@@ -85,6 +88,15 @@ async function main(): Promise<void> {
 
   const group = await buildGrid(s.cells, s.w, s.h, s.extent);
   scene.add(group);
+
+  /* STACK — the same deck repeated one storey up, which is the only way to SEE whether a staircase
+     actually reaches the next floor or stops short in mid-air. */
+  const storeys = Math.max(1, Math.min(4, Math.floor(num('stack', 1))));
+  for (let i = 1; i < storeys; i++) {
+    const above = await buildGrid(s.cells, s.w, s.h, s.extent);
+    above.position.y = num('rise', toFloat(FLOOR_HEIGHT)) * i;
+    scene.add(above);
+  }
 
   /* A CELL GRID at ground level, one line per 2u cell and aligned to the cell boundaries. This is the
      ruler: "the flight sits half a cell south" is invisible without it, and it is the whole reason to

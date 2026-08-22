@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFlight, PIECE, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFlight, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
 const W = 4, H = 4;
@@ -192,10 +193,17 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     // The mesh spans local z in [0, 4] and rises toward -Z, so its origin is its top end. Placing it at
     // the block's centre would hang it half a block downhill; it belongs half a run UP-SLOPE of centre.
     const p = cellPlacements(block(), SW, SH, 1, 1)[0]!;
-    expect(p.turn).toBe(0);      // a north climb is the mesh's native orientation
-    expect(p.x).toBe(65536);     // (bw-1) = 1 east: centred across the 2-cell width
-    expect(p.z).toBe(-65536);    // (bh-1) - run = 1 - 2 = -1: the top end, not the middle
-    // which puts the 4u-deep mesh over exactly the two cells of the block: [-1, 3]
+    expect(p.turn).toBe(0);              // a north climb is the mesh's native orientation
+    expect(p.x).toBe(65536);             // (bw-1) = 1 east: centred across the 2-cell width
+    expect(p.z).toBe(-65536 + 7864);     // the top end (-1), pushed 0.12 DOWNHILL to clear the wall trim
+    expect(p.y).toBe(3277);              // lifted to the deck's walking surface, 0.05
+    // which puts the 4u-deep mesh over the two cells of the block, flush with the floor either end
+  });
+
+  it('climbs exactly one storey, so a flight actually reaches the next deck', () => {
+    // 0.05 (this deck's surface) + 4.00 (the climb) = 4.05 = the next deck's surface. Drift these apart
+    // and stairs stop connecting floors — which is what a FLOOR_HEIGHT of 6 was doing.
+    expect(FLOOR_HEIGHT).toBe(STAIR_CLIMB);
   });
 
   it('SENSES walls either side and switches to the walled mesh', () => {
@@ -219,33 +227,53 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     expect(f.url).toContain('stairs_wide');
   });
 
-  it('SENSES the surrounding ground and switches to the wooden mesh', () => {
-    // the wooden flight is 6u deep, so it only fits a block that runs THREE cells
+  it('takes its MATERIAL from the cells, not from the room around it', () => {
+    // A wooden flight is a shallower stair: 6u deep, so it needs THREE cells where stone needs two.
+    // That is why the material is authored — it changes the footprint, so it cannot be a late dressing.
     const woodBlock = mk((c, x, y) => {
-      const inBlock = x >= 1 && x <= 2 && y >= 1 && y <= 3;
-      c.floor = inBlock ? 'stairs' : 'wood';
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs_wood';
       if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
     const f = stairFlight(woodBlock, SW, SH, 1, 1)!;
     expect(f.run).toBe(3);
     expect(f.url).toContain('stairs_wood');
+
+    // and a stone flight in a wooden ROOM stays stone — the surroundings have no say
+    const stoneInWood = mk((c, x, y) => {
+      const inBlock = x >= 1 && x <= 2 && (y === 1 || y === 2);
+      c.floor = inBlock ? 'stairs' : 'wood';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    expect(stairFlight(stoneInWood, SW, SH, 1, 1)!.url).toContain('stairs_narrow');
   });
 
-  it('will not stretch a 4u mesh over a 6u hole — an unspannable block draws ordinary ground', () => {
+  it('will not stretch a mesh to a length it does not have', () => {
+    // three cells of STONE stairs: the stone family is 2 long and the only 3-long mesh is wooden, so
+    // there is nothing to draw. It reports nothing rather than fitting the wrong mesh or the wrong wood.
     const tooLong = mk((c, x, y) => {
-      if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs';   // 3 long, but stone around it
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs';
       if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
-    // the only 3-run mesh is the wooden one, so a stone block of that length degrades to it rather
-    // than leaving a step missing
-    expect(stairFlight(tooLong, SW, SH, 1, 1)!.url).toContain('stairs_wood');
+    expect(stairFlight(tooLong, SW, SH, 1, 1)).toBeNull();
+    expect(ground(tooLong, 1, 1)).toEqual(['floor_tile_large']);
 
-    const noMesh = mk((c, x, y) => {
-      if (x >= 1 && x <= 2 && y >= 1 && y <= 4) c.floor = 'stairs';   // 4 long — nothing spans it
+    // and two cells of WOOD is likewise unspannable
+    const tooShort = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs_wood';
       if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
-    expect(stairFlight(noMesh, SW, SH, 1, 1)).toBeNull();
-    expect(ground(noMesh, 1, 1)).toEqual(['floor_tile_large']);
+    expect(stairFlight(tooShort, SW, SH, 1, 1)).toBeNull();
+  });
+
+  it('two MATERIALS touching are two flights, not one ragged block', () => {
+    const mixed = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
+      if (x >= 1 && x <= 2 && (y === 3 || y === 4)) c.floor = 'stairs_wood';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    // the stone block is 2 long and complete; the wood below it is a separate, unspannable block
+    expect(stairFlight(mixed, SW, SH, 1, 1)).toMatchObject({ run: 2, bh: 2 });
+    expect(stairFlight(mixed, SW, SH, 1, 3)).toBeNull();
   });
 
   /* A SQUARE block walled on two ADJACENT sides is undecidable, and this pins that rather than

@@ -69,7 +69,9 @@ page.on('console', (m) => logs.push(`[page:${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 
 const shots = [];
-const camera = `angle=${flags.get('angle') ?? 35}&pitch=${flags.get('pitch') ?? 38}&zoom=${flags.get('zoom') ?? 1.15}` + (flags.has('focus') ? `&focus=${flags.get('focus')}` : '');
+const camera = `angle=${flags.get('angle') ?? 35}&pitch=${flags.get('pitch') ?? 38}&zoom=${flags.get('zoom') ?? 1.15}` + (flags.has('focus') ? `&focus=${flags.get('focus')}` : '')
+  + (flags.has('stack') ? `&stack=${flags.get('stack')}` : '')
+  + (flags.has('rise') ? `&rise=${flags.get('rise')}` : '');
 
 async function shot(query, name) {
   await page.goto(`http://127.0.0.1:${port}/ascent/cell-snap.html?${query}&${camera}`);
