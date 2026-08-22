@@ -13,7 +13,9 @@ import type { FaceSelectHandle } from './face-select.ts';
 
 export interface SurfacePanelOpts {
   container: HTMLElement;
-  select: FaceSelectHandle;
+  /** Resolved lazily: a texture change rebuilds the object, which swaps every mesh, so the picker
+   *  is re-mounted and the panel must not be holding the dead one. */
+  select: () => FaceSelectHandle | null;
   /** Persist the current hidden set for this mesh. */
   save: () => Promise<{ ok: boolean; error?: string }>;
   /** Shown so it is obvious WHICH mesh an edit is attached to (the store is keyed by mesh URL). */
@@ -27,7 +29,12 @@ const BTN = {
   border: '1px solid #34344e', borderRadius: '5px', cursor: 'pointer', font: '10px system-ui',
 } as Partial<CSSStyleDeclaration>;
 
-export function buildSurfacePanel(opts: SurfacePanelOpts): void {
+export interface SurfacePanelHandle {
+  /** Push the panel's current mode + tolerance into a freshly mounted picker. */
+  rebind: () => void;
+}
+
+export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   const { container, select, save, meshUrl, refit } = opts;
 
   const panel = document.createElement('details');
@@ -107,7 +114,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): void {
     `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c};margin-right:4px"></span>${label} <b>${n}</b>`;
 
   const sync = (): void => {
-    const c = select.counts();
+    const c = select()?.counts() ?? { hover: 0, preview: 0, selected: 0, hidden: 0 };
     read.innerHTML = [
       swatch('#ffffff', 'hovered', c.hover),
       swatch('#ffc76f', 'would add', c.preview),
@@ -122,24 +129,33 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): void {
   const say = (msg: string, bad = false): void => { status.textContent = msg; status.style.color = bad ? '#ff8a78' : '#6fe3d0'; };
 
   cb.addEventListener('change', () => {
-    select.setEnabled(cb.checked);
+    select()?.setEnabled(cb.checked);
     enableTxt.style.color = cb.checked ? '#ffc76f' : '';
     sync();
   });
-  tol.addEventListener('input', () => { tolVal.textContent = `${Number(tol.value).toFixed(1)}°`; select.setTolerance(Number(tol.value)); sync(); });
-  bHide.addEventListener('click', () => { select.hideSelected(); sync(); refit(); say('hidden — Save to persist'); });
-  bClear.addEventListener('click', () => { select.clearSelection(); sync(); });
-  bUnhide.addEventListener('click', () => { select.unhideAll(); sync(); refit(); say('restored — Save to persist'); });
+  tol.addEventListener('input', () => { tolVal.textContent = `${Number(tol.value).toFixed(1)}°`; select()?.setTolerance(Number(tol.value)); sync(); });
+  bHide.addEventListener('click', () => { select()?.hideSelected(); sync(); refit(); say('hidden — Save to persist'); });
+  bClear.addEventListener('click', () => { select()?.clearSelection(); sync(); });
+  bUnhide.addEventListener('click', () => { select()?.unhideAll(); sync(); refit(); say('restored — Save to persist'); });
   bSave.addEventListener('click', () => {
-    void save().then((r) => say(r.ok ? `saved ${select.counts().hidden} hidden face(s)` : (r.error ?? 'save failed'), !r.ok));
+    void save().then((r) => say(r.ok ? `saved ${select()?.counts().hidden ?? 0} hidden face(s)` : (r.error ?? 'save failed'), !r.ok));
   });
 
   tolVal.textContent = '15.0°';
   sync();
   container.appendChild(panel);
 
+  const rebind = (): void => {
+    const h = select();
+    if (!h) return;
+    h.setTolerance(Number(tol.value));
+    h.setEnabled(cb.checked);
+    sync();
+  };
+
   // keep the readout live as the pointer moves over the model
   (panel as HTMLElement & { __sync?: () => void }).__sync = sync;
+  return { rebind };
 }
 
 /** Pull the panel's readout back in line (the picker calls this on every hover change). */
