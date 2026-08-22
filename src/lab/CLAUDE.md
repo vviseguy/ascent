@@ -91,6 +91,83 @@ seam across every planked object. It is kept in the library only so old `?tex=` 
 To add a texture: drop the files in `public/textures/`, add a `TEXTURES` entry (id + label + group +
 `diff` + `scale`, plus `nor` / `arm` / `rough` / `ao` / `color` as available), run `npm run tex:seams`,
 done — it shows up in every type’s dropdown.
+
+## Profiles: naming a look, and sharing it ([material-profiles.ts](material-profiles.ts))
+
+The per-type config above is ONE live config. That is enough to tune a look and not enough to keep
+one — there was no way to name it, save it, diff two of them, or have a second. The only
+persistence was a `?tex=` query string.
+
+A **profile** is a named, git-tracked set of per-type overrides, stored in
+[material-profiles.json](material-profiles.json) and edited from the PROFILE bar at the top of
+TEXTURE SETTINGS ([profile-bar.ts](profile-bar.ts)):
+
+```jsonc
+"dungeon-default": { "label": "Dungeon (default)" },          // the house look
+"timber-hall":     { "label": "Timber hall",
+                     "extends": "dungeon-default",            // <- the sharing mechanism
+                     "types": { "stone": { "texture": "brick" },
+                                "wood":  { "texture": "rough-planks" } } }
+```
+
+- **`extends` is how a look is shared.** A variant names only its deltas, so editing the base moves
+  every profile that inherits from it. `Save as variant` runs `captureDelta`, which diffs the LIVE
+  state against the parent and writes only the difference — a variant can never silently freeze a
+  full copy of its parent and stop tracking it.
+- **The 4-layer swatch cascade below is untouched.** It still decides which material TYPE a given
+  swatch asks for; a profile only swaps the answer table underneath it. Two orthogonal axes:
+  cascade = *which type*, profile = *what that type is made of*.
+- **`rev` is a content hash** (FNV-1a over the resolved values). Two profiles that resolve the same
+  share a rev; an edited profile gets a new one. Nobody has to remember to bump a version.
+- Cycles and unknown parents warn and degrade to a shorter chain — a broken profile still renders
+  something you can look at and fix.
+- Written through `POST /__lab/profiles` (dev middleware, vite.config.ts), key-sorted, so a look
+  change reviews as a readable diff instead of living in someone’s URL.
+
+### Approval linkage — which objects have fallen behind
+
+Approving still freezes a COPY of the resolved materials (that is what keeps the game stable while
+the lab is being retuned), but the entry now also records `materials.profile = { id, rev }`. So:
+
+```
+approvedProfile(id)     the profile ref an object was approved under
+staleAgainst(rev)       approved ids whose frozen materials do NOT match rev
+```
+
+`rev` is the **live** rev at approval time, not the profile’s — if the reviewer had drifted off the
+profile before approving, the store records the drift, because that is what was actually frozen.
+Entries approved before profiles existed have no ref and count as stale: their look is unknown,
+not known-current.
+
+## The CONTACT SHEET — `npm run sheet` ([sheet.ts](sheet.ts))
+
+The lab shows one object at a time, which is right for approving a footprint and wrong for judging
+a material: you tune stone on a wall, it looks great, and three objects later it has wrecked the
+barrels. Every material decision is a decision about the whole SET.
+
+`/ascent/sheet.html` renders every object on one grid under the current profile, with the same
+PROFILE + TEXTURE SETTINGS panel. Change a texture and they all re-bake together — affordable
+precisely because [tiling.ts](tiling.ts) shares materials across objects, so N objects cost one
+array build, not N.
+
+| param | effect |
+|---|---|
+| *(default)* | the approved store — the set that actually ships |
+| `?pack=<id>` | a whole KayKit pack (`dungeon_remastered`, `furniture`, …) |
+| `?ids=a,b,c` | an explicit list |
+| `?limit=<n>` `?cols=<n>` | cap the grid (default 48) / override the column count |
+
+Cells are badged **current / behind / not approved** against the live rev, and the HUD totals them,
+so staleness is something you SEE rather than something you have to remember to ask about. The
+camera is ORTHOGRAPHIC front-3/4: every cell is framed identically (a perspective camera would
+foreshorten the far rows and you would be comparing materials at different apparent scales), and
+rows are spaced 1.75x deeper than they are wide so the front row does not stand in front of the one
+behind it.
+
+**Not yet built: bulk re-approve from the sheet.** It is the obvious next button, but the sheet
+normalises each object’s scale into its cell, which would corrupt the footprint if approval read
+the placed root. Capture the build BEFORE `place()` scales it, or it will write wrong boxes.
+
 ## Hop 1: swatch → PRESET is a 4-layer cascade (most-specific wins)
 
 A **preset** is the in-between abstraction (the "type"): a clean 1:1 to a texture + surface. To add a

@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
     "lab": "vite --open /ascent/lab.html",
+    "sheet": "vite --open /ascent/sheet.html",
     "lab:snap": "node scripts/lab-snap.mjs",
     "cell:snap": "node scripts/cell-snap.mjs",
     "editor:snap": "node scripts/editor-snap.mjs",

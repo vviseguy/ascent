@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "profiles": {
+    "dungeon-default": {
+      "label": "Dungeon (default)"
+    },
+    "dungeon-damp": {
+      "label": "Dungeon — damp",
+      "extends": "dungeon-default",
+      "ao": 0.85,
+      "types": {
+        "stone": { "roughness": 1 },
+        "floor": { "texture": "marble", "roughness": 0.55 }
+      }
+    },
+    "timber-hall": {
+      "label": "Timber hall",
+      "extends": "dungeon-default",
+      "types": {
+        "stone": { "texture": "brick" },
+        "wood": { "texture": "rough-planks" },
+        "grained": { "texture": "medieval-wood" }
+      }
+    }
+  }
+}

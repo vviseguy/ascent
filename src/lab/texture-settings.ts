@@ -12,10 +12,23 @@
 
 import { TEXTURES, CONFIGURABLE_PRESETS, getConfig, setTypeSetting, resetConfig, getRelief, setRelief, getAOStrength, setAOStrength, type Preset } from './texture-catalog.ts';
 
+/** What the caller gets back — enough to re-sync every widget after the config is replaced from
+ *  outside (applying a profile), without this module knowing why. */
+export interface TextureSettingsHandle {
+  /** Pull every control back in line with the live config. */
+  resync: () => void;
+}
+
 export interface TextureSettingsOpts {
   container: HTMLElement;
   /** Called (debounced) after the config mutates — the caller re-bakes the object + writes the URL. */
   onChange: () => void;
+  /** Left offset of the panel. Defaults to 236px, which clears the LAB's object picker; pages
+   *  without one (the contact sheet) pass a smaller value so the panel does not float in a gap. */
+  left?: string;
+  /** Mounted at the TOP of the panel, above everything. The lab uses it for the profile bar; this
+   *  module stays unaware of what a profile is. */
+  header?: (mount: HTMLElement) => void;
   /** Extra global sliders the CALLER owns (the lab's studio lights). They live in this panel because
    *  that is where you are looking while judging a surface, but they must NOT trigger a re-bake —
    *  moving a light is a render-only change — so they bypass `onChange` entirely. */
@@ -32,8 +45,8 @@ const TYPE_LABEL: Record<Preset, string> = {
 const GROUP_LABEL: Record<string, string> = { neutral: 'Flat', stone: 'Stone', floor: 'Floor', wood: 'Wood', metal: 'Metal', cloth: 'Cloth' };
 
 /** Mount the texture-settings panel. Each row = one material type: texture <select> + R/M sliders. */
-export function buildTextureSettings(opts: TextureSettingsOpts): void {
-  const { container, onChange, extras = [] } = opts;
+export function buildTextureSettings(opts: TextureSettingsOpts): TextureSettingsHandle {
+  const { container, onChange, extras = [], header, left = '236px' } = opts;
 
   // debounce so dragging a slider doesn't re-bake on every pixel.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -43,7 +56,7 @@ export function buildTextureSettings(opts: TextureSettingsOpts): void {
   panel.id = 'texture-settings';
   panel.open = true;
   Object.assign(panel.style, {
-    position: 'fixed', left: '236px', top: '84px', width: '238px', zIndex: '25',
+    position: 'fixed', left, top: '84px', width: '238px', zIndex: '25',
     color: '#bcd', font: '11px/1.4 system-ui',
     background: 'rgba(10,10,22,.84)', border: '1px solid rgba(120,130,170,.28)',
     borderRadius: '10px', padding: '8px 10px',
@@ -75,7 +88,14 @@ export function buildTextureSettings(opts: TextureSettingsOpts): void {
   };
 
   const inputBg = { background: 'rgba(20,20,34,.9)', color: '#cde', border: '1px solid rgba(120,130,170,.3)', borderRadius: '6px' } as Partial<CSSStyleDeclaration>;
-  // per-row resync hooks (for Reset).
+  if (header) {
+    const mount = document.createElement('div');
+    mount.style.margin = '0 0 8px';
+    panel.appendChild(mount);
+    header(mount);
+  }
+
+  // per-row resync hooks (for Reset, and for an externally applied profile).
   const resync: (() => void)[] = [];
 
   // --- GLOBAL surface + studio controls, above the per-type rows ---
@@ -158,4 +178,5 @@ export function buildTextureSettings(opts: TextureSettingsOpts): void {
   panel.appendChild(reset);
 
   container.appendChild(panel);
+  return { resync: () => { for (const r of resync) r(); } };
 }
