@@ -29,7 +29,7 @@
 // Deterministic: seeded sub-streams per phase, index-sorted iteration, integer hashes, no float.
 
 import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
-import { template, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
+import { template, settleMask, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
 import {
   gridAt, txAt, findRoute, pinRouteOpen, routeGuaranteed, reachSet, keepsReach, stillConnected,
@@ -296,17 +296,15 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
      survives, otherwise the canonical LOWEST surviving option. Every field ends a singleton. ---- */
   {
     const tx = begin(grid);
-    const lowest = (m: Mask): Mask => m & -m; // the canonical option, when the default is gone
-    const decide = (m: Mask, preferred: Mask): Mask => ((m & preferred) !== 0 ? (m & preferred) : lowest(m));
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const f = grid.cells[y * w + x]!;
         stamp(tx, { x, y, w: 1, h: 1 }, template({
-          wallN: decide(f.wallN, NONE),
-          wallW: decide(f.wallW, NONE),
-          floor: decide(f.floor, STONE),
-          corner: decide(f.corner, SOLID_CORNER),
-          wallType: decide(f.wallType, SOLID_TYPE),
+          wallN: settleMask(f.wallN, 'wallN'),
+          wallW: settleMask(f.wallW, 'wallW'),
+          floor: settleMask(f.floor, 'floor'),
+          corner: settleMask(f.corner, 'corner'),
+          wallType: settleMask(f.wallType, 'wallType'),
         }));
       }
     }

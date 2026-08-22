@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateEmergent, resolveEmergent } from './cell-emergent.ts';
 import { buildCellGraph, reachableFrom, nodeId } from './cell-graph.ts';
-import { hasConflict, domainSize, FIELD_KEYS } from './cell-field.ts';
+import { hasConflict, domainSize, FIELD_KEYS, previewCell, settleMask, fullField, template, floors } from './cell-field.ts';
 import { listStructures, getStructure } from './cell-structures.ts';
 import { planMaze, mazeEdges, MAZE_KINDS, type MazeKind } from './cell-maze.ts';
 import { makeGrid } from './cell-grid.ts';
@@ -218,5 +218,33 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
       expect(s.ringSealed).toBeGreaterThan(0); // most of the ring closes…
       expect(s.doorsKept).toBeGreaterThan(0);  // …and what refuses is the way in
     }
+  });
+});
+
+describe('cell-emergent — the editor preview and the generator settle IDENTICALLY', () => {
+  it('previewCell reproduces what the generator produces, field for field', () => {
+    // If these ever disagree, the editor shows you a structure that is not the one that gets built —
+    // which is exactly the drift the shared SETTLE_DEFAULTS exists to prevent.
+    for (const seed of SEEDS) {
+      const r = run(seed);
+      const built = resolveEmergent(r, seed);
+      // the generator settles in place, so previewing its own finished field must be a no-op
+      r.grid.cells.forEach((f, i) => expect(previewCell(f)).toEqual(built[i]));
+    }
+  });
+
+  it('an UNCLAIMED field previews as walkable stone, not as a pit', () => {
+    const blank = fullField();
+    const c = previewCell(blank)!;
+    expect(c.floor).toBe('stone');   // NOT `none`, which is what a bare collapse would give
+    expect(c.wallN).toBe('none');
+    expect(c.corner).toBe('solid');
+    expect(c.wallType).toBe('solid');
+  });
+
+  it('settle always decides, even when the default was ruled out', () => {
+    const noStone = template({ floor: floors('dirt', 'wood') });
+    expect(domainSize(settleMask(noStone.floor, 'floor'))).toBe(1);
+    expect(previewCell(noStone)!.floor).toBe('dirt'); // canonical lowest of what survives
   });
 });

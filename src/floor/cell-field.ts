@@ -140,6 +140,44 @@ export const isOpen = (f: CellField): boolean => {
   return FIELD_KEYS.every((k) => f[k] === o[k]);
 };
 
+/**
+ * THE SETTLE DEFAULTS — what an undecided field becomes when nobody claimed it.
+ *
+ * Open walls, stone ground, a solid junction, no opening. Exported and shared, because the GENERATOR
+ * settles with these and the EDITOR previews with them: if the two drifted, the editor would show you
+ * a structure that is not the one the generator builds. (It did, before this existed — a blank grid
+ * previewed as an all-pit floor, because a bare `collapse` takes the canonical lowest option and the
+ * lowest floor material happens to be `none`.)
+ */
+export const SETTLE_DEFAULTS: Record<FieldKey, Mask> = {
+  wallN: maskOf(SEGS, ['none']),
+  wallW: maskOf(SEGS, ['none']),
+  floor: maskOf(FLOOR_MATERIALS, ['stone']),
+  corner: maskOf(CORNERS, ['solid']),
+  wallType: maskOf(WALL_TYPES, ['solid']),
+};
+
+/** Narrow one field to its settle default, or — if the default was ruled out — to the canonical
+ *  lowest surviving option. ALWAYS returns a singleton, which is what "fully determined" requires. */
+export const settleMask = (m: Mask, key: FieldKey): Mask => {
+  if (m === 0) return 0;
+  const pref = m & SETTLE_DEFAULTS[key];
+  return pref !== 0 ? pref : (m & -m);
+};
+
+/** The whole field, settled. */
+export const settleField = (f: CellField): CellField => ({
+  floor: settleMask(f.floor, 'floor'),
+  wallN: settleMask(f.wallN, 'wallN'),
+  wallW: settleMask(f.wallW, 'wallW'),
+  corner: settleMask(f.corner, 'corner'),
+  wallType: settleMask(f.wallType, 'wallType'),
+});
+
+/** What the generator will actually build from this field. Use this for any PREVIEW — a bare
+ *  `collapse` shows the canonical-lowest option, which is not what ships. */
+export const previewCell = (f: CellField): Cell | null => collapse(settleField(f));
+
 /** How a collapse chooses among surviving options. Returns an index into `options`. */
 export type Pick = (field: FieldKey, options: readonly string[]) => number;
 
