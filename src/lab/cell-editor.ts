@@ -33,6 +33,9 @@ import {
   type CellField, type Mask,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { buildGrid, CELL } from './cell-preview.ts';
 import type { Cell } from '../floor/cell.ts';
 
 /* --------------------------------- palette ---------------------------------- */
@@ -254,6 +257,7 @@ function render(): void {
   }
 
   buildReadout();
+  schedule3d();
 }
 
 /* --------------------------------- readout ---------------------------------- */
@@ -354,7 +358,7 @@ function buildPanel(): void {
           if (src && x < ow) cells[y * stride() + x] = { ...src };
         }
       }
-      buildPanel(); render();
+      buildPanel(); render(); frameCamera();
     },
   }, 'resize')));
   p.append(h('div', { class: 'row', style: 'margin-top:6px' },
@@ -403,7 +407,7 @@ function load(name: string): void {
   pushUndo();
   W = s.w; H = s.h;
   cells = s.cells.map((f) => ({ ...f }));
-  buildPanel(); render();
+  buildPanel(); render(); frameCamera();
   status(`loaded “${name}”`);
 }
 
@@ -431,6 +435,77 @@ async function del(name: string): Promise<void> {
   status(`deleted “${name}”`);
 }
 
+/* ----------------------------------- 3D ------------------------------------- */
+// The preview renders exactly what `cell-place.ts` says, so what you see here is what the generator
+// builds — the editor never decides placement itself.
+
+let scene: THREE.Scene | null = null;
+let camera: THREE.PerspectiveCamera;
+let renderer3d: THREE.WebGLRenderer;
+let controls3d: OrbitControls;
+let built: THREE.Group | null = null;
+let rebuildTimer: number | undefined;
+
+function init3d(): void {
+  const host = el('view3d');
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x15181c);
+  camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
+  renderer3d = new THREE.WebGLRenderer({ antialias: true });
+  host.append(renderer3d.domElement);
+  controls3d = new OrbitControls(camera, renderer3d.domElement);
+  controls3d.enableDamping = true;
+
+  const key = new THREE.DirectionalLight(0xffffff, 1.5);
+  key.position.set(6, 12, 5);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0x8899ff, 0.4);
+  fill.position.set(-6, 5, -4);
+  scene.add(fill);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+  // setSize's third argument must NOT be false here: it would leave the canvas at its intrinsic CSS
+  // size, overflowing the pane, with an aspect that no longer matches what is on screen — the render
+  // ends up outside the visible area entirely.
+  const fit = (): void => {
+    const r = host.getBoundingClientRect();
+    const wpx = Math.max(1, Math.floor(r.width)), hpx = Math.max(1, Math.floor(r.height));
+    renderer3d.setSize(wpx, hpx);
+    camera.aspect = wpx / hpx;
+    camera.updateProjectionMatrix();
+  };
+  fit();
+  // the pane is flex-sized, so its height is not final at boot — observe it rather than guess
+  new ResizeObserver(fit).observe(host);
+  (function loop(): void { controls3d.update(); if (scene) renderer3d.render(scene, camera); requestAnimationFrame(loop); })();
+  frameCamera();
+}
+
+function frameCamera(): void {
+  const span = Math.max(W, H) * CELL;
+  camera.position.set(span * 0.9, span * 0.85, span * 0.9);
+  controls3d.target.set(0, 0, 0);
+  controls3d.update();
+}
+
+/** Rebuild the preview, debounced — painting fires on every click and a full reload per stroke would
+ *  make the editor feel stuck. */
+function schedule3d(): void {
+  if (!scene) return;
+  window.clearTimeout(rebuildTimer);
+  rebuildTimer = window.setTimeout(() => void rebuild3d(), 120);
+}
+
+async function rebuild3d(): Promise<void> {
+  if (!scene) return;
+  const resolved = cells.map((f) => previewCell(f)) as (Cell | null)[];
+  // the stored grid is the point lattice; only W x H of it has ground
+  const group = await buildGrid(resolved, stride(), H + 1, { w: W, h: H });
+  if (built) { scene.remove(built); }
+  built = group;
+  scene.add(group);
+}
+
 /* ---------------------------------- boot ------------------------------------ */
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -440,6 +515,7 @@ el('hint').textContent =
   + 'the grid is the POINT lattice, so a w×h structure stores (w+1)×(h+1)';
 cells = blankGrid();
 buildPanel();
+init3d();
 render();
 void fetchList();
 void template;

@@ -45,7 +45,22 @@ export interface CellStructure {
 /** Row stride of the stored point lattice. */
 export const stride = (s: { w: number }): number => s.w + 1;
 
-const store = data as unknown as { version: number; structures: Record<string, CellStructure> };
+const store = data as unknown as {
+  version: number;
+  valueSets?: { seg: number; floor: number; corner: number; wallType: number };
+  structures: Record<string, CellStructure>;
+};
+
+/**
+ * The value-set sizes these masks were written against.
+ *
+ * A domain is a bitmask indexed by POSITION, so appending a value to any enum silently changes what an
+ * existing mask means: a floor mask of 15 meant "any material" when there were four, and means "any
+ * material EXCEPT rock" now there are five. Nothing breaks loudly — a structure just quietly stops
+ * abstaining where it used to. `cell-structures.test.ts` asserts these still match the live enums, so
+ * the next person to append a value is told to re-run the migration instead of finding out later.
+ */
+export const STORED_VALUE_SETS = store.valueSets;
 
 export const STRUCTURE_VERSION = store.version;
 /** Names in a FIXED order — sorted, so any iteration over structures is deterministic. */

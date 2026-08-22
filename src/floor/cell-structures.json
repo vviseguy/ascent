@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "valueSets": {
+    "seg": 4,
+    "floor": 5,
+    "corner": 3,
+    "wallType": 6
+  },
   "structures": {
     "odd wall section": {
       "w": 2,
