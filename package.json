@@ -15,6 +15,8 @@
     "lab:snap": "node scripts/lab-snap.mjs",
     "cell:snap": "node scripts/cell-snap.mjs",
     "editor:snap": "node scripts/editor-snap.mjs",
+    "tex:seams": "node scripts/tex-seam-check.mjs",
+    "tex:tile": "node scripts/tex-tile-shot.mjs",
     "probe:palette": "node scripts/palette-probe.mjs",
     "prove:fixed": "node --experimental-strip-types src/sim/fixed/prove.ts",
     "prove:floor": "node --experimental-strip-types src/floor/prove.ts",
