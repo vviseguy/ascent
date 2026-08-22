@@ -41,6 +41,8 @@ import {
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { buildGrid, CELL } from './cell-preview.ts';
+import { FLOOR_HEIGHT } from '../game/tower.ts';
+import { toFloat } from '../sim/fixed/fixed.ts';
 
 /* --------------------------------- palette ---------------------------------- */
 // The colours, the mixing rule and the hatches live in `cell-visual.ts`, so the grid, the legend and
@@ -53,7 +55,22 @@ const domColor = mixMask;
 const U = 46;   // px per cell — big enough to drag a brush across without missing targets
 const PAD = 40; // room for the edge handles
 let W = 6, H = 5;
+/**
+ * STOREYS. A structure is not always a floor plan: a staircase has to say something about the level
+ * ABOVE it — that there is a hole in that floor to climb through, and no wall standing where you
+ * arrive — and a single lattice has nowhere to put that.
+ *
+ * `cells` stays ONE flat array, level-major, so every existing index calculation is unchanged for
+ * level 0 and the storage format stays a plain list. `L` is which level you are editing; `viewAll`
+ * only affects the 3D pane.
+ */
+let LEVELS = 1;
+let L = 0;
+let viewAll = true;
 const stride = (): number => W + 1;
+const levelSize = (): number => (W + 1) * (H + 1);
+/** Base index of the level being edited — every paint and read goes through this. */
+const base = (): number => L * levelSize();
 let cells: CellField[] = [];
 const undoStack: string[] = [];
 let showReach = false;
@@ -74,11 +91,11 @@ let selection: { x0: number; y0: number; x1: number; y1: number } | null = null;
 let activeBrush: string | null = null;
 let dragging = false;
 
-interface Stored { w: number; h: number; cells: CellField[] }
+interface Stored { w: number; h: number; levels?: number; cells: CellField[] }
 let structures: Record<string, Stored> = {};
 let brushes: Record<string, Stored> = {};
 
-const blankGrid = (): CellField[] => Array.from({ length: (W + 1) * (H + 1) }, fullField);
+const blankGrid = (): CellField[] => Array.from({ length: (W + 1) * (H + 1) * LEVELS }, fullField);
 const el = (id: string): HTMLElement => document.getElementById(id)!;
 
 function h(tag: string, attrs: Record<string, unknown> = {}, ...kids: (Node | string)[]): HTMLElement {
@@ -119,7 +136,8 @@ const hasFloor = (px: number, py: number): boolean => ownsFloor(px, py, W, H);
  */
 function forDisplay(): CellField[] {
   return cells.map((f, i) => {
-    const px = i % stride(), py = Math.floor(i / stride());
+    const within = i % levelSize();
+    const px = within % stride(), py = Math.floor(within / stride());
     if (hasN(px) && hasW(py) && hasFloor(px, py)) return f;
     return {
       ...f,
@@ -137,7 +155,15 @@ const forStore = (): CellField[] => abstainUnowned(cells, W, H);
 
 /** Resolve for the PREVIEW under the chosen ambiguity rule. `generator` is the real one — literally
  *  the `settleField` the generator applies — and the rest are for seeing what else it could become. */
-function resolved(): (Cell | null)[] {
+/** The resolved cells of ONE level. */
+function resolvedLevel(level: number): (Cell | null)[] {
+  const all = resolvedAll();
+  return all.slice(level * levelSize(), (level + 1) * levelSize());
+}
+
+function resolved(): (Cell | null)[] { return resolvedLevel(L); }
+
+function resolvedAll(): (Cell | null)[] {
   return forDisplay().map((f, i) => {
     if (ambiguity === 'generator') return collapse(settleField(f));
     if (ambiguity === 'none' || ambiguity === 'wall') {
@@ -155,7 +181,7 @@ function resolved(): (Cell | null)[] {
 type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType';
 
 function applyAt(px: number, py: number, what: Paintable, clear: boolean): void {
-  const f = cells[py * stride() + px];
+  const f = cells[base() + py * stride() + px];
   if (!f) return;
   const pick = (): Mask | null => {
     if (what === 'wallN' || what === 'wallW') return brush.seg.size ? segs(...brush.seg) : null;
@@ -182,7 +208,7 @@ function stampBrush(px: number, py: number): void {
       const dx = px + bx, dy = py + by;
       if (dx > W || dy > H) continue;
       const src = b.cells[by * bs + bx];
-      if (src) cells[dy * stride() + dx] = { ...src };
+      if (src) cells[base() + dy * stride() + dx] = { ...src };
     }
   }
   render();
@@ -203,16 +229,46 @@ function edge(side: 'N' | 'S' | 'E' | 'W', delta: 1 | -1): void {
   const old = cells, ow = stride();
   const shiftX = side === 'W' ? delta : 0;
   const shiftY = side === 'N' ? delta : 0;
-  const next: CellField[] = Array.from({ length: (nw + 1) * (nh + 1) }, fullField);
-  for (let py = 0; py <= H; py++) {
-    for (let px = 0; px <= W; px++) {
-      const tx = px + shiftX, ty = py + shiftY;
-      if (tx < 0 || ty < 0 || tx > nw || ty > nh) continue;
-      next[ty * (nw + 1) + tx] = { ...old[py * ow + px]! };
+  const oldLevel = levelSize(), newLevel = (nw + 1) * (nh + 1);
+  const next: CellField[] = Array.from({ length: newLevel * LEVELS }, fullField);
+  for (let lv = 0; lv < LEVELS; lv++) {           // every storey resizes together — they are one shape
+    for (let py = 0; py <= H; py++) {
+      for (let px = 0; px <= W; px++) {
+        const tx = px + shiftX, ty = py + shiftY;
+        if (tx < 0 || ty < 0 || tx > nw || ty > nh) continue;
+        next[lv * newLevel + ty * (nw + 1) + tx] = { ...old[lv * oldLevel + py * ow + px]! };
+      }
     }
   }
   W = nw; H = nh; cells = next;
   buildPanel(); frameCamera();
+}
+
+/* ---------------------------------- storeys ---------------------------------- */
+
+/** Add a storey ABOVE the current one, blank (abstaining), and move to it. */
+function addLevel(): void {
+  pushUndo();
+  const blank = Array.from({ length: levelSize() }, fullField);
+  cells = [...cells, ...blank];
+  LEVELS++;
+  L = LEVELS - 1;
+  buildPanel();
+}
+
+/** Drop the TOP storey. Never the last one — a structure with no levels is not a structure. */
+function removeLevel(): void {
+  if (LEVELS <= 1) return;
+  pushUndo();
+  cells = cells.slice(0, (LEVELS - 1) * levelSize());
+  LEVELS--;
+  if (L >= LEVELS) L = LEVELS - 1;
+  buildPanel();
+}
+
+function setLevel(n: number): void {
+  L = Math.max(0, Math.min(LEVELS - 1, n));
+  buildPanel();
 }
 
 /* --------------------------------- rendering -------------------------------- */
@@ -246,10 +302,42 @@ function render(): void {
     if (start >= 0) reach = reachableFromSet(g, [start]);
   }
 
+  /* THE STOREY BELOW, ghosted underneath. Editing an upper level blind is guesswork — the whole point
+     of the level above a staircase is that its hole lines up with the flight, and you cannot line
+     anything up against a blank sheet. Drawn first so everything real sits on top of it. */
+  if (L > 0) {
+    const below = resolvedLevel(L - 1);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const c = below[y * stride() + x];
+        if (!c || c.floor === 'none') continue;
+        svg.append(svgEl('rect', {
+          x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
+          fill: FLOOR_COLOR[c.floor], opacity: 0.22, 'pointer-events': 'none',
+        }));
+      }
+    }
+    for (let py = 0; py <= H; py++) {
+      for (let px = 0; px <= W; px++) {
+        const c = below[py * stride() + px];
+        if (!c) continue;
+        const ghost = (x2: number, y2: number, seg: Seg): void => {
+          if (seg === 'none') return;
+          svg.append(svgEl('line', {
+            x1: X(px), y1: Y(py), x2, y2, stroke: SEG_COLOR[seg], 'stroke-width': 6,
+            opacity: 0.18, 'stroke-linecap': 'round', 'pointer-events': 'none',
+          }));
+        };
+        if (hasN(px)) ghost(X(px + 1), Y(py), c.wallN);
+        if (hasW(py)) ghost(X(px), Y(py + 1), c.wallW);
+      }
+    }
+  }
+
   // FLOOR — only where a cell exists
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const f = cells[y * stride() + x]!;
+      const f = cells[base() + y * stride() + x]!;
       const rect = svgEl('rect', {
         x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
         fill: domColor(f.floor, FLOOR_MATERIALS, FLOOR_COLOR),
@@ -295,7 +383,7 @@ function render(): void {
   // WALLS — drawn only where the edge geometrically exists
   for (let py = 0; py <= H; py++) {
     for (let px = 0; px <= W; px++) {
-      const f = cells[py * stride() + px]!;
+      const f = cells[base() + py * stride() + px]!;
       const line = (x2: number, y2: number, m: Mask, what: 'wallN' | 'wallW'): void => {
         const decided = domainSize(m) === 1;
         const hit = svgEl('line', {
@@ -327,7 +415,7 @@ function render(): void {
   // CORNERS
   for (let py = 0; py <= H; py++) {
     for (let px = 0; px <= W; px++) {
-      const f = cells[py * stride() + px]!;
+      const f = cells[base() + py * stride() + px]!;
       const decided = domainSize(f.corner) === 1;
       const dot = svgEl('circle', {
         cx: X(px), cy: Y(py), r: decided ? 6 : 4,
@@ -457,6 +545,26 @@ function buildBrushBar(): void {
       : vals.length === 1 ? vals[0]!
         : `${vals.join(' + ')}  — a SET, left undecided`));
   bar.append(h('span', { class: 'bb-hint' }, 'right-click = abstain'));
+
+  /* STOREY CONTROL. Lives here rather than in the panel because it changes what the schematic MEANS —
+     you need to see which level you are on in the same glance as what you are painting. */
+  const lv = h('span', { class: 'bb-levels' });
+  lv.append(h('span', { class: 'bb-label' }, 'storey'));
+  for (let i = LEVELS - 1; i >= 0; i--) {          // highest at the left, the way a section is drawn
+    lv.append(h('span', {
+      class: `lvchip${i === L ? ' on' : ''}`, title: `edit storey ${i}`,
+      onclick: () => setLevel(i),
+    }, String(i)));
+  }
+  lv.append(h('button', { onclick: addLevel, title: 'add a storey above' }, '+'));
+  if (LEVELS > 1) lv.append(h('button', { onclick: removeLevel, title: 'drop the top storey' }, '−'));
+  if (LEVELS > 1) {
+    lv.append(h('span', {
+      class: `lvchip wide${viewAll ? ' on' : ''}`, title: '3D: show every storey, or only this one',
+      onclick: () => { viewAll = !viewAll; buildPanel(); },
+    }, viewAll ? 'all' : 'this'));
+  }
+  bar.append(lv);
 }
 
 /** The key. Generated from the same tables the grid draws from, so it cannot go stale. */
@@ -486,7 +594,7 @@ function buildReadout(res: (Cell | null)[]): void {
   const conflicts = res.filter((c) => c === null).length;
   let undecided = 0;
   for (let py = 0; py <= H; py++) for (let px = 0; px <= W; px++) {
-    const f = cells[py * stride() + px]!;
+    const f = cells[base() + py * stride() + px]!;
     if (hasFloor(px, py) && domainSize(f.floor) > 1) undecided++;
     if (hasN(px) && domainSize(f.wallN) > 1) undecided++;
     if (hasW(py) && domainSize(f.wallW) > 1) undecided++;
@@ -508,11 +616,16 @@ function buildReadout(res: (Cell | null)[]): void {
       if (c && c.floor !== 'none' && c.floor !== 'rock' && seen[nodeId(stride(), x, y)]) connected++;
     }
   }
-  const warn = conflicts > 0 || walkable === 0 || connected < walkable;
+  /* An upper storey with no ground is normal — that is what an open shaft over a staircase IS — so it
+     is only worth warning about on the ground floor, where it means the structure has no room in it. */
+  const groundFloor = L === 0;
+  const warn = conflicts > 0 || (walkable === 0 && groundFloor) || connected < walkable;
   box.textContent = [
-    `${W}×${H} floor · ${W + 1}×${H + 1} stored`,
+    `${W}×${H} floor · ${W + 1}×${H + 1} stored`
+      + (LEVELS > 1 ? ` · storey ${L} of ${LEVELS}` : ''),
     `ground: ${walkable} walkable · ${pit} pit · ${solid} rock`,
-    walkable === 0 ? '⚠ no walkable ground at all'
+    walkable === 0
+      ? (groundFloor ? '⚠ no walkable ground at all' : 'open to the storey below — no ground on this one')
       : connected < walkable ? `⚠ ${walkable - connected} walkable cell(s) cut off from the rest`
         : 'walkable area is one piece',
     `${undecided} field(s) undecided — the generator will choose`,
@@ -672,19 +785,28 @@ function load(name: string): void {
   if (!s) return;
   pushUndo();
   W = s.w; H = s.h;
+  // levels are inferred from the array when absent, so a structure saved before storeys existed loads
+  // as the single-level structure it is
+  LEVELS = Math.max(1, s.levels ?? (Math.round(s.cells.length / ((s.w + 1) * (s.h + 1))) || 1));
+  L = 0;
   cells = s.cells.map((f) => ({ ...f }));
+  framedFor = '';
   buildPanel(); frameCamera();
-  status(`loaded “${name}”`);
+  status(`loaded “${name}”${LEVELS > 1 ? ` · ${LEVELS} storeys` : ''}`);
 }
 
 async function saveStructure(): Promise<void> {
   const name = await ask({
     title: 'Save structure', input: 'new structure', ok: 'Save',
-    body: `${W}×${H} floor cells. The generator places these — an existing structure of the same name is overwritten.`,
+    body: `${W}×${H} floor cells${LEVELS > 1 ? ` × ${LEVELS} storeys` : ''}. The generator places these — an existing `
+      + `structure of the same name is overwritten.`
+      + (LEVELS > 1 ? ' NOTE: the generator builds one floor at a time and will not place a multi-storey structure yet.' : ''),
   });
   if (!name) return;
   // the padding rule is applied on the way OUT, so the store never carries phantom geometry
-  if (await post('cell-structures', name, { structure: { w: W, h: H, cells: forStore() } })) {
+  if (await post('cell-structures', name, {
+    structure: { w: W, h: H, ...(LEVELS > 1 ? { levels: LEVELS } : {}), cells: forStore() },
+  })) {
     await refresh();
     status(`saved structure “${name}”`);
   }
@@ -730,6 +852,7 @@ async function clearAll(): Promise<void> {
   });
   if (!go) return;
   pushUndo();
+  LEVELS = 1; L = 0;
   cells = blankGrid();
   render();
 }
@@ -781,7 +904,7 @@ function frameCamera(): void {
   if (!scene) return;
   const plate = new THREE.Box3(
     new THREE.Vector3((-(W + 1) * CELL) / 2, 0, (-(H + 1) * CELL) / 2),
-    new THREE.Vector3(((W + 1) * CELL) / 2, 0, ((H + 1) * CELL) / 2),
+    new THREE.Vector3(((W + 1) * CELL) / 2, toFloat(FLOOR_HEIGHT) * (LEVELS - 1), ((H + 1) * CELL) / 2),
   );
   const box = built ? new THREE.Box3().setFromObject(built).union(plate) : plate;
   const centre = box.getCenter(new THREE.Vector3());
@@ -802,14 +925,62 @@ function schedule3d(): void {
 let framedFor = '';
 async function rebuild3d(): Promise<void> {
   if (!scene) return;
-  const group = await buildGrid(resolved(), stride(), H + 1, { w: W, h: H });
+  /* Every storey, FLOOR_HEIGHT apart — or just the one being edited. "Take off layers" is the reason
+     levels are worth having at all: you cannot check that a ceiling is open from above it. */
+  const shown = viewAll ? Array.from({ length: LEVELS }, (_, i) => i) : [L];
+  const group = new THREE.Group();
+  for (const i of shown) {
+    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H });
+    deck.position.y = toFloat(FLOOR_HEIGHT) * i;
+    group.add(deck);
+  }
   if (built) scene.remove(built);
   built = group;
   scene.add(group);
   // Re-frame when the SUBJECT changes, not on every stroke — otherwise the camera yanks back to
   // default mid-edit and you lose the angle you were inspecting from.
-  const key = `${W}x${H}`;
+  const key = `${W}x${H}x${shown.length}`;
   if (key !== framedFor) { framedFor = key; frameCamera(); }
+}
+
+/* ----------------------------------- panning ---------------------------------- */
+
+/**
+ * Drag the blueprint around with the MIDDLE button, or with space held. Left-drag is taken — it paints
+ * — and a big multi-storey structure does not fit the pane, so scrollbars alone made lining up an
+ * upper floor with the one below it a chore. Space-drag is what every drawing tool does.
+ */
+function wirePan(): void {
+  const pane = el('twod');
+  let panning = false, sx = 0, sy = 0, sl = 0, st = 0;
+  let space = false;
+
+  const begin = (ev: MouseEvent): void => {
+    panning = true; sx = ev.clientX; sy = ev.clientY; sl = pane.scrollLeft; st = pane.scrollTop;
+    pane.classList.add('panning');
+    ev.preventDefault();
+  };
+  pane.addEventListener('mousedown', (ev) => {
+    if (ev.button === 1 || (space && ev.button === 0)) begin(ev);
+  });
+  window.addEventListener('mousemove', (ev) => {
+    if (!panning) return;
+    pane.scrollLeft = sl - (ev.clientX - sx);
+    pane.scrollTop = st - (ev.clientY - sy);
+  });
+  window.addEventListener('mouseup', () => { panning = false; pane.classList.remove('panning'); });
+  window.addEventListener('keydown', (ev) => {
+    if (ev.code !== 'Space' || ev.repeat) return;
+    // not while typing into the save dialog
+    if (document.activeElement instanceof HTMLInputElement) return;
+    space = true; pane.classList.add('pannable'); ev.preventDefault();
+  });
+  window.addEventListener('keyup', (ev) => {
+    if (ev.code !== 'Space') return;
+    space = false; pane.classList.remove('pannable');
+  });
+  // the middle button otherwise starts the browser's own autoscroll
+  pane.addEventListener('auxclick', (ev) => { if (ev.button === 1) ev.preventDefault(); });
 }
 
 /* --------------------------------- splitter --------------------------------- */
@@ -858,3 +1029,4 @@ init3d();
 initSplit();
 buildPanel();   // draw immediately; the store fetch only fills the two lists
 void refresh();
+wirePan();

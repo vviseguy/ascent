@@ -39,6 +39,8 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 npm run cell:snap -- structure "walled stairs"      # one authored structure, framed on its meshes
 npm run cell:snap -- all --turns                    # every structure x all 8 orientations
 npm run cell:snap -- floor 36x28 --seed=3 --focus=30,11,7   # a generated floor, zoomed on one cell
+npm run cell:snap -- structure "walled stairs" --stack=3    # storeys stacked: does a flight REACH?
+npm run editor:snap -- "walled stairs" --levels=2 --level=1 # the AUTHORING surface (needs `npm run dev`)
 # --angle/--pitch/--zoom move the camera; a ground ruler shows the 2u cells so an off-by-half-a-cell
 # placement is visible. It WARNS when a mesh failed to load, so a red placeholder box is never a
 # mystery. Output: cell-shots/ (gitignored).
@@ -110,8 +112,11 @@ cell-for-cell, it has meshes (`cell-place.ts`) and its own editor with a live 3D
 the 4u path below, so that is what it draws. Neither is deleted; nothing is half-converted.
 
 A cell owns `{floor, wallN, wallW, corner, wallType}`. **The stored grid is the lattice of POINTS**,
-not of cells: a w×h structure stores (w+1)×(h+1) entries, so it owns all four of its borders and
-rotates losslessly. `wallN` is the edge running east from a point, `wallW` the edge running south,
+not of cells: a w×h structure stores (w+1)×(h+1) entries **per STOREY**, so it owns all four of its
+borders and rotates losslessly. `levels` (absent = 1) stacks those lattices FLOOR_HEIGHT apart, which
+is how a staircase says there is a hole in the ceiling above it. The generator builds one floor at a
+time and **declines** multi-storey structures (counted in `stats.structuresSkippedMultiLevel`) rather
+than flattening them to their ground floor. `wallN` is the edge running east from a point, `wallW` the edge running south,
 `corner` the junction at it; only `floor` belongs to the cell south-east of it.
 
 Two rules that keep biting if forgotten:

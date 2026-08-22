@@ -19,7 +19,7 @@
 // Pure + deterministic: integer coordinate arithmetic only.
 
 import { fullField, type CellField } from './cell-field.ts';
-import { abstainUnowned, stride, type CellStructure } from './cell-structures.ts';
+import { abstainUnowned, levelSize, levelsOf, stride, type CellStructure } from './cell-structures.ts';
 
 /** Quarter-turns clockwise. */
 export type Turn = 0 | 1 | 2 | 3;
@@ -89,11 +89,15 @@ export function orientStructure(raw: CellStructure, o: Orientation): CellStructu
   const st: CellStructure = { ...raw, cells: abstainUnowned(raw.cells, raw.w, raw.h) };
   const { w: nw, h: nh } = orientedSize(st.w, st.h, o);
   const srcStride = stride(st), dstStride = nw + 1;
-  const cells: CellField[] = Array.from({ length: dstStride * (nh + 1) }, fullField);
+  // Turning and mirroring happen about the VERTICAL axis, so no level ever mixes with another — each
+  // is transformed on its own and they keep their order.
+  const n = levelsOf(st), srcLevel = levelSize(st), dstLevel = dstStride * (nh + 1);
+  const cells: CellField[] = Array.from({ length: dstLevel * n }, fullField);
 
+  for (let lv = 0; lv < n; lv++) {
   for (let py = 0; py <= st.h; py++) {
     for (let px = 0; px <= st.w; px++) {
-      const f = st.cells[py * srcStride + px]!;
+      const f = st.cells[lv * srcLevel + py * srcStride + px]!;
 
       // EDGES — transform both endpoints, then re-home. wallN runs east, wallW runs south.
       const runs: [number, [number, number]][] = [
@@ -106,13 +110,13 @@ export function orientStructure(raw: CellStructure, o: Orientation): CellStructu
         const to = mapPoint(qx, qy, st.w, st.h, o);
         const home = homeEdge(from, to, nw + 1, nh + 1);
         if (!home) continue;
-        const dest = cells[home.y * dstStride + home.x]!;
+        const dest = cells[lv * dstLevel + home.y * dstStride + home.x]!;
         if (home.side === 'N') dest.wallN = mask; else dest.wallW = mask;
       }
 
       // CORNER + WALLTYPE — properties of the POINT, so they travel with it
       if (from.x >= 0 && from.x <= nw && from.y >= 0 && from.y <= nh) {
-        const dest = cells[from.y * dstStride + from.x]!;
+        const dest = cells[lv * dstLevel + from.y * dstStride + from.x]!;
         dest.corner = f.corner;
         dest.wallType = f.wallType;
       }
@@ -123,12 +127,18 @@ export function orientStructure(raw: CellStructure, o: Orientation): CellStructu
   for (let cy = 0; cy < st.h; cy++) {
     for (let cx = 0; cx < st.w; cx++) {
       const c = mapCell(cx, cy, st.w, st.h, o);
-      cells[c.y * dstStride + c.x]!.floor = st.cells[cy * srcStride + cx]!.floor;
+      cells[lv * dstLevel + c.y * dstStride + c.x]!.floor = st.cells[lv * srcLevel + cy * srcStride + cx]!.floor;
     }
+  }
   }
 
   /* Unowned slots were never written above, so they are still `fullField` — which is exactly the
      storage form. Normalising the INPUT too is what makes identity a strict no-op regardless of how
      the source was saved. */
-  return { w: nw, h: nh, cells: abstainUnowned(cells, nw, nh), ...(st.from !== undefined ? { from: st.from } : {}) };
+  return {
+    w: nw, h: nh,
+    ...(n > 1 ? { levels: n } : {}),
+    cells: abstainUnowned(cells, nw, nh),
+    ...(st.from !== undefined ? { from: st.from } : {}),
+  };
 }

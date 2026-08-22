@@ -36,7 +36,7 @@ import {
   type StepEdge,
 } from './cell-reach.ts';
 import { planMaze, type MazeParams } from './cell-maze.ts';
-import { getStructure, listStructures } from './cell-structures.ts';
+import { getStructure, levelsOf, listStructures } from './cell-structures.ts';
 import { orientStructure, ORIENTATIONS, type Orientation } from './cell-orient.ts';
 import { makeRng, subStream, nextInt, mixSeeds, type Rng } from './rng.ts';
 import type { Cell } from './cell.ts';
@@ -80,6 +80,8 @@ export interface EmergentResult {
   routes: StepEdge[][];
   stats: {
     structuresPlaced: number;
+    /** Declined for spanning more than one storey — see `structureStamp`. */
+    structuresSkippedMultiLevel: number;
     structuresRejectedConflict: number;
     structuresRejectedOverlap: number;
     wallsPlaced: number;
@@ -113,6 +115,12 @@ const overlaps = (a: Region, b: Region): boolean =>
 function structureStamp(name: string, porousPerimeter: boolean, o: Orientation): { stamp: (lx: number, ly: number) => CellField; w: number; h: number } | null {
   const base = getStructure(name);
   if (!base) return null;
+  /* MULTI-STOREY STRUCTURES ARE DECLINED, not flattened. This generator builds ONE floor, so it has
+     nowhere to put a structure's upper levels — and stamping just level 0 would silently drop the very
+     thing those levels exist to say (the hole in the ceiling above a staircase, and the absence of a
+     wall where you arrive). Placing half a structure is worse than not placing it, so it waits until
+     the generator can span storeys. */
+  if (levelsOf(base) > 1) return null;
   const st = orientStructure(base, o); // 4 turns x mirrored = 8 placements per authored piece
   const loosen = (m: Mask): Mask => (m === WALL && porousPerimeter ? POROUS : m);
   // "still allows `none`" is the robust test for "the author did not put a wall here". Comparing
@@ -138,7 +146,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const grid = makeGrid(w, h);
   const base = makeRng(seed);
   const stats: EmergentResult['stats'] = {
-    structuresPlaced: 0, structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
+    structuresPlaced: 0, structuresSkippedMultiLevel: 0, structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
     ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
   };
@@ -163,7 +171,8 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     .sort((a, b) => (b.st.w * b.st.h) - (a.st.w * a.st.h) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
 
   const POSITION_TRIES = 24;
-  for (const { n: name } of byArea) {
+  for (const { n: name, st } of byArea) {
+    if (levelsOf(st) > 1) { stats.structuresSkippedMultiLevel++; continue; } // counted, not silent
     for (let copy = 0; copy < copies; copy++) {
       for (let t = 0; t < POSITION_TRIES; t++) {
         const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;

@@ -54,6 +54,18 @@
   #brushbar .bb-mode { font-weight: 600; }
   #brushbar .bb-vals { color: #9aa3ad; }
   #brushbar .bb-hint { margin-left: auto; color: #6f7780; font-size: 11px; }
+  #brushbar .bb-levels { display: flex; align-items: center; gap: 4px; padding-left: 11px;
+                         border-left: 1px solid #2b3038; }
+  #brushbar .bb-levels button { padding: 3px 8px; line-height: 1; }
+  .lvchip { min-width: 22px; text-align: center; padding: 4px 6px; border-radius: 5px;
+            background: #232830; cursor: pointer; user-select: none; font-size: 12px; }
+  .lvchip.wide { min-width: 34px; }
+  .lvchip:hover { background: #2e3540; }
+  .lvchip.on { background: #3b6ea5; }
+
+  /* panning the blueprint */
+  #twod.pannable { cursor: grab; }
+  #twod.panning { cursor: grabbing; user-select: none; }
 
   /* the key, under the grid */
   #legend { margin-top: 26px; max-width: 70ch; border-top: 1px solid #2b3038; padding-top: 4px; }

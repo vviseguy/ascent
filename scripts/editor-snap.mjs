@@ -55,11 +55,36 @@ if (want) {
     await browser.close(); process.exit(1);
   }
 }
+// storeys: --levels=N clicks "add a storey" until there are N, --level=k selects one to edit
+const wantLevels = Number(flags.get('levels') ?? 1);
+for (let i = 1; i < wantLevels; i++) {
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('#brushbar .bb-levels button')].find((e) => e.textContent === '+');
+    b?.click();
+  });
+  await page.waitForTimeout(120);
+}
+if (flags.has('level')) {
+  await page.evaluate((k) => {
+    const c = [...document.querySelectorAll('#brushbar .lvchip')].find((e) => e.textContent === String(k));
+    c?.click();
+  }, flags.get('level'));
+  await page.waitForTimeout(150);
+}
+if (flags.has('view')) {
+  await page.evaluate((v) => {
+    const c = [...document.querySelectorAll('#brushbar .lvchip.wide')][0];
+    if (c && c.textContent.trim() !== v) c.click();
+  }, flags.get('view'));
+  await page.waitForTimeout(150);
+}
+
 // the 3D rebuild is debounced and then loads GLBs; give it room
-await page.waitForTimeout(2500);
+await page.waitForTimeout(2600);
 
 mkdirSync(join(root, outDir), { recursive: true });
-const f = join(root, outDir, `${(want ?? 'blank').replace(/[^\w.-]+/g, '_')}.png`);
+const tag = (want ?? 'blank') + (wantLevels > 1 ? `-L${wantLevels}` : '') + (flags.has('level') ? `-at${flags.get('level')}` : '');
+const f = join(root, outDir, `${tag.replace(/[^\w.-]+/g, '_')}.png`);
 await page.screenshot({ path: f });
 if (logs.length) console.error('[editor-snap] page errors:\n  ' + logs.join('\n  '));
 console.log('[editor-snap] saved: ' + f);

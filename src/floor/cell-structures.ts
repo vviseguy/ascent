@@ -33,10 +33,20 @@ import { makeGrid, type CellGrid } from './cell-grid.ts';
  * they simply vanish — four quarter-turns stopped being the identity, which is how this was found.
  */
 export interface CellStructure {
-  /** FLOOR extent. The `cells` array is (w+1)×(h+1) — see above. */
+  /** FLOOR extent. The `cells` array is (w+1)×(h+1) per LEVEL — see above. */
   w: number;
   h: number;
-  /** (w+1)*(h+1) fields, indexed by POINT: `cells[py * (w+1) + px]`. */
+  /**
+   * How many STOREYS this structure occupies. Omitted means one, so every structure authored before
+   * levels existed still reads correctly.
+   *
+   * A structure is not always a floor plan. A staircase needs to say something about the storey ABOVE
+   * it — that there is a hole in that floor to climb through, and no wall standing where you arrive —
+   * and there is nowhere to say that on a single level. Levels are stacked FLOOR_HEIGHT apart, level 0
+   * lowest, and each is a complete point lattice of its own.
+   */
+  levels?: number;
+  /** `levels * (w+1) * (h+1)` fields, indexed `cells[level * levelSize + py * (w+1) + px]`. */
   cells: CellField[];
   /** Provenance: the 4u dimensions this was converted from. */
   from?: string;
@@ -44,6 +54,13 @@ export interface CellStructure {
 
 /** Row stride of the stored point lattice. */
 export const stride = (s: { w: number }): number => s.w + 1;
+/** Storeys. Absent means one — see `CellStructure.levels`. */
+export const levelsOf = (s: { levels?: number }): number => Math.max(1, s.levels ?? 1);
+/** Entries in ONE level's point lattice. */
+export const levelSize = (s: { w: number; h: number }): number => (s.w + 1) * (s.h + 1);
+/** Index of a point on a given level. */
+export const pointAt = (s: { w: number; h: number }, level: number, px: number, py: number): number =>
+  level * levelSize(s) + py * (s.w + 1) + px;
 
 /**
  * WHAT A PADDED LATTICE ACTUALLY OWNS. The trailing row and column exist to carry the south and east
@@ -81,10 +98,11 @@ export const ownsFloor = (px: number, py: number, w: number, h: number): boolean
  * Idempotent.
  */
 export function abstainUnowned(cells: readonly CellField[], w: number, h: number): CellField[] {
-  const s = w + 1;
+  const s = w + 1, size = (w + 1) * (h + 1);
   const full = fullField();
   return cells.map((f, i) => {
-    const px = i % s, py = Math.floor(i / s);
+    const within = i % size;               // the same lattice repeats once per LEVEL
+    const px = within % s, py = Math.floor(within / s);
     const n = ownsWallN(px, w), e = ownsWallW(py, h), g = ownsFloor(px, py, w, h);
     if (n && e && g) return f;
     return { ...f, wallN: n ? f.wallN : full.wallN, wallW: e ? f.wallW : full.wallW, floor: g ? f.floor : full.floor };
@@ -123,7 +141,12 @@ export const listStructures = (): string[] => Object.keys(store.structures).sort
 export const getStructure = (name: string): CellStructure | undefined => {
   const s = store.structures[name];
   if (!s) return undefined;
-  return { w: s.w, h: s.h, cells: abstainUnowned(s.cells, s.w, s.h), ...(s.from !== undefined ? { from: s.from } : {}) };
+  return {
+    w: s.w, h: s.h,
+    ...(levelsOf(s) > 1 ? { levels: levelsOf(s) } : {}),
+    cells: abstainUnowned(s.cells, s.w, s.h),
+    ...(s.from !== undefined ? { from: s.from } : {}),
+  };
 };
 
 /** A structure as a standalone grid, ready to resolve or preview. */
