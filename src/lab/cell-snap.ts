@@ -58,6 +58,9 @@ function demo(kind: string): Subject {
       if (inBlock) c.floor = kind === 'stairs-wood' ? 'stairs_wood' : 'stairs';
       if (y === 2 && x >= 2 && x <= 3) c.wallN = 'wall';             // north end closed: climbs north
       if (kind === 'stairs-walled' && (y === 2 || y === 3) && (x === 2 || x === 4)) c.wallW = 'wall';
+      // climbing north, WEST is on your left and EAST on your right
+      if (kind === 'stairs-left' && (y === 2 || y === 3) && x === 2) c.wallW = 'wall';
+      if (kind === 'stairs-right' && (y === 2 || y === 3) && x === 4) c.wallW = 'wall';
       cells.push(c);
     }
   }

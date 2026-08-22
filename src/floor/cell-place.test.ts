@@ -284,9 +284,9 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     expect(stairFault(ragged, SW, SH, 1, 1)).toMatchObject({ kind: 'ragged' });
     expect(stairFaultText(stairFault(ragged, SW, SH, 1, 1)!)).toContain('rectangle');
 
-    const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
-    expect(stairFault(openBoth, SW, SH, 1, 1)).toMatchObject({ kind: 'undecidable' });
-    expect(stairFaultText(stairFault(openBoth, SW, SH, 1, 1)!)).toContain('which way it climbs');
+    const noEnds = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
+    expect(stairFault(noEnds, SW, SH, 1, 1)).toMatchObject({ kind: 'undecidable' });
+    expect(stairFaultText(stairFault(noEnds, SW, SH, 1, 1)!)).toContain('which way it climbs');
 
     const tooLong = mk((c, x, y) => {
       if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs';
@@ -301,22 +301,53 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     expect(stairFault(block(), SW, SH, 0, 0)).toBeNull();
   });
 
-  /* A SQUARE block walled on two ADJACENT sides is undecidable, and this pins that rather than
-     papering over it. Walls at N and W: read as a north climb it is left-walled; read as a west climb
-     it is right-walled. Both are legitimate, so the sensor reports nothing — the same refusal to guess
-     that the cross-junction opening makes. It is also why `stairs_wall_left`/`_right` are unreachable
-     today; see the note on STAIR_MESHES. */
-  it('a square block walled on two ADJACENT sides is undecidable, and says so', () => {
-    const corner = mk((c, x, y) => {
+  /* A staircase in a CORNER has two adjacent walls, and both readings of it are a climb. The tiebreak
+     is which wall is the stair's own head: a head wall stops at the block, a wall it merely stands
+     against runs on past it. */
+  it('SENSES which flank is walled and picks the handed mesh', () => {
+    // walls at N and W. Read as a north climb, west is on your LEFT.
+    const leftWall = mk((c, x, y) => {
       if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
-      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';        // north closed, south open
-      if ((y === 1 || y === 2) && x === 1) c.wallW = 'wall';    // west closed, east open
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+      if ((y === 1 || y === 2) && x === 1) c.wallW = 'wall';
     });
-    expect(stairFlight(corner, SW, SH, 1, 1)).toBeNull();
-    expect(ground(corner, 1, 1)).toEqual(['floor_tile_large']);
+    const l = stairFlight(leftWall, SW, SH, 1, 1)!;
+    expect(l).toMatchObject({ up: 'N', walls: -1 });
+    expect(l.url).toContain('stairs_wall_left');
+
+    // the mirror image: walls at N and E puts the wall on your RIGHT
+    const rightWall = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+      if ((y === 1 || y === 2) && x === 3) c.wallW = 'wall';
+    });
+    const r = stairFlight(rightWall, SW, SH, 1, 1)!;
+    expect(r).toMatchObject({ up: 'N', walls: 1 });
+    expect(r.url).toContain('stairs_wall_right');
   });
 
-  it('AMBIGUOUS blocks draw ordinary ground rather than guessing', () => {
+  it('climbs toward its OWN head wall, not along the room wall it stands beside', () => {
+    /* Both axes have exactly one closed end, so the closed ends alone cannot decide. The west wall
+       runs the full height of the room and carries on past the block; the north wall stops at the
+       block. The short one is the stair's head, so it climbs NORTH with the room wall on its left —
+       reading it the other way would have it climbing along the wall it is standing against. */
+    const againstRoomWall = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';     // the stair's own head — stops at the block
+      if (x === 1) c.wallW = 'wall';                          // a room wall — runs the whole height
+    });
+    expect(stairFlight(againstRoomWall, SW, SH, 1, 1)).toMatchObject({ up: 'N', walls: -1 });
+
+    // and with the roles swapped, it climbs WEST instead
+    const other = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
+      if (y === 1) c.wallN = 'wall';                          // a room wall — runs the whole width
+      if ((y === 1 || y === 2) && x === 1) c.wallW = 'wall';  // the stair's own head
+    });
+    expect(stairFlight(other, SW, SH, 1, 1)).toMatchObject({ up: 'W' });
+  });
+
+  it('still refuses when NEITHER axis has a closed end — there is nothing to go on', () => {
     const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
     expect(stairFlight(openBoth, SW, SH, 1, 1)).toBeNull();
     expect(ground(openBoth, 1, 1)).toEqual(['floor_tile_large']);

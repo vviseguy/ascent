@@ -215,10 +215,6 @@ export interface StairFlight {
  *
  * NOT EVERY MESH IN THE KIT IS REACHABLE, and the two reasons are worth stating rather than leaving
  * as a puzzle:
- *   `stairs_wall_left` / `_right` — walling exactly one flank leaves BOTH axes with one closed end, so
- *     the climb stops being decidable and `stairFlight` refuses (see its test). They stay listed so the
- *     fix is a one-line change if the encoding grows a tiebreak; until then a one-flank staircase draws
- *     the bare mesh with the cell's own wall beside it, which looks the same.
  *   `stairs_narrow` — the exact-4.00 variant, 2.50 of tread. Nothing selects it because a block with
  *     open flanks has room for the roomier banistered flight, and one without gets the walled mesh.
  *     Kept in PIECE for a tight placement the model cannot currently express.
@@ -241,8 +237,18 @@ const STAIR_MESHES = [
 const STAIR_TURN = { N: 0, W: 1, S: 2, E: 3 } as const;
 /** Unit step per direction, for pushing the pivot back up-slope. */
 const STEP: Record<Dir, readonly [number, number]> = { N: [0, -1], S: [0, 1], W: [-1, 0], E: [1, 0] };
-/** Standing at the foot looking up, which grid direction is on your LEFT. Verified against the meshes:
- *  `stairs_wall_left` carries its wall at -X, which is west when the climb is north. */
+/**
+ * Standing at the foot looking up, which grid direction is on your LEFT.
+ *
+ * MEASURED, not reasoned about (`tmp/glb-hand.mjs`): everything above a flight's top tread is rail or
+ * wall, so counting those vertices either side of centre says which side carries the wall.
+ * `stairs_wall_left` has 13 at -X and none at +X; `_right` is the mirror; `stairs` has 13 on BOTH,
+ * which is what makes it the banistered one. Facing north (-Z) with +Y up, right is +X — so -X is the
+ * climber's left and the mesh names mean what they say.
+ *
+ * Worth the measurement: read off a render, this looks backwards, because a flight's own
+ * diagonal-topped side reads as a wall from most angles.
+ */
 const LEFT_OF: Record<Dir, Dir> = { N: 'W', W: 'S', S: 'E', E: 'N' };
 const RIGHT_OF: Record<Dir, Dir> = { W: 'N', S: 'W', E: 'S', N: 'E' };
 
@@ -273,9 +279,38 @@ function sideClosed(
 
 /** The flight whose ORIGIN is (x,y), or null. The origin is the block's lowest-coordinate cell, so
  *  exactly one cell of a flight ever reports it and the mesh is emitted once. */
-export function stairFlight(
+/**
+ * Does the wall closing side `d` CONTINUE past the block, or stop at it?
+ *
+ * This is what breaks the tie when a staircase stands in a corner. A wall the stair merely stands
+ * against — a room wall — runs on beyond the block; the stair's OWN head wall stops where the stair
+ * does. So when both axes look equally closed, the one whose wall stops is the head, and the one whose
+ * wall carries on is a flank. It reads the same way a person does: you climb toward the little wall at
+ * the top, not along the long wall you happen to be beside.
+ */
+function endContinues(
+  cells: readonly (Cell | null)[], w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir,
+): boolean {
+  // one cell past each end of the run that wall occupies, on the same side
+  const [ax, ay, bx, by] = d === 'N' ? [x - 1, y, x + bw, y]
+    : d === 'S' ? [x - 1, y + bh - 1, x + bw, y + bh - 1]
+      : d === 'W' ? [x, y - 1, x, y + bh]
+        : [x + bw - 1, y - 1, x + bw - 1, y + bh];
+  return blocks(wallOn(cells, w, h, ax, ay, d)) || blocks(wallOn(cells, w, h, bx, by, d));
+}
+
+/** Everything both the placer and the diagnostic need, worked out ONCE so they cannot disagree. */
+interface Geometry {
+  mat: FloorMaterial;
+  bw: number; bh: number;
+  up: Dir; width: number; run: number;
+  walls: -1 | 0 | 1 | 2;
+}
+
+function flightGeometry(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
-): StairFlight | null {
+): { ok: Geometry } | { fault: StairFault } | null {
   const mat = stairMat(cells, w, h, x, y);
   if (mat === null) return null;
   if (isStairs(cells, w, h, x - 1, y, mat) || isStairs(cells, w, h, x, y - 1, mat)) return null; // not the origin
@@ -283,7 +318,7 @@ export function stairFlight(
   let bw = 1; while (isStairs(cells, w, h, x + bw, y, mat)) bw++;
   let bh = 1; while (isStairs(cells, w, h, x, y + bh, mat)) bh++;
   for (let j = 0; j < bh; j++) {
-    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return null; // ragged
+    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return { fault: { kind: 'ragged', mat } };
   }
 
   const closed = {
@@ -292,22 +327,46 @@ export function stairFlight(
     W: sideClosed(cells, w, h, x, y, bw, bh, 'W'),
     E: sideClosed(cells, w, h, x, y, bw, bh, 'E'),
   };
-  const vertical = closed.N !== closed.S;
-  const horizontal = closed.W !== closed.E;
-  if (vertical === horizontal) return null; // neither axis decides, or both do — do not guess
+  const vAxis = closed.N !== closed.S;
+  const hAxis = closed.W !== closed.E;
+  if (!vAxis && !hAxis) return { fault: { kind: 'undecidable', mat, bw, bh } }; // nothing to go on
+
+  let vertical: boolean;
+  if (vAxis !== hAxis) {
+    vertical = vAxis;
+  } else {
+    /* BOTH axes look like a climb, which is what a staircase in a corner looks like. Prefer the one
+       whose head wall STOPS at the block — that is the stair's own head rather than a wall it stands
+       beside. Corner of a room, where both walls run on: nothing distinguishes them, so take the
+       vertical reading and let the editor report it, which closes the loop for the author. */
+    const vOwn = !endContinues(cells, w, h, x, y, bw, bh, closed.N ? 'N' : 'S');
+    const hOwn = !endContinues(cells, w, h, x, y, bw, bh, closed.W ? 'W' : 'E');
+    vertical = vOwn === hOwn ? true : vOwn;
+  }
 
   const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
   const width = vertical ? bw : bh;
   const run = vertical ? bh : bw;
-
   const left = LEFT_OF[up], right = RIGHT_OF[up];
   const walls: -1 | 0 | 1 | 2 =
     closed[left] && closed[right] ? 2 : closed[left] ? -1 : closed[right] ? 1 : 0;
 
+  if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run)) {
+    return { fault: { kind: 'no-mesh', mat, run, width } };
+  }
+  return { ok: { mat, bw, bh, up, width, run, walls } };
+}
+
+export function stairFlight(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+): StairFlight | null {
+  const g = flightGeometry(cells, w, h, x, y);
+  if (!g || !('ok' in g)) return null;
+  const { mat, bw, bh, up, width, run, walls } = g.ok;
+
   /* The first mesh that FITS. MATERIAL and RUN LENGTH are hard requirements — a stone flight is not a
      wooden one, and a 4u mesh in a 6u hole leaves a step missing — while width and walls are
-     preferences, so an unusual block degrades to a plainer mesh instead of vanishing. A block nothing
-     can span reports nothing and draws ordinary ground, the same under-claiming rule as elsewhere. */
+     preferences, so an unusual block degrades to a plainer mesh instead of vanishing. */
   const fits = STAIR_MESHES.filter((m) => m.mat === mat && m.run === run);
   const best = fits.find((m) => m.across === width && m.walls === walls)
     ?? fits.find((m) => m.across === width)
@@ -332,36 +391,16 @@ export type StairFault =
 export function stairFault(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
 ): StairFault | null {
-  const mat = stairMat(cells, w, h, x, y);
-  if (mat === null) return null;
-  if (isStairs(cells, w, h, x - 1, y, mat) || isStairs(cells, w, h, x, y - 1, mat)) return null;
-
-  let bw = 1; while (isStairs(cells, w, h, x + bw, y, mat)) bw++;
-  let bh = 1; while (isStairs(cells, w, h, x, y + bh, mat)) bh++;
-  for (let j = 0; j < bh; j++) {
-    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return { kind: 'ragged', mat };
-  }
-
-  const closed = {
-    N: sideClosed(cells, w, h, x, y, bw, bh, 'N'), S: sideClosed(cells, w, h, x, y, bw, bh, 'S'),
-    W: sideClosed(cells, w, h, x, y, bw, bh, 'W'), E: sideClosed(cells, w, h, x, y, bw, bh, 'E'),
-  };
-  const vertical = closed.N !== closed.S, horizontal = closed.W !== closed.E;
-  if (vertical === horizontal) return { kind: 'undecidable', mat, bw, bh };
-
-  const width = vertical ? bw : bh, run = vertical ? bh : bw;
-  if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run)) return { kind: 'no-mesh', mat, run, width };
-  return null;
+  const g = flightGeometry(cells, w, h, x, y);
+  return g && 'fault' in g ? g.fault : null;
 }
 
 /** Human-readable, for the editor's readout. */
 export function stairFaultText(f: StairFault): string {
   if (f.kind === 'ragged') return 'not a rectangle — a flight has to be a solid block of stair cells';
   if (f.kind === 'undecidable') {
-    return f.bw === f.bh
-      ? 'cannot tell which way it climbs — exactly one END must be walled, and with two adjacent sides '
-        + 'walled on a square block both readings are equally good'
-      : 'cannot tell which way it climbs — exactly one END must be walled and the other open';
+    return 'cannot tell which way it climbs — one END must be walled and the opposite one open, '
+      + 'so there is a top to climb toward and a bottom to walk in at';
   }
   const want = [...new Set(STAIR_MESHES.filter((m) => m.mat === f.mat).map((m) => m.run))].sort();
   return `no ${f.mat} flight is ${f.run} cells long — it must be ${want.join(' or ')}`;
