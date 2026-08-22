@@ -49,9 +49,24 @@
 //
 // Pure + deterministic: plain enums, no float, no RNG, no Map iteration on an output-affecting path.
 
-/** One wall segment: nothing, a full-height wall, or a low barrier you can get over. */
-export type Seg = 'none' | 'wall' | 'barrier';
-export const SEGS: readonly Seg[] = ['none', 'wall', 'barrier'];
+/**
+ * One wall segment.
+ *   none     nothing is there
+ *   wall     full height — stops a body
+ *   barrier  low — you get over it
+ *   sloped   a ramp from full height down to barrier height. NOT traversable itself; it is what lets
+ *            a wall meet a barrier without a step change.
+ *
+ * APPEND-ONLY. A domain is a bitmask indexed by position in this list, and structures are serialised
+ * as those masks, so adding a value at the END keeps every stored mask meaning what it meant. Never
+ * insert or reorder.
+ */
+export type Seg = 'none' | 'wall' | 'barrier' | 'sloped';
+export const SEGS: readonly Seg[] = ['none', 'wall', 'barrier', 'sloped'];
+
+/** The segment kinds a body cannot pass. Kept as a LIST so adding another blocking kind is one edit
+ *  here rather than a hunt through every passability test. */
+export const BLOCKING_SEGS: readonly Seg[] = ['wall', 'sloped'];
 
 /** Ground material for a cell. `none` is a PIT — no floor is emitted at all. */
 export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood';
@@ -96,9 +111,9 @@ export const openCell = (floor: FloorMaterial = 'stone'): Cell => ({
   floor, wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid',
 });
 
-/** Does this wall segment stop a body? Only a full-height wall does — `barrier` is surmountable and
- *  `none` is not there. One value, one test; there is no half-expressed wall to reason about. */
-export const blocks = (s: Seg): boolean => s === 'wall';
+/** Does this wall segment stop a body? `wall` and `sloped` do; `barrier` is surmountable and `none`
+ *  is not there. One value, one test — there is no half-expressed wall to reason about. */
+export const blocks = (s: Seg): boolean => BLOCKING_SEGS.includes(s);
 
 /** The neighbour whose cell OWNS the wall on side `d` of cell (x,y), and which of its two walls it is.
  *  N and W are the cell's own; S and E belong to the neighbour beyond them. */

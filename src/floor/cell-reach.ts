@@ -26,7 +26,7 @@
 //
 // Pure + deterministic — integer masks, fixed enumeration order, BFS over dense arrays.
 
-import { wallOwner, type Dir } from './cell.ts';
+import { SEGS, BLOCKING_SEGS, wallOwner, type Dir } from './cell.ts';
 import { segs, corners, wallTypes, template, type CellField, type Mask } from './cell-field.ts';
 import {
   type CellGrid, type Tx, cellIndex, inBounds, stamp,
@@ -35,11 +35,12 @@ import {
   type CellGraph, nodeId, reachableFromSet,
 } from './cell-graph.ts';
 
-/** `wall` as a domain bit; everything a wall may be EXCEPT a full-height wall. */
-const WALL: Mask = segs('wall');
-const NOT_WALL: Mask = segs('none', 'barrier');
+/** The BLOCKING kinds as one mask, and its complement — both derived from `BLOCKING_SEGS`, so adding
+ *  another impassable segment kind needs no edit here. */
+const BLOCKING: Mask = segs(...BLOCKING_SEGS);
+const PASSABLE: Mask = segs(...SEGS.filter((s) => !BLOCKING_SEGS.includes(s)));
 /** Off the map: the perimeter shell. */
-const PERIMETER: Mask = WALL;
+const PERIMETER: Mask = segs('wall');
 /** An opening is certain when the corner can only be `air` and the type can only be walk-through. */
 const AIR: Mask = corners('air');
 const OPEN_TYPES: Mask = wallTypes('door', 'arch');
@@ -82,10 +83,10 @@ export function wallMask(at: FieldAt, x: number, y: number, d: Dir): Mask {
 
 /* ------------------------------- the predicates ------------------------------- */
 
-/** ∃ a surviving value that is not a full-height wall. False only when pinned to exactly `wall`. */
-export const mayBeOpen = (m: Mask): boolean => (m & NOT_WALL) !== 0;
-/** ∀ surviving values are not a full-height wall. False as soon as `wall` survives. */
-export const mustBeOpen = (m: Mask): boolean => (m & WALL) === 0;
+/** ∃ a surviving value a body can pass. False only when every option blocks. */
+export const mayBeOpen = (m: Mask): boolean => (m & PASSABLE) !== 0;
+/** ∀ surviving values are passable. False as soon as any blocking kind survives. */
+export const mustBeOpen = (m: Mask): boolean => (m & BLOCKING) === 0;
 
 export const wallOpen = (m: Mask, p: Polarity): boolean => (p === 'may' ? mayBeOpen(m) : mustBeOpen(m));
 
@@ -226,7 +227,7 @@ export function pinRouteOpen(tx: Tx, route: readonly StepEdge[]): void {
   for (const e of route) {
     if (!e.pin) continue;
     stamp(tx, { x: e.pin.x, y: e.pin.y, w: 1, h: 1 },
-      template(e.pin.side === 'N' ? { wallN: NOT_WALL } : { wallW: NOT_WALL }));
+      template(e.pin.side === 'N' ? { wallN: PASSABLE } : { wallW: PASSABLE }));
   }
 }
 

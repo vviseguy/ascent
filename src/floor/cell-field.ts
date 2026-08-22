@@ -41,7 +41,8 @@ export const wallTypes = (...allowed: WallType[]): Mask => maskOf(WALL_TYPES, al
 export const corners = (...allowed: Corner[]): Mask => maskOf(CORNERS, allowed);
 
 /** How many values a domain still allows. 0 = conflict, 1 = decided. */
-export const domainSize = (m: Mask): number => { let c = 0; for (let x = m; x; x >>= 1) c += x & 1; return c; };
+// `>>>`, not `>>`: a signed shift on a value with bit 31 set sign-extends forever.
+export const domainSize = (m: Mask): number => { let c = 0; for (let x = m >>> 0; x; x >>>= 1) c += x & 1; return c; };
 
 /** The values a domain still allows, in canonical order. */
 export const segValues = (m: Mask): Seg[] => valuesOf(SEGS, m);
@@ -61,14 +62,26 @@ export interface CellField {
 export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as const;
 
 /**
- * THE BIT LAYOUT. A domain is a bitmask over its values, so a field of N values costs N bits — 19 in
- * total, which sits in one int32 with 12 to spare for growing the floor and wallType vocabularies.
+ * THE BIT LAYOUT — for a packed representation, with room left over ON PURPOSE.
  *
- *   bits  0–3   floor     (4 values)
- *   bits  4–6   wallN     (3)
- *   bits  7–9   wallW     (3)
- *   bits 10–12  corner    (3)
- *   bits 13–18  wallType  (6)
+ * A domain is a bitmask over its values, so a field of N values needs N bits. Each field is given a
+ * SLOT WIDER THAN IT USES, so adding a value costs one bit inside that field's slot and shifts
+ * nothing else. Without the padding, giving `floor` a fifth material would move every field above it
+ * and invalidate anything already packed.
+ *
+ *   bits  0–7    floor      8 slots, 4 used     (+4 materials)
+ *   bits  8–12   wallN      5 slots, 4 used     (+1 segment kind)
+ *   bits 13–17   wallW      5 slots, 4 used
+ *   bits 18–21   corner     4 slots, 3 used     (+1 junction kind)
+ *   bits 22–30   wallType   9 slots, 6 used     (+3 opening kinds)
+ *                           ─────────────────
+ *                           31 bits. Bit 31 deliberately left alone.
+ *
+ * WHY BIT 31 IS OFF LIMITS even in a Uint32Array. The storage would hold it fine, but JavaScript's
+ * bitwise operators coerce to INT32 — so `1 << 31` is negative while the same bits read back out of a
+ * Uint32Array are positive, and `a === b` is then false for two values with identical bits. Signed
+ * shifts sign-extend forever, too (see `domainSize`). It is usable with `>>> 0` discipline everywhere,
+ * and there is no reason to pay that vigilance for one bit we do not need.
  *
  * ONE representation, not two. A "resolved" cell is simply a field whose every domain is a singleton;
  * there is no separate packed array. Measured: Int32Array ties or beats Uint16Array for this access
@@ -76,9 +89,9 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as c
  * pays a zero-extend). A second representation would buy nothing and add a second thing that can
  * disagree with the first — which is exactly the class of bug that cost us an evening.
  */
-export const BIT_OFFSETS: Record<FieldKey, number> = { floor: 0, wallN: 4, wallW: 7, corner: 10, wallType: 13 };
-export const BIT_WIDTHS: Record<FieldKey, number> = { floor: 4, wallN: 3, wallW: 3, corner: 3, wallType: 6 };
-export const TOTAL_BITS = 19;
+export const BIT_OFFSETS: Record<FieldKey, number> = { floor: 0, wallN: 8, wallW: 13, corner: 18, wallType: 22 };
+export const BIT_SLOTS: Record<FieldKey, number> = { floor: 8, wallN: 5, wallW: 5, corner: 4, wallType: 9 };
+export const TOTAL_BITS = 31;
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
 /** Every field allows everything — a cell nothing has claimed. */

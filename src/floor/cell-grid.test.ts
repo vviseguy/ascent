@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  openCell, wallOwner, openingWalls, blocks, cornerIsOpen,
+  openCell, wallOwner, openingWalls, blocks, cornerIsOpen, SEGS,
   type Cell, type Dir, type WallType,
 } from './cell.ts';
 import {
@@ -62,10 +62,25 @@ describe('cell — single ownership is the ONLY rule', () => {
 });
 
 describe('cell — a wall is one value, so there is no half-expressed wall', () => {
-  it('only a full-height wall blocks; a barrier is surmountable, none is not there', () => {
+  it('wall and sloped block; barrier is surmountable; none is not there', () => {
     expect(blocks('wall')).toBe(true);
+    expect(blocks('sloped')).toBe(true);   // a ramp down to barrier height is still not climbable
     expect(blocks('barrier')).toBe(false);
     expect(blocks('none')).toBe(false);
+  });
+
+  it('SEGS is append-only, so every mask already serialised keeps its meaning', () => {
+    // the first three bits are the values that existed before `sloped` was added
+    expect(SEGS.slice(0, 3)).toEqual(['none', 'wall', 'barrier']);
+    expect(segs('none')).toBe(1);
+    expect(segs('wall')).toBe(2);
+    expect(segs('barrier')).toBe(4);
+    expect(segs('sloped')).toBe(8); // appended — nothing below it moved
+  });
+
+  it('a sloped wall really does sever the map, like a wall', () => {
+    const g = buildCellGraph(cells((c, x) => { if (x === 2) c.wallW = 'sloped'; }), W, H);
+    expect(reaches(g, nodeId(W, 0, 0), nodeId(W, 4, 4))).toBe(false);
   });
 });
 
