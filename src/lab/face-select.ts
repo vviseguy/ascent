@@ -57,7 +57,35 @@ export interface FaceSelectHandle {
   hidden: () => Record<string, number[]>;
   /** Hash of the UNFILTERED source geometry — what a stored edit must be checked against. */
   sourceHash: () => string;
+  /** Every facet of the primary mesh at the current tolerance, largest first. */
+  facets: () => readonly FacetInfo[];
+  /** Tint every facet a distinct hue, so the partition is legible as a whole rather than one hover
+   *  at a time. */
+  setShowGroups: (on: boolean) => void;
+  /** Preview one facet from the list (null clears) — the list and the viewport share one highlight. */
+  highlightFacet: (id: number | null) => void;
+  /** Add or remove a whole facet, as if it had been clicked in the viewport. */
+  commitFacet: (id: number, add: boolean) => void;
   dispose: () => void;
+}
+
+/**
+ * A maximal run of edge-connected triangles within the angle tolerance — the unit a texture gets
+ * "ironed onto", and what a per-group transform will eventually key off.
+ *
+ * MESH-LOCAL by construction. Facets that abut across two placed instances — the corner pieces of
+ * four floor tiles meeting to form one diamond — are separate facets here, and can only be joined
+ * once world positions are known. That is a different mechanism, deliberately not this one.
+ */
+export interface FacetInfo {
+  id: number;
+  tris: number[];
+  /** Local-space, area-weighted centroid. Becomes the per-group texture ANCHOR later. */
+  centroid: THREE.Vector3;
+  normal: THREE.Vector3;
+  /** Surface area — the only honest way to sort facets. A triangle count says more about how the
+   *  exporter happened to triangulate than about how big the face actually is. */
+  area: number;
 }
 
 /** One mesh's precomputed topology. Built once per model load; a few hundred triangles, so cheap. */
@@ -228,6 +256,109 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     return out;
   };
 
+  // ---- exhaustive partition --------------------------------------------------------------------
+
+  // The same flood the hover preview uses, run to exhaustion instead of from a single seed: every
+  // triangle lands in exactly one facet. Cached against the tolerance because the tolerance is not a
+  // filter over some fixed truth — it IS the definition of what counts as one surface, so a change
+  // to it invalidates the whole partition rather than refining it.
+  let facetCache: { tol: number; mesh: MeshInfo; list: FacetInfo[]; byTri: Int32Array } | null = null;
+
+  const partition = (info: MeshInfo): { list: FacetInfo[]; byTri: Int32Array } => {
+    if (facetCache && facetCache.tol === tolCos && facetCache.mesh === info) return facetCache;
+    const byTri = new Int32Array(info.tris).fill(-1);
+    const list: FacetInfo[] = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), mid = new THREE.Vector3();
+    for (let seed = 0; seed < info.tris; seed++) {
+      if (byTri[seed]! >= 0) continue;
+      const tris = grow(info, seed);
+      const id = list.length;
+      const centroid = new THREE.Vector3();
+      let area = 0;
+      for (const t of tris) {
+        byTri[t] = id;
+        a.set(info.verts[t * 9]!, info.verts[t * 9 + 1]!, info.verts[t * 9 + 2]!);
+        b.set(info.verts[t * 9 + 3]!, info.verts[t * 9 + 4]!, info.verts[t * 9 + 5]!);
+        c.set(info.verts[t * 9 + 6]!, info.verts[t * 9 + 7]!, info.verts[t * 9 + 8]!);
+        // AREA-WEIGHT the centroid. An exporter's fan triangulation clusters many slivers at one
+        // corner of a face, and a plain per-triangle mean would drag the anchor over there instead
+        // of leaving it in the middle where a texture wants to be centred.
+        const w = e1.subVectors(b, a).cross(e2.subVectors(c, a)).length() / 2;
+        area += w;
+        mid.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+        centroid.addScaledVector(mid, w);
+      }
+      if (area > 1e-12) centroid.multiplyScalar(1 / area);
+      list.push({
+        id, tris, centroid, area,
+        normal: new THREE.Vector3(info.normals[seed * 3]!, info.normals[seed * 3 + 1]!, info.normals[seed * 3 + 2]!),
+      });
+    }
+    // biggest first — that is the order you want to read them in, so make it the id order too
+    list.sort((x, y) => y.area - x.area);
+    const remap = new Int32Array(list.length);
+    list.forEach((f, i) => { remap[f.id] = i; f.id = i; });
+    for (let t = 0; t < byTri.length; t++) byTri[t] = remap[byTri[t]!]!;
+    facetCache = { tol: tolCos, mesh: info, list, byTri };
+    return facetCache;
+  };
+
+  /** Which mesh the panel is talking about: whatever is hovered, else the first (these models are
+   *  single-mesh in practice, so this is only a fallback for multi-mesh props). */
+  const primary = (): MeshInfo | null => hoverMesh ?? infos[0] ?? null;
+
+  // ---- the all-facets overlay ------------------------------------------------------------------
+
+  const groupOverlay = new THREE.Mesh(
+    new THREE.BufferGeometry(),
+    new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false,
+      side: THREE.DoubleSide, polygonOffset: true,
+      polygonOffsetFactor: OVERLAY_OFFSET, polygonOffsetUnits: OVERLAY_OFFSET,
+    }),
+  );
+  groupOverlay.renderOrder = 998;
+  groupOverlay.frustumCulled = false;
+  groupOverlay.visible = false;
+  scene.add(groupOverlay);
+  let showGroups = false;
+
+  /** Golden-ratio hue stepping: adjacent ids land far apart in hue, and adjacent facets are exactly
+   *  the ones you need to tell apart. */
+  const facetColor = (id: number, out: THREE.Color): THREE.Color => out.setHSL((id * 0.61803398875) % 1, 0.62, 0.55);
+
+  const paintGroups = (): void => {
+    const info = primary();
+    if (!showGroups || !info) { groupOverlay.visible = false; return; }
+    const { list } = partition(info);
+    info.mesh.updateWorldMatrix(true, false);
+    const m = info.mesh.matrixWorld;
+    let n = 0;
+    for (const f of list) n += f.tris.length;
+    const pos = new Float32Array(n * 9);
+    const col = new Float32Array(n * 9);
+    const v = new THREE.Vector3(), c = new THREE.Color();
+    let o = 0;
+    for (const f of list) {
+      facetColor(f.id, c);
+      for (const t of f.tris) {
+        for (let k = 0; k < 3; k++) {
+          v.set(info.verts[t * 9 + k * 3]!, info.verts[t * 9 + k * 3 + 1]!, info.verts[t * 9 + k * 3 + 2]!).applyMatrix4(m);
+          pos[o] = v.x; pos[o + 1] = v.y; pos[o + 2] = v.z;
+          col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
+          o += 3;
+        }
+      }
+    }
+    groupOverlay.geometry.dispose();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    groupOverlay.geometry = g;
+    groupOverlay.visible = true;
+  };
+
   const setOf = (map: Map<number, Set<number>>, i: number): Set<number> => {
     let s = map.get(i);
     if (!s) { s = new Set(); map.set(i, s); }
@@ -389,7 +520,34 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       selOverlay.visible = on && selOverlay.visible;
       render();
     },
-    setTolerance: (deg) => { tolCos = Math.cos(THREE.MathUtils.degToRad(deg)); refreshPreview(); onChange(); render(); },
+    setTolerance: (deg) => {
+      tolCos = Math.cos(THREE.MathUtils.degToRad(deg));
+      facetCache = null; // the tolerance IS the partition; it cannot survive a change to it
+      paintGroups();
+      refreshPreview();
+      onChange();
+      render();
+    },
+    facets: () => { const info = primary(); return info ? partition(info).list : []; },
+    setShowGroups: (on) => { showGroups = on; paintGroups(); render(); },
+    highlightFacet: (id) => {
+      const info = primary();
+      if (!info || id === null) { prevOverlay.visible = false; render(); return; }
+      const f = partition(info).list[id];
+      paint(prevOverlay, info, f ? f.tris : []);
+      render();
+    },
+    commitFacet: (id, add) => {
+      const info = primary();
+      if (!info) return;
+      const f = partition(info).list[id];
+      if (!f) return;
+      const set = setOf(selected, info.index);
+      for (const t of f.tris) { if (add) set.add(t); else set.delete(t); }
+      repaintSelection();
+      onChange();
+      render();
+    },
     counts: () => ({
       hover: hoverTri >= 0 ? 1 : 0,
       preview: preview.length,
@@ -416,7 +574,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       window.removeEventListener('pointerup', onUp, true);
       dom.removeEventListener('contextmenu', onContext);
       dom.removeEventListener('pointerleave', onLeave);
-      for (const o of [selOverlay, prevOverlay, hoverOverlay]) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); scene.remove(o); }
+      for (const o of [selOverlay, prevOverlay, hoverOverlay, groupOverlay]) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); scene.remove(o); }
       scene.remove(arrow);
     },
   };
