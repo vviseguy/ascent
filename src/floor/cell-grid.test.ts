@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  openCell, wallOwner, openingGroups, openingWalls, blocks, isOpenType,
+  openCell, wallOwner, openingGroups, openingWalls, blocks, cornerIsOpen,
   type Cell, type Dir, type WallType,
 } from './cell.ts';
 import {
@@ -99,9 +99,9 @@ describe('cell-field — abstain vs assert', () => {
   });
 
   it('round-trips a concrete cell', () => {
-    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', openH: 'door', openV: 'solid' };
+    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', corner: 'air', wallType: 'door' };
     expect(collapse(fromCell(c))).toEqual(c);
-    for (const k of ['floor', 'wallN', 'wallW', 'openH', 'openV'] as const) {
+    for (const k of ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as const) {
       expect(domainSize(fromCell(c)[k])).toBe(1);
     }
   });
@@ -180,29 +180,53 @@ describe('cell-graph — cells are the nodes', () => {
   });
 });
 
-describe('cell-graph — openings sit on a POINT and span 4u', () => {
+describe('cell-graph — an opening is a CORNER that is air, plus a door', () => {
   const id = (x: number, y: number): number => nodeId(W, x, y);
-  /** A full wall column at x=2, with an opening on the vertical run at the point (2,y). */
-  const withOpening = (wt: WallType, oy: number): Cell[] =>
+  /** A full vertical wall column at x=2, with the corner at (2,oy) opened and typed `wt`. */
+  const column = (wt: WallType, corner: 'solid' | 'column' | 'air', oy = 2): Cell[] =>
     cells((c, x, y) => {
       if (x === 2) c.wallW = 'wall';
-      if (x === 2 && y === oy) c.openV = wt;
+      if (x === 2 && y === oy) { c.corner = corner; c.wallType = wt; }
     });
 
   it.each<[WallType, boolean]>([
     ['solid', false], ['door', true], ['arch', true],
     ['window', false], ['hole', false], ['low_gate', false],
-  ])('%s crosses the wall: %s', (wt, want) => {
-    const g = buildCellGraph(withOpening(wt, 2), W, H);
-    expect(reaches(g, id(0, 0), id(4, 4))).toBe(want);
-    expect(isOpenType(wt)).toBe(want);
+  ])('air corner + %s → crosses the wall: %s', (wt, want) => {
+    expect(reaches(buildCellGraph(column(wt, 'air'), W, H), id(0, 0), id(4, 4))).toBe(want);
   });
 
-  it('needs 4u of wall to sit in — an opening with only one segment walled is inert', () => {
+  it('a door on a SOLID corner is inert — the corner must be air', () => {
+    expect(openingActive(column('door', 'solid'), W, H, 2, 2, 'V')).toBe(false);
+    expect(reaches(buildCellGraph(column('door', 'solid'), W, H), id(0, 0), id(4, 4))).toBe(false);
+  });
+
+  it('a door on a COLUMN corner is inert too — a pillar is not a hole', () => {
+    expect(openingActive(column('door', 'column'), W, H, 2, 2, 'V')).toBe(false);
+  });
+
+  it('the local test short-circuits: air + door is decided on ONE cell', () => {
+    expect(cornerIsOpen({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'air', wallType: 'door' })).toBe(true);
+    expect(cornerIsOpen({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'door' })).toBe(false);
+    expect(cornerIsOpen({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'air', wallType: 'window' })).toBe(false);
+  });
+
+  it('the AXIS is derived — an arch needs a straight 4u run to span', () => {
+    // only ONE of the two vertical segments is walled → no run → nothing to put an arch in
     const cs = cells((c, x, y) => {
-      if (x === 2 && y === 2) { c.wallW = 'wall'; c.openV = 'door'; } // only ONE of the two segments
+      if (x === 2 && y === 2) { c.wallW = 'wall'; c.corner = 'air'; c.wallType = 'door'; }
     });
     expect(openingActive(cs, W, H, 2, 2, 'V')).toBe(false);
+  });
+
+  it('a CROSS is deliberately NOT an opening — an arch cannot span a four-way junction', () => {
+    const cs = cells((c, x, y) => {
+      if (x === 2) c.wallW = 'wall';                 // vertical run
+      if (y === 2) c.wallN = 'wall';                 // horizontal run, crossing at (2,2)
+      if (x === 2 && y === 2) { c.corner = 'air'; c.wallType = 'door'; }
+    });
+    expect(openingActive(cs, W, H, 2, 2, 'V')).toBe(false);
+    expect(openingActive(cs, W, H, 2, 2, 'H')).toBe(false); // under-claims on purpose: never over-claim
   });
 
   it('spans the two collinear segments either side of the point', () => {

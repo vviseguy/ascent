@@ -29,12 +29,21 @@
 // The mesh library already matches: `wall_half` is exactly a 2u segment and the floor pieces render
 // at half scale, so the pieces stop being *halves of* something and become the unit.
 //
-// OPENINGS live on a POINT, not a cell face. A door mesh is 4u — two collinear wall segments — so an
-// opening is centred on the lattice point between them, along one axis. A cell owns the point at its
-// NW corner (every point is the NW corner of exactly one cell), so it carries both axes:
+// THE CORNER carries the structure of the junction, and it is what makes an opening a LOCAL fact.
+// Every lattice point is the NW corner of exactly one cell, so the cell owns it:
 //
-//     openH ─ the two HORIZONTAL walls either side of the point: wallN of (x-1,y) and wallN of (x,y)
-//     openV ─ the two VERTICAL   walls either side of the point: wallW of (x,y-1) and wallW of (x,y)
+//     solid   the walls meeting here join through it (the ordinary case)
+//     column  a pillar stands here
+//     air     there is a HOLE at the junction — the precondition for a door or an archway
+//
+// `wallType` says which 4u module is drawn there. A door or arch requires `air`; the solid-looking
+// kinds (window / hole / low_gate) require a `solid` corner. So "is there a way through here?" reads
+// TWO fields on ONE cell — no neighbour lookup — which is what the old model could not do.
+//
+// The axis is DERIVED, never stored: a straight run through the point is either its two horizontal
+// arms or its two vertical arms, and which one it is falls out of the walls. That is why there is one
+// `wallType` and not an openH/openV pair — the arch's orientation is a fact about the walls, and
+// storing it twice would be storing something that can disagree with them.
 //
 // A 2u doorway needs no opening at all — just leave the wall segment out.
 //
@@ -57,6 +66,10 @@ export const WALL_TYPES: readonly WallType[] = ['solid', 'door', 'window', 'hole
 export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch'];
 export const isOpenType = (wt: WallType): boolean => OPEN_WALL_TYPES.includes(wt);
 
+/** What stands at a lattice point where walls meet. `air` is a hole — the precondition for a door. */
+export type Corner = 'solid' | 'column' | 'air';
+export const CORNERS: readonly Corner[] = ['solid', 'column', 'air'];
+
 /** The four directions, in the fixed order every iteration uses. */
 export type Dir = 'N' | 'E' | 'S' | 'W';
 export const DIRS: readonly Dir[] = ['N', 'E', 'S', 'W'];
@@ -72,15 +85,15 @@ export interface Cell {
   wallN: Seg;
   /** The wall along this cell's west edge: the lattice segment (x,y)→(x,y+1). */
   wallW: Seg;
-  /** A 4u opening centred on this cell's NW corner, spanning the two HORIZONTAL walls either side. */
-  openH: WallType;
-  /** A 4u opening centred on this cell's NW corner, spanning the two VERTICAL walls either side. */
-  openV: WallType;
+  /** What stands at this cell's NW corner point: walls joining, a pillar, or a hole. */
+  corner: Corner;
+  /** Which 4u module is drawn at that corner. `door`/`arch` need `air`; the rest need `solid`. */
+  wallType: WallType;
 }
 
 /** A plain open cell: stone ground, no walls, no openings. */
 export const openCell = (floor: FloorMaterial = 'stone'): Cell => ({
-  floor, wallN: 'none', wallW: 'none', openH: 'solid', openV: 'solid',
+  floor, wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid',
 });
 
 /** Does this wall segment stop a body? Only a full-height wall does — `barrier` is surmountable and
@@ -102,6 +115,10 @@ export const stepped = (x: number, y: number, d: Dir): { x: number; y: number } 
 
 /** The opposite direction — used when a rule has to be stated from the other side of a shared wall. */
 export const opposite = (d: Dir): Dir => (d === 'N' ? 'S' : d === 'S' ? 'N' : d === 'E' ? 'W' : 'E');
+
+/** Is there a hole at this cell's corner that a body can actually get through? Both fields are on
+ *  THIS cell — the local half of the test. The axis still has to be derived from the walls. */
+export const cornerIsOpen = (c: Cell): boolean => c.corner === 'air' && isOpenType(c.wallType);
 
 /**
  * The four cells around the lattice point owned by cell (x,y) — its NW corner — split into the two

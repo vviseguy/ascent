@@ -18,7 +18,7 @@
 // Pure + deterministic — integer node ids, ascending adjacency, BFS over dense arrays.
 
 import {
-  AXES, blocks, isOpenType, openingGroups, openingWalls, stepped,
+  AXES, blocks, cornerIsOpen, openingGroups, openingWalls, stepped,
   type Axis, type Cell, type Dir, type Seg,
 } from './cell.ts';
 import { DIRS } from './cell.ts';
@@ -74,17 +74,28 @@ export function buildCellGraphFrom(
   return { w, h, nodeCount: n, adj: out.map((s) => [...s].sort((a, b) => a - b)) };
 }
 
-/** Is the opening on `axis` at cell (x,y)'s NW point live — an open type WITH 4u of wall to sit in? */
+/**
+ * Is the opening at cell (x,y)'s NW point live on `axis`?
+ *
+ * The LOCAL half is `cornerIsOpen` — corner is `air` and the wallType is a door or arch, both fields
+ * on this one cell, and it short-circuits so the common case costs no neighbour reads at all.
+ *
+ * The axis is DERIVED, because an archway is 4u and has to span a straight run: the run exists only
+ * if BOTH arms on that axis are walls. A CROSS — both axes walled — is deliberately not an opening;
+ * you cannot span a four-way junction with an arch, and guessing an axis there would over-claim
+ * reachability, which is the one direction a solvability check must never err.
+ */
 export function openingActive(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, axis: Axis): boolean {
   const c = cells[y * w + x];
-  if (!c) return false;
-  if (!isOpenType(axis === 'H' ? c.openH : c.openV)) return false;
-  return openingWalls(x, y, axis).every((o) => {
+  if (!c || !cornerIsOpen(c)) return false;
+  const runOn = (ax: Axis): boolean => openingWalls(x, y, ax).every((o) => {
     if (o.x < 0 || o.y < 0 || o.x >= w || o.y >= h) return true; // the perimeter shell counts as wall
     const n = cells[o.y * w + o.x];
     const s: Seg | undefined = n ? n[o.side === 'N' ? 'wallN' : 'wallW'] : 'wall';
     return s === 'wall';
   });
+  const other: Axis = axis === 'H' ? 'V' : 'H';
+  return runOn(axis) && !runOn(other);
 }
 
 /** The graph of a resolved grid — the same cells the renderer and the collider consume. */
