@@ -207,9 +207,24 @@ Two things that are easy to get wrong and are deliberate here:
   seam, so two triangles that visually share an edge routinely share no index; keying the edge map
   on quantised position is what lets a fill cross a seam instead of stopping dead at it.
 
-Left-click adds the preview, right-click removes it, and orbit moves to the middle button while
-editing. Nothing touches the geometry until **Hide** — selection is a view, hiding is an edit —
-and hiding re-runs the box-fit, because collision must not keep boxing a brick that is gone.
+**A press only ARMS a click; the RELEASE decides.** Move more than 5 px in between and the gesture
+is handed back to the camera untouched, so orbit stays on left-drag and pan on right-drag exactly as
+they are outside edit mode. Edit mode does not take the mouse away from you — it adds a meaning to
+tapping, and both buttons work the same way: left-click adds the preview, right-click removes it.
+Hover updates pause mid-drag (re-picking every frame while the camera swings is just noise), and a
+pointer that wanders onto a panel clears the highlight, because `pointerleave` on the canvas is not
+reliable across a fast move and a stale highlight looks live.
+
+Nothing touches the geometry until **Hide** — selection is a view, hiding is an edit — and hiding
+re-runs the box-fit, because collision must not keep boxing a brick that is gone.
+
+**Indices are numbered against the SOURCE geometry, always.** On a cold load the build has already
+applied the stored hidden set, so `mesh.geometry` is the FILTERED mesh; `applyHiddenFaces` parks the
+original in `userData` and everything index-shaped reads it back through `sourceGeometry()`.
+Numbering topology off the filtered mesh while the stored indices number the original is exactly the
+"selection lands a few faces away from the cursor" bug. For the same reason the picker is re-mounted
+whenever `rebuildObject` swaps the root (any texture change does), carrying the unsaved hidden set
+across by hand.
 
 ### The store, and why the geometry hash is not optional
 
@@ -233,6 +248,19 @@ is exactly the bug this guard is meant to catch, turned against itself.
 a triangle set); what they need is a second attribute path so the shader can pick a slot per
 group instead of per swatch, plus a per-group UV transform so courses break at a surface edge
 rather than running through the object as one slab.
+
+## Panel layout: DRAWERS ([drawers.ts](drawers.ts))
+
+The lab grew one fixed-position panel at a time, each hard-coding its own corner, until they
+collided and covered the model they exist to judge. They now dock into two edge rails — CONTENT /
+TEXTURES / SURFACES on the left, FIT / LEGEND on the right — each behind a tab that sticks out of
+the edge. One drawer open per side, so the viewport is never more than two panels' worth of covered,
+and the open pair persists in `?drawers=left:right`.
+
+`dock()` takes whatever element a panel already built and overrides only its POSITIONING, so no
+panel module knows the layout system exists and adding the next one costs a `dock()` call instead
+of a hunt for free pixels. Panels are hidden by sliding the shell rather than `display:none`, so a
+reopen never re-lays-out and nothing measures zero while closed.
 
 ## The CONTACT SHEET — `npm run sheet` ([sheet.ts](sheet.ts))
 
