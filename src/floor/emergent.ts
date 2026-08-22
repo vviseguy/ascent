@@ -14,6 +14,12 @@
 //   └─ PIN the route          find the surviving entry→exit route and narrow its arms so `wall`
 //                             cannot survive on them → the route becomes GUARANTEED (`must`)
 //
+// THE GENERATOR POLICES NOTHING. A room states that its inside is AIR (`room-templates.ts` pins the
+// interior arms to `none`), so a wall run proposed inside one meets `{none} ∩ {wall} = ∅`, the
+// transaction conflicts, and it rolls back. Room-on-room overlap fails the same way. There is no
+// ownership table and no trespass check — saying the true thing in the template makes the AND-gate
+// the enforcement, which is the whole point of modelling rooms as constraints.
+//
 // WHY THIS CANNOT PRODUCE AN IMPOSSIBLE FLOOR. `andGate` only ever removes options, so reachability
 // is MONOTONE — it can decrease but never increase. The blank field is fully connected, and every
 // commit is gated on the exit still being achievable. By induction the exit is achievable at every
@@ -53,27 +59,8 @@ const WALL: Mask = segs('wall');
 const NONE: Mask = segs('none');
 /** Exactly what a POROUS ring arm says: "wall, or nothing". Distinguishing this from a FULL domain is
  *  what stops the seal phase from filling in cells no template ever spoke about — an unconstrained
- *  cell also contains both `wall` and non-`wall`, but nobody claimed it, so it is not ours to finish. */
+ *  cell also contains both `wall` and non-`wall`, but no template ever spoke about it. */
 const POROUS: Mask = segs('none', 'wall');
-
-/** No owner. */
-const UNCLAIMED = -1;
-
-/**
- * CLAIMS — who is allowed to speak about a cell.
- *
- * A template says what VALUES are allowed; it deliberately abstains on cells that aren't its business
- * (a room pins its own walls and says nothing about its interior — see room-templates.ts). But an
- * abstention is a full mask, and a full mask is indistinguishable from "I assert anything goes". So
- * without a second channel, "I have no opinion about these cells" reads to every later phase as "help
- * yourself" — and the maze phase will happily fill a room it has no business entering.
- *
- * Claims are that second channel, and they live on the GENERATOR, not on the template: templates stay
- * pure statements about values, and the generator owns the question of authority. A wall proposal may
- * only touch unclaimed cells. Pinning a route is exempt — it only ever REMOVES `wall`, which is never
- * something a claimant wanted, so guaranteeing passage through a claimed room is always safe.
- */
-type Claims = Int32Array;
 
 export interface EmergentConfig {
   width: number;
@@ -95,8 +82,7 @@ export interface EmergentConfig {
   roomMax?: number;
 }
 
-/** Every arm a wall run would touch, as tile+dir pairs (used for the claim check AND the stamp, so
- *  the two can never disagree about what a proposal covers). */
+/** Every arm a wall run would touch, as tile+dir pairs. */
 function runArms(g: TileGrid, x: number, y: number, d: Dir, len: number): { x: number; y: number; d: Dir }[] {
   const [sx, sy] = d === 'N' || d === 'S' ? [1, 0] : [0, 1];
   const out: { x: number; y: number; d: Dir }[] = [];
@@ -129,8 +115,6 @@ export interface EmergentResult {
     roomsRejectedUnreachable: number;
     wallsPlaced: number;
     wallsRejectedConflict: number;
-    /** Refused because the run would have entered a region another placement had claimed. */
-    wallsRejectedClaimed: number;
     wallsRejectedUnreachable: number;
     /** Ring cells narrowed from `{none, wall}` to a finished wall. */
     ringSealed: number;
@@ -186,10 +170,9 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const exitCorner = cornerId(w, exit.cx, exit.cy);
 
   const base = makeRng(mixSeeds(cfg.seed, BigInt(cfg.stratumIndex ?? 0)));
-  const claims: Claims = new Int32Array(w * h).fill(UNCLAIMED);
   const stats: EmergentResult['stats'] = {
     roomsPlaced: 0, roomsRejectedConflict: 0, roomsRejectedUnreachable: 0,
-    wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedClaimed: 0, wallsRejectedUnreachable: 0,
+    wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
     ringSealed: 0, doorsKept: 0,
   };
 
@@ -220,12 +203,14 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     const ry = nextInt(roomRng, h - rh);
     const role = roomRole(i, cfg.seed);
 
-    // authority, same rule as the maze phase: a room may not be built on ground another room owns.
-    let trespass = false;
-    for (let cy = ry; cy < ry + rh && !trespass; cy++) {
-      for (let cx = rx; cx < rx + rw; cx++) if (claims[cy * w + cx] !== UNCLAIMED) { trespass = true; break; }
+    // Rooms don't overlap. This is a PLACEMENT POLICY, not an authority mechanism: a room's hard
+    // walls landing in another's air already conflicts, but a POROUS ring is `{none, wall}` and
+    // `{none} ∩ {none, wall} = {none}` — permissive by design, so overlap slips through the AND-gate.
+    // A rectangle test against the rooms we placed is the honest tool; nothing needs a claims table.
+    if (rooms.some((m) => rx < m.x + m.w && m.x < rx + rw && ry < m.y + m.h && m.y < ry + rh)) {
+      stats.roomsRejectedConflict++;
+      continue;
     }
-    if (trespass) { stats.roomsRejectedConflict++; continue; }
 
     const tx = begin(grid);
     // POROUS ring: the room states "wall or nothing" on its perimeter rather than pinning it, so the
@@ -239,10 +224,6 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     targets.push(cornerId(w, rx + Math.max(1, rw >> 1), ry + Math.max(1, rh >> 1)));
     if (!stillAchievable(at)) { targets.pop(); rollback(tx); stats.roomsRejectedUnreachable++; continue; }
     if (!commit(tx)) { targets.pop(); stats.roomsRejectedConflict++; continue; }
-    // the room now OWNS its footprint: later phases may not narrow these cells (see `Claims`).
-    for (let cy = ry; cy < ry + rh; cy++) {
-      for (let cx = rx; cx < rx + rw; cx++) claims[cy * w + cx] = i;
-    }
     rooms.push({ x: rx, y: ry, w: rw, h: rh, role });
     stats.roomsPlaced++;
   }
@@ -257,12 +238,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     const y = nextInt(wallRng, h);
     const d = DIRS[nextInt(wallRng, DIRS.length)]!;
     const len = nextRange(wallRng, 1, maxRun);
-    const arms = runArms(grid, x, y, d, len);
-    if (arms.length === 0) continue;
-
-    // authority check FIRST — cheaper than reachability, and it is the rule that keeps the maze out
-    // of the rooms. A run must be entirely on cells nobody has claimed.
-    if (arms.some((a) => claims[a.y * w + a.x] !== UNCLAIMED)) { stats.wallsRejectedClaimed++; continue; }
+    if (runArms(grid, x, y, d, len).length === 0) continue;
 
     const tx = begin(grid);
     stampWallRun(tx, grid, x, y, d, len);
@@ -305,7 +281,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
           // in the open direction and there is nothing left to decide.
           if ((masks.inner & WALL) === 0 && (masks.inner & NONE) !== 0) { stats.doorsKept++; continue; }
           // ONLY the room's own porous ring cells. An untouched interior cell is also "wall or not",
-          // but no template claimed it — sealing those would fill the room in solid.
+          // but no template spoke about it — sealing those would fill the room in solid.
           if (masks.inner !== POROUS) continue;
 
           const tx = begin(grid);
@@ -319,7 +295,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     }
   }
 
-  /* ---- phase 5: SETTLE. Everything nobody ever claimed is still a full domain — open space that has
+  /* ---- phase 5: SETTLE. Everything no template ever spoke about is still a full domain — open space that has
      simply never been decided. Narrow it to `none` so the field is fully determined and the collapse
      pick has nothing left to choose. Opening can only ADD reachability, so this needs no gate; and it
      makes the output independent of the pick, which is what "the generator decided the floor" means.

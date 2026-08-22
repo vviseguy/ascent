@@ -66,7 +66,7 @@ geometry actually collided against, not the graph that planned it.
 | 4 | Tile model | `src/floor/wall-tile.ts` | `WallTile` (9-cell) | A tile owns only `edge.N` + `edge.W`; classic piece names are DERIVED (`label()`), never stored | `wall-tile.test.ts` | **BUILT** |
 | 5 | Constraint layer | `src/floor/wall-tile-field.ts` | `TileField` (bitmask domains) | Pure bitwise; `collapse`'s `pick` is the ONLY entropy seam | `wall-tile-field.test.ts` | **BUILT** |
 | 6 | Transactional grid | `src/floor/tile-grid.ts` | `TileGrid`, `Tx` | `commit` is all-or-nothing; a failed batch leaves the grid byte-identical; iteration index-sorted | `tile-grid.test.ts` | **BUILT** |
-| 7 | Room templates | `src/floor/room-templates.ts` | `Stamp` per room kind | A room constrains ONLY its interior + its own arms; everything else stays open | `room-templates.test.ts` | **BUILT** |
+| 7 | Room templates | `src/floor/room-templates.ts` | `Stamp` per room kind | A room states its OWN walls AND that its inside is air; it abstains ONLY on outward-facing cells | `room-templates.test.ts` | **BUILT** |
 | 8 | Room roles | `src/floor/room-roles.ts` | `RoomRole`, `roomStamp` | Role = seeded hash of (runSeed, roomId); integer-only; every peer derives the same role | ⚠️ **no test file** | **BUILT, UNGATED** |
 | 9 | Floor → tiles | `src/floor/floor-tiles.ts` | `(WallTile\|null)[]` | Door reconciliation must open the ring wherever `floor.edges` connects, or the level is uncompletable | `floor-tiles.test.ts`, `prove:game` [7] | **BUILT** |
 | 10 | Traversal graph | `src/floor/corner-graph.ts` | `CornerGraph` (dual of walls) | An arm blocks ⟺ `edge==='wall' && inner==='wall'`; adjacency ascending | `corner-graph.test.ts` | **BUILT, editor-only** — its only non-test importer is `src/lab/tile-editor.ts`'s connectivity overlay; the *shipping* solvability gate is `route-check.ts` on compiled AABBs |
@@ -104,13 +104,31 @@ to. **Corollary that shapes everything: a domain never widens, so a cell pinned 
 become a door.** Rooms are therefore stamped with a *porous* ring (`{none, wall}`) and their openings
 are decided later, while the choice still exists — `porousRoom` in `room-templates.ts`.
 
-**Claims (`emergent.ts`).** A template says what *values* are allowed and deliberately abstains on
-cells that aren't its business. But an abstention is a full mask, and a full mask is indistinguishable
-from "anything goes" — so without a second channel the maze phase fills the rooms. Claims are that
-channel, and they live on the **generator**, not the template: templates stay pure statements about
-values; the generator owns authority. *(This is a convention promoted to a contract at the generator
-level only. Pushing scope into `TileField` itself, so over-constraint is a build-time error, is the
-open follow-up.)*
+**A room states that its inside is AIR.** `room-templates.ts:cell()` pins every interior-facing arm
+(and the centre) to `none`. That is not over-reach — "the inside is open" is half of what a room *is*,
+so it is squarely inside the template's own business. Stating it makes trespass **structurally
+impossible**: a maze wall proposed inside a room meets `{none} ∩ {wall} = ∅`, the transaction
+conflicts, and it rolls back. No ownership table, no trespass check, no policing code.
+
+The rule the templates follow, precisely:
+
+| Cell | Template says | Why |
+|---|---|---|
+| the room's own wall arms | `wall` (or `{none, wall}` when porous) | its walls are its business |
+| interior-facing arms + centre | `none` | its inside is its business, and its inside is air |
+| **outward-facing** arms (the `outside` dirs) | **nothing — abstain** | genuinely not its business; a corridor may join there, so the junction stays free to become a tee or a cross |
+
+Only the third row is restraint. The first two are the room saying what it is. *(An earlier revision
+of this generator policed trespass with a separate claims table; it was deleted — the templates were
+simply not stating the whole truth about themselves.)*
+
+The one thing the AND-gate does **not** catch is room-on-room overlap, because a POROUS ring is
+`{none, wall}` and `{none} ∩ {none, wall} = {none}` — permissive by design. `emergent.ts` rejects that
+with a plain rectangle test against the rooms already placed. It is a **placement policy**, not an
+authority mechanism, and it is deliberately not dressed up as one.
+
+*Open follow-up: pushing scope into `TileField` itself — so a template declaring a cell outside its
+own business is a build-time error rather than a habit — is still worth doing.*
 
 **Not in the pipeline but still live:** `src/floor/wallgrid.ts` survives *only* as the source of
 `CellTile.wallMask` (the 4-bit projection the fog BFS and decoration read). It is **not** a wall

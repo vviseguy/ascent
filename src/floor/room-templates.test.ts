@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ROOMS, basicRoom, library, hallway, throneRoom } from './room-templates.ts';
 import { makeGrid, applyBatch, collapseGrid, tileView, at } from './tile-grid.ts';
-import { segs, isOpen, type TileField } from './wall-tile-field.ts';
+import { segs, isOpen, template, type TileField } from './wall-tile-field.ts';
 import { label } from './wall-tile.ts';
 
 const OPEN = segs('none', 'wall', 'barrier'); // a fully-open segment domain
@@ -45,6 +45,26 @@ describe('room-templates — constrain only what is inside the room', () => {
     expect(west.floor.se).toBe('stone');
     expect(west.floor.nw).toBe('none'); // corners beyond the wall removed
     expect(west.floor.sw).toBe('none');
+  });
+
+  it('the INSIDE of a room is stated to be AIR — not left unconstrained', () => {
+    const g = stamp('basic room', 5, 4);
+    const inner = fieldAt(g, 2, 2); // a fully-interior tile
+    for (const d of ['N', 'E', 'S', 'W'] as const) expect(inner.inner[d]).toBe(segs('none'));
+    expect(inner.edge.N).toBe(segs('none'));
+    expect(inner.edge.W).toBe(segs('none'));
+    expect(inner.centre).toBe(segs('none')); // and no pillar grows in it either
+  });
+
+  it('so a wall stamped inside a room CONFLICTS — the AND-gate is the enforcement', () => {
+    const g = makeGrid(7, 6);
+    expect(applyBatch(g, [{ region: { x: 1, y: 1, w: 5, h: 4 }, stamp: basicRoom(5, 4) }]).ok).toBe(true);
+    const r = applyBatch(g, [{
+      region: { x: 3, y: 3, w: 1, h: 1 },
+      stamp: template({ inner: { N: segs('wall') } }),
+    }]);
+    expect(r.ok).toBe(false); // {none} ∩ {wall} = empty
+    expect(r.conflicts.length).toBeGreaterThan(0);
   });
 
   it('a cell outside the stamped region stays fully open (ground only in the room)', () => {
@@ -98,14 +118,24 @@ describe('room-templates — entries + structural signatures', () => {
   });
 });
 
-describe('room-templates — permissive rooms only conflict when genuinely incompatible', () => {
-  it('two SAME-floor rooms can overlap (compatible) — no conflict', () => {
+describe('room-templates — rooms only conflict when genuinely incompatible', () => {
+  it('two IDENTICAL same-floor rooms stamp compatibly — every cell agrees', () => {
+    const g = makeGrid(7, 7);
+    const r = applyBatch(g, [
+      { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+      { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
+    ]);
+    expect(r.ok).toBe(true);
+  });
+
+  it('two OFFSET rooms conflict — one room WALL lands in the other stated air', () => {
     const g = makeGrid(7, 7);
     const r = applyBatch(g, [
       { region: { x: 0, y: 0, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
       { region: { x: 2, y: 2, w: 4, h: 4 }, stamp: basicRoom(4, 4, 'stone') },
     ]);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.conflicts.length).toBeGreaterThan(0);
   });
 
   it('two DIFFERENT-floor rooms overlapping conflict → batch rolls back', () => {

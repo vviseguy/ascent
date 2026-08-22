@@ -65,13 +65,27 @@ function cell(s: CellSpec): TileField {
     if (a && a !== 'none') {
       inner[d] = armMask(a);
       if (d === 'N' || d === 'W') edge[d] = armMask(a);
+    } else if (!out.includes(d)) {
+      // INSIDE the room and not one of its own walls ⇒ it is AIR, and the room says so.
+      // This is not over-reach, it is the room's job: "the inside is open" is half of what a room IS.
+      // Stating it makes trespass structurally impossible — a wall stamped in here meets
+      // `{none} ∩ {wall} = ∅`, the transaction conflicts, and the AND-gate rejects it with no
+      // policing needed. Leaving it unconstrained would say "I have no opinion", which reads to every
+      // later phase as "help yourself".
+      inner[d] = segs('none');
+      if (d === 'N' || d === 'W') edge[d] = segs('none');
     }
+    // `d ∈ outside` ⇒ ABSTAIN. That cell faces out of the room and is genuinely not its business —
+    // a corridor may join there, so the junction stays free to become a tee or a cross.
   }
+  // The centre column is additive. A cell wholly inside the room grows no pillar unless the template
+  // asked for one, and — same reasoning as the arms — the room says so rather than staying silent.
+  const centre = s.centre ? centres(s.centre) : out.length === 0 ? centres('none') : undefined;
   return template({
     floor,
     edge,
     inner,
-    ...(s.centre ? { centre: centres(s.centre) } : {}),
+    ...(centre !== undefined ? { centre } : {}),
     ...(s.wallType ? { wallType: wallTypes(s.wallType) } : {}),
   });
 }

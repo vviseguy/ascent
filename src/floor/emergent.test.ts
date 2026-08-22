@@ -82,14 +82,14 @@ describe('emergent — NON-VACUITY: the gates actually fire', () => {
     // aggregate over seeds: the reachability gate is rare by design (one surviving path is enough),
     // so assert it fires somewhere in the space rather than on every single floor.
     let unreachableRejections = 0;
-    let claimRejections = 0;
+    let conflictRejections = 0;
     for (const seed of [1n, 2n, 3n, 5n, 8n, 13n, 21n, 34n]) {
       const s = generateEmergent(cfg({ seed, width: 14, height: 12 })).stats;
       unreachableRejections += s.wallsRejectedUnreachable + s.roomsRejectedUnreachable;
-      claimRejections += s.wallsRejectedClaimed + s.roomsRejectedConflict;
+      conflictRejections += s.wallsRejectedConflict + s.roomsRejectedConflict;
     }
     expect(unreachableRejections).toBeGreaterThan(0); // the reachability gate refused real proposals
-    expect(claimRejections).toBeGreaterThan(0); // the authority gate refused real proposals
+    expect(conflictRejections).toBeGreaterThan(0); // the AND-gate refused real trespass
   });
 
   it('the maze is real — a meaningful share of arms end up walled', () => {
@@ -105,8 +105,8 @@ describe('emergent — NON-VACUITY: the gates actually fire', () => {
   });
 });
 
-describe('emergent — claims (authority)', () => {
-  it('placed rooms never overlap', () => {
+describe('emergent — trespass is impossible, not policed', () => {
+  it('placed rooms never overlap — an overlap empties a domain and the batch rolls back', () => {
     for (const seed of [1n, 2n, 3n, 5n, 8n]) {
       const { rooms } = generateEmergent(cfg({ seed, width: 16, height: 14 }));
       for (let i = 0; i < rooms.length; i++) {

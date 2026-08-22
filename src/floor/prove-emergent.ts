@@ -39,7 +39,7 @@ let totalRooms = 0;
 let totalWalls = 0;
 let totalDoors = 0;
 let rejectedUnreachable = 0;
-let rejectedClaimed = 0;
+let rejectedConflict = 0;
 
 for (const [w, h] of SIZES) {
   for (const seed of SEEDS) {
@@ -52,7 +52,7 @@ for (const [w, h] of SIZES) {
     totalWalls += r.stats.wallsPlaced;
     totalDoors += r.stats.doorsKept;
     rejectedUnreachable += r.stats.wallsRejectedUnreachable + r.stats.roomsRejectedUnreachable;
-    rejectedClaimed += r.stats.wallsRejectedClaimed + r.stats.roomsRejectedConflict;
+    rejectedConflict += r.stats.wallsRejectedConflict + r.stats.roomsRejectedConflict;
 
     // 1. determinism
     if (JSON.stringify(generateEmergent(cfg).grid) === JSON.stringify(r.grid)) deterministic++;
@@ -94,9 +94,9 @@ controls.push({
   detail: `${rejectedUnreachable} proposal(s) rejected for breaking connectivity across the space`,
 });
 controls.push({
-  name: 'the authority (claims) gate refuses proposals',
-  pass: rejectedClaimed > 0,
-  detail: `${rejectedClaimed} proposal(s) rejected for trespassing on a claimed region`,
+  name: 'the AND-gate refuses trespass (a wall proposed inside a room)',
+  pass: rejectedConflict > 0,
+  detail: `${rejectedConflict} proposal(s) rejected because a domain emptied — no policing code involved`,
 });
 controls.push({
   name: 'the floors are actually walled (not empty rooms)',
