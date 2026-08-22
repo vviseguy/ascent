@@ -35,8 +35,8 @@
 
 import { makeRng, mixSeeds, nextInt, nextRange, subStream, type Rng } from './rng.ts';
 import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type TileGrid, type Region } from './tile-grid.ts';
-import { template, segs, type Mask } from './wall-tile-field.ts';
-import { DIRS, type Dir, type WallTile } from './wall-tile.ts';
+import { template, segs, centres, floors, wallTypes, type Mask } from './wall-tile-field.ts';
+import { DIRS, FLOOR_CORNERS, type Dir, type FloorCorner, type WallTile } from './wall-tile.ts';
 import { roomRole, roleFloor, type RoomRole } from './room-roles.ts';
 import { porousRoom } from './room-templates.ts';
 import { cornerId } from './corner-graph.ts';
@@ -57,6 +57,10 @@ const STREAM = { rooms: 1, walls: 2, collapse: 3 } as const;
 
 const WALL: Mask = segs('wall');
 const NONE: Mask = segs('none');
+/** Settle defaults for the parts of a tile that are NOT the wall arms. */
+const NONE_CENTRE: Mask = centres('none');
+const STONE: Mask = floors('stone');
+const SOLID: Mask = wallTypes('solid');
 /** Exactly what a POROUS ring arm says: "wall, or nothing". Distinguishing this from a FULL domain is
  *  what stops the seal phase from filling in cells no template ever spoke about — an unconstrained
  *  cell also contains both `wall` and non-`wall`, but no template ever spoke about it. */
@@ -295,11 +299,16 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     }
   }
 
-  /* ---- phase 5: SETTLE. Everything no template ever spoke about is still a full domain — open space that has
-     simply never been decided. Narrow it to `none` so the field is fully determined and the collapse
-     pick has nothing left to choose. Opening can only ADD reachability, so this needs no gate; and it
-     makes the output independent of the pick, which is what "the generator decided the floor" means.
-     Cells already narrowed to a wall don't contain `none`, so they are untouched. ---- */
+  /* ---- phase 5: SETTLE. Everything no template ever spoke about is still a full domain — space that
+     has simply never been decided. Narrow it so the field is fully determined and the collapse pick has
+     nothing left to choose; that independence is what "the generator decided the floor" means.
+
+     SETTLE THE WHOLE TILE, not just its arms. A TileField is nine cells PLUS a floor per corner, a
+     centre column and a wall type — leave any of those wide and the pick decides them at random, which
+     shows up as speckled floor materials and pillars sprouting in mid-air. (It did; that was the bug.)
+     Defaults: arms/centre → `none` (open space, no pillar), floor → `stone` (the corridor ground),
+     wallType → `solid`. Opening can only ADD reachability, so this needs no gate; cells already
+     narrowed to a wall no longer contain `none` and are untouched. ---- */
   const settleTx = begin(grid);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -309,7 +318,15 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
       const edge: Partial<Record<'N' | 'W', Mask>> = {};
       if ((f.edge.N & NONE) !== 0) edge.N = NONE;
       if ((f.edge.W & NONE) !== 0) edge.W = NONE;
-      stamp(settleTx, { x, y, w: 1, h: 1 }, template({ inner, edge }));
+      const floor: Partial<Record<FloorCorner, Mask>> = {};
+      for (const c of FLOOR_CORNERS) if ((f.floor[c] & STONE) !== 0) floor[c] = STONE;
+      const centre = (f.centre & NONE_CENTRE) !== 0 ? NONE_CENTRE : undefined;
+      const wallType = (f.wallType & SOLID) !== 0 ? SOLID : undefined;
+      stamp(settleTx, { x, y, w: 1, h: 1 }, template({
+        inner, edge, floor,
+        ...(centre !== undefined ? { centre } : {}),
+        ...(wallType !== undefined ? { wallType } : {}),
+      }));
     }
   }
   if (!commit(settleTx)) {
