@@ -53,6 +53,37 @@ Numbering topology off the filtered mesh while the stored indices number the ori
 whenever `rebuildObject` swaps the root (any texture change does), carrying the unsaved hidden set
 across by hand.
 
+## GROUPS — the partition, not just one hover
+
+A **facet** is a maximal run of edge-connected triangles within the angle tolerance: the same
+flood the hover preview uses, run to exhaustion so every triangle lands in exactly one. It is the
+unit a texture gets "ironed onto", and what a per-group transform will key off.
+
+`show groups` tints every facet a distinct hue (golden-ratio stepping, so neighbouring ids land
+far apart — neighbouring facets are exactly the ones you need to tell apart) and lists them
+largest-first with triangle count and area. Hovering a row highlights that facet in the viewport;
+left-click adds it to the selection, right-click removes it — the same two meanings as in the
+viewport, so a facet you cannot conveniently hover (behind the model, or a sliver too small to
+hit) is still reachable.
+
+- **Sorted by AREA, not triangle count.** A count says more about how the exporter triangulated
+  than about how big the face is.
+- **The centroid is area-weighted.** A fan triangulation clusters slivers at one corner, and a
+  plain per-triangle mean would drag the anchor there instead of the middle of the face — which
+  matters because that centroid becomes the texture anchor.
+- **The partition is invalidated by the tolerance, not filtered by it.** The tolerance IS the
+  definition of "one surface", so changing it recomputes rather than refines.
+
+What this buys, concretely: on the dungeon wall the flat front face is ONE facet and each
+protruding brick contributes its own — because a flood cannot get from the wall to a brick top
+without crossing the brick’s non-coplanar sides. That is the behaviour a tiled floor needs too:
+the divet around an octagonal tile stops the fill without any special rule for it.
+
+**Facets are MESH-LOCAL.** Facets that abut across two placed instances — the corner pieces of
+four floor tiles meeting to form one diamond — are separate facets here and can only be joined
+once world positions are known. Anything that wants them to agree (a shared texture phase) needs
+a world-level anchor, not a bigger flood.
+
 ### The store, and why the geometry hash is not optional
 
 `src/game/mesh-surfaces.json` (via `POST /__lab/surfaces`), keyed by **mesh URL** rather than lab
