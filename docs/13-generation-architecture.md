@@ -54,7 +54,15 @@ rule in the model, because there is nothing left two cells could disagree about.
 | C9 | The generator | `src/floor/cell-emergent.ts` | a settled `CellGrid` | `cell-emergent.test.ts` (25), `prove:cell` | **BUILT** |
 | C10 | Orientation | `src/floor/cell-orient.ts` | 8 placements per authored piece | `cell-orient.test.ts` (18) | **BUILT** |
 | C11 | The 2u editor | `src/lab/cell-editor.ts` + `cell-editor.html` | authored structures, natively | driven headlessly | **BUILT** |
-| C12 | Cells → meshes | — | — | — | **NOT BUILT** — the 2u floors cannot render yet |
+| C12 | Cells → meshes | `src/floor/cell-place.ts` | `CellPlacement[]` — the placement authority | `cell-place.test.ts` (15) | **BUILT** |
+| C13 | 3D view adapter | `src/lab/cell-preview.ts` | Three.js group from C12 | driven headlessly | **BUILT** |
+| C14 | Wiring into the game | `src/game/tower.ts` | — | — | **NOT BUILT** — the game still compiles the 4u path |
+
+**The store can go stale, and it is guarded.** A domain is a bitmask indexed by POSITION, so appending
+a value to any enum silently changes what every stored mask means — a floor mask of `15` meant "any
+material" when there were four and means "any except rock" now there are five. `cell-structures.json`
+records the value-set sizes it was written against and `cell-structures.test.ts` asserts they still
+match. If that test fails, run `npm run migrate:structures`; never hand-edit the numbers.
 
 **One edge enumeration.** `cell-reach.ts:edgesOf` is the single place a traversable connection comes
 into existence, and both the graph and the router are built from it. That is not tidiness: in the 4u
@@ -69,8 +77,9 @@ strand a cell or break a pinned route — are the doors.
 
 - **Done:** the substrate, the generator, and all three authored structures — converted cell-for-cell
   against the *old code* as oracle, and confirmed visually at matching scale.
-- **Not done:** `cell-place.ts` (cells → meshes), so 2u floors do not render in the game and the
-  editor has no 3D preview. The 4u modules and the 4u editor are still present for that reason.
+- **Not done:** the game still compiles the **4u** path — `tower.ts` reads `floorTiles`/`tileUnits`,
+  so 2u floors have meshes (`cell-place.ts`) and a preview but are not what the game draws yet. The 4u
+  modules stay until that lands.
 - **Known lossy point:** the old `centre: 'barrier'` (a low pillar) converts to `column`, dropping the
   low-ness. Nothing in the authored set used it.
 - **Resolved:** corridors carve on a 2-cell step (`MazeParams.step`, default 2) so a hallway is 4u

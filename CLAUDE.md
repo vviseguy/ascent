@@ -31,7 +31,8 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 # Worldgen authoring pages (served by `npm run dev`, all under the /ascent/ base):
 #   /ascent/tile-editor.html   paint a tile's 9 cells as DOMAINS + live corner-graph connectivity
 #   /ascent/board.html         stamp room templates; watch commit vs rollback on overlap
-#   /ascent/walltile.html      one WallTile → its tilePlacements → meshes
+#   /ascent/walltile.html      one WallTile → its tilePlacements → meshes   (4u, legacy)
+#   /ascent/cell-editor.html   the 2u CELL editor: paint the point lattice + live 3D  ← author here
 # NOTE: the in-app preview pane can't screenshot these (continuous rAF on a WebGL canvas).
 # Use headless Playwright with --use-gl=swiftshader, like scripts/lab-snap.mjs does.
 
@@ -97,9 +98,9 @@ src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock 
 ### ⚠ TWO SUBSTRATES right now — read docs/13 §0 first
 A **2u CELL** model (`src/floor/cell*.ts`) is replacing the 4u tile model. It is complete through
 generation and proven (`npm run prove:cell`), the authored structures are migrated onto it
-cell-for-cell, and it has its own editor (`/ascent/cell-editor.html`). It does NOT render yet —
-there is no cells→meshes step — so the 4u pipeline below is still what the game draws, and the 4u
-editor stays for that reason. Neither is deleted; nothing is half-converted.
+cell-for-cell, it has meshes (`cell-place.ts`) and its own editor with a live 3D preview
+(`/ascent/cell-editor.html`). What is NOT done is wiring it into `tower.ts` — the game still compiles
+the 4u path below, so that is what it draws. Neither is deleted; nothing is half-converted.
 
 A cell owns `{floor, wallN, wallW, corner, wallType}`. **The stored grid is the lattice of POINTS**,
 not of cells: a w×h structure stores (w+1)×(h+1) entries, so it owns all four of its borders and
