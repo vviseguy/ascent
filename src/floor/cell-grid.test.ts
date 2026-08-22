@@ -1,0 +1,218 @@
+import { describe, it, expect } from 'vitest';
+import {
+  openCell, wallOwner, openingGroups, openingWalls, blocks, isOpenType,
+  type Cell, type Dir, type WallType,
+} from './cell.ts';
+import {
+  fullField, template, andGate, collapse, conflicts, hasConflict, isOpen, fromCell,
+  segs, floors, wallTypes, domainSize,
+} from './cell-field.ts';
+import {
+  makeGrid, at, begin, stamp, txConflicts, commit, rollback, applyBatch, resolveGrid,
+  wallAt, canStep, type CellGrid,
+} from './cell-grid.ts';
+import { buildCellGraph, nodeId, reaches, reachableFrom, openingActive } from './cell-graph.ts';
+
+const W = 5, H = 5;
+const g0 = (): CellGrid => makeGrid(W, H);
+/** A resolved grid of plain open cells, with a mutator for the interesting bits. */
+const cells = (mutate: (c: Cell, x: number, y: number) => void = () => {}): Cell[] => {
+  const out: Cell[] = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = openCell(); mutate(c, x, y); out.push(c); }
+  return out;
+};
+
+describe('cell — single ownership is the ONLY rule', () => {
+  it("a cell owns N and W; its S and E belong to the neighbour beyond", () => {
+    expect(wallOwner(2, 2, 'N')).toEqual({ x: 2, y: 2, side: 'N' });
+    expect(wallOwner(2, 2, 'W')).toEqual({ x: 2, y: 2, side: 'W' });
+    expect(wallOwner(2, 2, 'S')).toEqual({ x: 2, y: 3, side: 'N' }); // the south neighbour's N
+    expect(wallOwner(2, 2, 'E')).toEqual({ x: 3, y: 2, side: 'W' }); // the east neighbour's W
+  });
+
+  it('one stored value is seen identically from both sides — disagreement is unrepresentable', () => {
+    const cs = cells((c, x, y) => { if (x === 2 && y === 2) c.wallN = 'wall'; });
+    expect(wallAt(cs, W, H, 2, 2, 'N')).toBe('wall'); // from the south cell looking north
+    expect(wallAt(cs, W, H, 2, 1, 'S')).toBe('wall'); // from the north cell looking south
+  });
+
+  it('PROPERTY: every wall reads the same from both cells it separates', () => {
+    const kinds = ['none', 'wall', 'barrier'] as const;
+    const cs = cells((c, x, y) => {
+      c.wallN = kinds[(x * 3 + y) % 3]!;
+      c.wallW = kinds[(x + y * 2) % 3]!;
+    });
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      for (const [d, o] of [['N', 'S'], ['E', 'W']] as [Dir, Dir][]) {
+        const n = d === 'N' ? { x, y: y - 1 } : { x: x + 1, y };
+        if (n.x < 0 || n.y < 0 || n.x >= W || n.y >= H) continue;
+        expect(wallAt(cs, W, H, x, y, d)).toBe(wallAt(cs, W, H, n.x, n.y, o));
+        expect(canStep(cs, W, H, x, y, d)).toBe(canStep(cs, W, H, n.x, n.y, o));
+      }
+    }
+  });
+
+  it('off the map is the PERIMETER shell — always wall', () => {
+    const cs = cells();
+    expect(wallAt(cs, W, H, 0, 0, 'N')).toBe('none');   // stored, and open
+    expect(wallAt(cs, W, H, 0, 0, 'W')).toBe('none');
+    expect(wallAt(cs, W, H, W - 1, 0, 'E')).toBe('wall'); // no east neighbour → shell
+    expect(wallAt(cs, W, H, 0, H - 1, 'S')).toBe('wall');
+  });
+});
+
+describe('cell — a wall is one value, so there is no half-expressed wall', () => {
+  it('only a full-height wall blocks; a barrier is surmountable, none is not there', () => {
+    expect(blocks('wall')).toBe(true);
+    expect(blocks('barrier')).toBe(false);
+    expect(blocks('none')).toBe(false);
+  });
+});
+
+describe('cell-field — abstain vs assert', () => {
+  it('a fresh field abstains on everything', () => {
+    expect(isOpen(fullField())).toBe(true);
+    expect(hasConflict(fullField())).toBe(false);
+  });
+
+  it('a template constrains ONLY what it names', () => {
+    const t = template({ wallN: segs('wall') });
+    expect(t.wallN).toBe(segs('wall'));
+    expect(t.wallW).toBe(fullField().wallW); // untouched — still abstaining
+    expect(t.floor).toBe(fullField().floor);
+  });
+
+  it('andGate intersects, and an impossible intersection is a conflict, not an error', () => {
+    const a = template({ wallN: segs('none') });
+    const b = template({ wallN: segs('wall') });
+    const both = andGate(a, b);
+    expect(both.wallN).toBe(0);
+    expect(conflicts(both)).toEqual(['wallN']);
+    expect(collapse(both)).toBeNull();
+  });
+
+  it('collapse takes the canonical lowest option unless a pick says otherwise', () => {
+    const f = template({ wallN: segs('none', 'wall'), floor: floors('stone', 'wood') });
+    expect(collapse(f)!.wallN).toBe('none');
+    expect(collapse(f)!.floor).toBe('stone');
+    expect(collapse(f, (_k, opts) => opts.length - 1)!.wallN).toBe('wall');
+  });
+
+  it('round-trips a concrete cell', () => {
+    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', openH: 'door', openV: 'solid' };
+    expect(collapse(fromCell(c))).toEqual(c);
+    for (const k of ['floor', 'wallN', 'wallW', 'openH', 'openV'] as const) {
+      expect(domainSize(fromCell(c)[k])).toBe(1);
+    }
+  });
+});
+
+describe('cell-grid — transactions are atomic', () => {
+  it('a clean batch lands whole', () => {
+    const g = g0();
+    const r = applyBatch(g, [{ region: { x: 1, y: 1, w: 2, h: 2 }, stamp: template({ wallN: segs('wall') }) }]);
+    expect(r.ok).toBe(true);
+    expect(at(g, 1, 1)!.wallN).toBe(segs('wall'));
+    expect(at(g, 3, 3)!.wallN).toBe(fullField().wallN); // outside the region, untouched
+  });
+
+  it('a conflicting batch changes NOTHING — not even the cells that would have been fine', () => {
+    const g = g0();
+    applyBatch(g, [{ region: { x: 0, y: 0, w: 1, h: 1 }, stamp: template({ wallN: segs('none') }) }]);
+    const before = JSON.stringify(g.cells);
+    const r = applyBatch(g, [
+      { region: { x: 2, y: 2, w: 1, h: 1 }, stamp: template({ wallN: segs('wall') }) }, // fine on its own
+      { region: { x: 0, y: 0, w: 1, h: 1 }, stamp: template({ wallN: segs('wall') }) }, // conflicts
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.conflicts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(g.cells)).toBe(before);
+  });
+
+  it('rollback leaves the grid byte-identical', () => {
+    const g = g0();
+    const before = JSON.stringify(g.cells);
+    const tx = begin(g);
+    stamp(tx, { x: 0, y: 0, w: W, h: H }, template({ wallN: segs('wall') }));
+    expect(txConflicts(tx)).toEqual([]);
+    rollback(tx);
+    expect(JSON.stringify(g.cells)).toBe(before);
+  });
+
+  it('stamps outside the grid are skipped, not an error', () => {
+    const g = g0();
+    const r = applyBatch(g, [{ region: { x: W - 1, y: H - 1, w: 4, h: 4 }, stamp: template({ wallN: segs('wall') }) }]);
+    expect(r.ok).toBe(true);
+    expect(at(g, W - 1, H - 1)!.wallN).toBe(segs('wall'));
+  });
+
+  it('resolveGrid collapses every cell', () => {
+    const g = g0();
+    expect(resolveGrid(g).every((c) => c !== null)).toBe(true);
+  });
+});
+
+describe('cell-graph — cells are the nodes', () => {
+  const id = (x: number, y: number): number => nodeId(W, x, y);
+
+  it('an open grid is fully connected', () => {
+    const g = buildCellGraph(cells(), W, H);
+    expect(reachableFrom(g, id(0, 0)).filter(Boolean).length).toBe(W * H);
+  });
+
+  it('a wall severs the pair it sits between, and nothing else', () => {
+    const g = buildCellGraph(cells((c, x, y) => { if (x === 2 && y === 2) c.wallW = 'wall'; }), W, H);
+    // (1,2)→(2,2) is blocked directly, but the grid is open elsewhere so they still connect around
+    expect(canStep(cells((c, x, y) => { if (x === 2 && y === 2) c.wallW = 'wall'; }), W, H, 2, 2, 'W')).toBe(false);
+    expect(reaches(g, id(1, 2), id(2, 2))).toBe(true); // around, not through
+  });
+
+  it('NEGATIVE CONTROL: a full wall column really does cut the map in two', () => {
+    const cs = cells((c, x) => { if (x === 2) c.wallW = 'wall'; });
+    const g = buildCellGraph(cs, W, H);
+    expect(reaches(g, id(0, 0), id(4, 4))).toBe(false);
+    expect(reachableFrom(g, id(0, 0)).filter(Boolean).length).toBe(2 * H); // only the two west columns
+  });
+
+  it('a barrier column does NOT cut it — barriers are surmountable', () => {
+    const g = buildCellGraph(cells((c, x) => { if (x === 2) c.wallW = 'barrier'; }), W, H);
+    expect(reaches(g, id(0, 0), id(4, 4))).toBe(true);
+  });
+});
+
+describe('cell-graph — openings sit on a POINT and span 4u', () => {
+  const id = (x: number, y: number): number => nodeId(W, x, y);
+  /** A full wall column at x=2, with an opening on the vertical run at the point (2,y). */
+  const withOpening = (wt: WallType, oy: number): Cell[] =>
+    cells((c, x, y) => {
+      if (x === 2) c.wallW = 'wall';
+      if (x === 2 && y === oy) c.openV = wt;
+    });
+
+  it.each<[WallType, boolean]>([
+    ['solid', false], ['door', true], ['arch', true],
+    ['window', false], ['hole', false], ['low_gate', false],
+  ])('%s crosses the wall: %s', (wt, want) => {
+    const g = buildCellGraph(withOpening(wt, 2), W, H);
+    expect(reaches(g, id(0, 0), id(4, 4))).toBe(want);
+    expect(isOpenType(wt)).toBe(want);
+  });
+
+  it('needs 4u of wall to sit in — an opening with only one segment walled is inert', () => {
+    const cs = cells((c, x, y) => {
+      if (x === 2 && y === 2) { c.wallW = 'wall'; c.openV = 'door'; } // only ONE of the two segments
+    });
+    expect(openingActive(cs, W, H, 2, 2, 'V')).toBe(false);
+  });
+
+  it('spans the two collinear segments either side of the point', () => {
+    expect(openingWalls(2, 2, 'V')).toEqual([{ x: 2, y: 1, side: 'W' }, { x: 2, y: 2, side: 'W' }]);
+    expect(openingWalls(2, 2, 'H')).toEqual([{ x: 1, y: 2, side: 'N' }, { x: 2, y: 2, side: 'N' }]);
+  });
+
+  it('connects the two SIDES of the run — never the two cells the run still separates', () => {
+    const { a, b } = openingGroups(2, 2, 'V');
+    expect(a).toEqual([{ x: 1, y: 1 }, { x: 1, y: 2 }]); // west of the vertical run
+    expect(b).toEqual([{ x: 2, y: 1 }, { x: 2, y: 2 }]); // east of it
+  });
+});
