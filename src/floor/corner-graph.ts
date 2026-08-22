@@ -39,12 +39,25 @@ export const cornerCount = (w: number, h: number): number => (w + 1) * (h + 1);
 export const armBlocks = (edge: Seg, inner: Seg): boolean => edge === 'wall' && inner === 'wall';
 
 /**
- * Build the directed corner-graph from RESOLVED tiles (row-major, length w*h; a null cell is a
- * conflicted/void tile and contributes no edges). Each non-null tile emits its four arm-gated
- * corner↔corner connections; shared corner-pairs therefore accumulate a route from each flanking
- * tile — the "two routes per boundary" of §2-graph.
+ * THE corner-graph builder, parameterised by one predicate: "is tile (tx,ty)'s `dir` arm passable?".
+ *
+ * There are two truths a caller can ask about, and they share this exact skeleton — only the
+ * predicate differs (see `tile-reach.ts`):
+ *   • CONCRETE tiles     — the arm's values are known (`buildCornerGraph` below).
+ *   • DOMAINS (a field)  — the arm still holds a SET of values, so passability is a modality:
+ *                          "could be open" (optimistic) vs "is guaranteed open" (pessimistic).
+ * Keeping one builder means the graph topology, the two-routes-per-boundary behaviour and the
+ * determinism discipline can never drift between the two.
+ *
+ * Each tile emits its four arm-gated corner↔corner connections; shared corner-pairs therefore
+ * accumulate a route from each flanking tile — the "two routes per boundary" of §2-graph. A tile the
+ * predicate cannot speak for (a null/conflicted cell) simply contributes no edges.
  */
-export function buildCornerGraph(tiles: ReadonlyArray<WallTile | null>, w: number, h: number): CornerGraph {
+export function buildCornerGraphFrom(
+  w: number,
+  h: number,
+  armPassable: (tx: number, ty: number, dir: Dir) => boolean,
+): CornerGraph {
   const nodeCount = cornerCount(w, h);
   const out: Set<number>[] = Array.from({ length: nodeCount }, () => new Set<number>());
   // A passable arm links its two corners. DIRECTED seam: today both ways (horizontal walk is
@@ -53,20 +66,29 @@ export function buildCornerGraph(tiles: ReadonlyArray<WallTile | null>, w: numbe
   const link = (a: number, b: number): void => { out[a]!.add(b); out[b]!.add(a); };
   for (let ty = 0; ty < h; ty++) {
     for (let tx = 0; tx < w; tx++) {
-      const t = tiles[ty * w + tx];
-      if (!t) continue;
       const nw = cornerId(w, tx, ty);
       const ne = cornerId(w, tx + 1, ty);
       const se = cornerId(w, tx + 1, ty + 1);
       const sw = cornerId(w, tx, ty + 1);
-      if (!armBlocks(t.edge.N, t.inner.N)) link(nw, ne); // N arm gates the top corner-pair
-      if (!armBlocks(t.edge.E, t.inner.E)) link(ne, se); // E arm gates the right pair
-      if (!armBlocks(t.edge.S, t.inner.S)) link(se, sw); // S arm gates the bottom pair
-      if (!armBlocks(t.edge.W, t.inner.W)) link(sw, nw); // W arm gates the left pair
+      if (armPassable(tx, ty, 'N')) link(nw, ne); // N arm gates the top corner-pair
+      if (armPassable(tx, ty, 'E')) link(ne, se); // E arm gates the right pair
+      if (armPassable(tx, ty, 'S')) link(se, sw); // S arm gates the bottom pair
+      if (armPassable(tx, ty, 'W')) link(sw, nw); // W arm gates the left pair
     }
   }
   const adj = out.map((s) => [...s].sort((a, b) => a - b));
   return { w, h, nodeCount, adj };
+}
+
+/**
+ * Build the directed corner-graph from RESOLVED tiles (row-major, length w*h; a null cell is a
+ * conflicted/void tile and contributes no edges).
+ */
+export function buildCornerGraph(tiles: ReadonlyArray<WallTile | null>, w: number, h: number): CornerGraph {
+  return buildCornerGraphFrom(w, h, (tx, ty, d) => {
+    const t = tiles[ty * w + tx];
+    return t ? !armBlocks(t.edge[d], t.inner[d]) : false;
+  });
 }
 
 /** Convenience: collapse + owner-resolve a grid, then build its corner-graph. The resolved tiles are
