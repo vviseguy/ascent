@@ -48,7 +48,9 @@ import { fitBoxesWithStats, aabbToFootprintBox, voxelGridForViz, lastStitchInfo,
 import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-controls.ts';
 import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catalog.ts';
 import { buildRecolorLegend } from './recolor-legend.ts';
-import { buildTextureSettings } from './texture-settings.ts';
+import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
+import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
+import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
@@ -267,6 +269,9 @@ async function boot(): Promise<void> {
   // TEXTURE CONFIG (which texture + surface per type) + RELIEF: parse the URL into the shared config
   // BEFORE the first build, so a shared/screenshotted ?tex=…&relief=… link bakes correctly on load.
   setConfig(configFromParam(params.get('tex')));
+  // snapshot the catalog's out-of-the-box relief/AO BEFORE the URL overrides them, so resolving a
+  // profile inherits the real defaults rather than whatever this link happened to pin.
+  captureCatalogDefaults();
   setRelief(reliefFromParam(params.get('relief')));
   setAOStrength(aoFromParam(params.get('ao')));
   const hud = document.getElementById('hud');
@@ -576,12 +581,26 @@ async function boot(): Promise<void> {
       if (tex) u.set('tex', tex); else u.delete('tex');
       if (rel) u.set('relief', rel); else u.delete('relief');
       if (ao) u.set('ao', ao); else u.delete('ao');
+      const prof = profileBar?.current()?.id;
+      if (prof) u.set('profile', prof); else u.delete('profile');
       u.set('rake', `${Math.round(lightRake.az * 100)}:${Math.round(lightRake.el * 100)}`);
       history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
+      profileBar?.refresh(); // the drift indicator is only true until the next edit
     }
-    buildTextureSettings({
+    let texPanel: TextureSettingsHandle | undefined;
+    let profileBar: ProfileBarHandle | undefined;
+    texPanel = buildTextureSettings({
       container: document.body,
       onChange: () => { void rebuildObject(); },
+      header: (mount) => {
+        profileBar = mountProfileBar({
+          mount,
+          initial: params.get('profile'),
+          // a profile REPLACES the live config wholesale, so every widget in the panel has to be
+          // pulled back into line before the re-bake — otherwise the sliders lie about what is on.
+          onApplied: () => { texPanel?.resync(); void rebuildObject(); },
+        });
+      },
       extras: [
         { label: 'Light ∠', get: () => lightRake.az, set: (v) => { lightRake.az = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
         { label: 'Light ↑', get: () => lightRake.el, set: (v) => { lightRake.el = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
@@ -600,6 +619,9 @@ async function boot(): Promise<void> {
         autoEdge: fitState.autoEdge,
         recolor: (built as WorldObjectBuild).recolor,
         present: (built as WorldObjectBuild).presentSwatches,
+      // record the LIVE rev, not the profile's: if the reviewer drifted off the profile before
+      // approving, what got frozen is the drift, and the store should say so.
+      profile: profileBar?.current() ? { id: profileBar.current()!.id, rev: liveRev() } : undefined,
       }),
     });
 
@@ -614,6 +636,7 @@ async function boot(): Promise<void> {
         autoEdge: false,
         recolor: (built as WorldObjectBuild).recolor,
         present: (built as WorldObjectBuild).presentSwatches,
+        profile: profileBar?.current() ? { id: profileBar.current()!.id, rev: liveRev() } : undefined,
       });
     };
   }

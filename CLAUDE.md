@@ -34,6 +34,7 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 #   /ascent/walltile.html      one WallTile → its tilePlacements → meshes   (4u, legacy)
 #   /ascent/cell-editor.html   the 2u CELL editor: paint the point lattice + live 3D  ← author here
 #   /ascent/cell-snap.html     the 2u pipeline rendered ONCE, for screenshots (no controls, no rAF)
+#   /ascent/sheet.html         the material CONTACT SHEET (every object, one profile, live re-bake)
 # NOTE: the in-app preview pane can't screenshot the EDITOR (continuous rAF on a WebGL canvas).
 # cell-snap.html exists for exactly that reason — it renders one frame and stops:
 npm run cell:snap -- structure "walled stairs"      # one authored structure, framed on its meshes
