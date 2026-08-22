@@ -46,6 +46,20 @@
   .hint { color: #6f7780; font-size: 11px; margin-top: 12px; max-width: 60ch; }
   svg { display: block; }
 
+  /* the brush strip — pinned above the schematic so what you are painting is never scrolled away */
+  #brushbar { position: sticky; top: -22px; z-index: 3; display: flex; align-items: center; gap: 9px;
+              background: #1b1f25; border: 1px solid #2b3038; border-radius: 8px;
+              padding: 7px 11px; margin: -6px 0 16px; }
+  #brushbar .bb-label { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: #7c8794; }
+  #brushbar .bb-mode { font-weight: 600; }
+  #brushbar .bb-vals { color: #9aa3ad; }
+  #brushbar .bb-hint { margin-left: auto; color: #6f7780; font-size: 11px; }
+
+  /* the key, under the grid */
+  #legend { margin-top: 26px; max-width: 70ch; border-top: 1px solid #2b3038; padding-top: 4px; }
+  #legend .legend-rows { display: flex; flex-wrap: wrap; gap: 5px 14px; }
+  #legend .legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #9aa3ad; }
+
   /* modal — save and delete both confirm, rather than firing on a stray click */
   #veil { position: fixed; inset: 0; background: #0009; display: none; align-items: center;
           justify-content: center; z-index: 50; }
@@ -59,7 +73,12 @@
 </head>
 <body>
   <div id="panel"></div>
-  <div id="twod"><svg id="grid"></svg><div class="hint" id="hint"></div></div>
+  <div id="twod">
+    <div id="brushbar"></div>
+    <svg id="grid"></svg>
+    <div class="hint" id="hint"></div>
+    <div id="legend"></div>
+  </div>
   <div id="split" title="drag to resize"></div>
   <div id="view3d"><div id="v3label">3D — what the generator will build</div></div>
   <div id="veil"><div id="modal"></div></div>

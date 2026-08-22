@@ -34,26 +34,19 @@ import {
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
+import {
+  CONFLICT, CORNER_COLOR, FLOOR_COLOR, FLOOR_HATCH, SEG_COLOR, SEG_HATCH, WALLTYPE_COLOR,
+  hatchesFor, legend, maskValues, mixMask, patternDefs,
+} from './cell-visual.ts';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { buildGrid, CELL } from './cell-preview.ts';
 
 /* --------------------------------- palette ---------------------------------- */
+// The colours, the mixing rule and the hatches live in `cell-visual.ts`, so the grid, the legend and
+// the brush indicator cannot drift apart — all three read the same tables.
 
-const SEG_COLOR: Record<Seg, string> = { none: '#333a44', wall: '#e8e3da', barrier: '#7fa8c9', sloped: '#c9a87f' };
-const FLOOR_COLOR: Record<FloorMaterial, string> = {
-  none: '#101318', stone: '#6f6a63', dirt: '#6b5540', wood: '#8a6136', rock: '#241c14',
-  stairs: '#b08d57', stairs_wood: '#9a6b3a',
-};
-const CORNER_COLOR: Record<Corner, string> = { solid: '#8a939d', column: '#e8e3da', air: '#5ad98b' };
-const AMBIGUOUS = '#4a5568';
-const CONFLICT = '#e0524a';
-
-function domColor<T extends string>(m: Mask, vals: readonly T[], table: Record<T, string>): string {
-  if (m === 0) return CONFLICT;
-  const on = vals.filter((_, i) => (m & (1 << i)) !== 0);
-  return on.length === 1 ? table[on[0]!] : AMBIGUOUS;
-}
+const domColor = mixMask;
 
 /* ---------------------------------- state ----------------------------------- */
 
@@ -241,7 +234,7 @@ function paintable(node: SVGElement, run: (clear: boolean) => void): void {
 
 function render(): void {
   const svg = el('grid') as unknown as SVGSVGElement;
-  svg.innerHTML = '';
+  svg.innerHTML = patternDefs(U);   // the hatch library, re-emitted with the grid it is sized for
   svg.setAttribute('width', String(PAD * 2 + W * U));
   svg.setAttribute('height', String(PAD * 2 + H * U));
 
@@ -268,6 +261,13 @@ function render(): void {
         else if (brush.mode === 'select') dragSelect(x, y);
       });
       svg.append(rect);
+      // HATCH — one overlay per marked value in the domain, faint while the value is only possible
+      for (const { id, opacity } of hatchesFor(f.floor, FLOOR_MATERIALS, FLOOR_HATCH)) {
+        svg.append(svgEl('rect', {
+          x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
+          fill: `url(#${id})`, opacity, 'pointer-events': 'none',
+        }));
+      }
       if (domainSize(f.floor) > 1) {
         const t = svgEl('text', {
           x: X(x) + U / 2, y: Y(y) + U / 2 + 4, fill: '#8a939d', 'font-size': 11,
@@ -303,13 +303,21 @@ function render(): void {
         });
         paintable(hit, (clear) => { if (brush.mode === 'wall') applyAt(px, py, what, clear); });
         svg.append(hit);
+        const wide = decided ? 7 : 4;
         svg.append(svgEl('line', {
           x1: X(px), y1: Y(py), x2, y2,
           stroke: domColor(m, SEGS, SEG_COLOR),
-          'stroke-width': decided ? 7 : 4,
+          'stroke-width': wide,
           'stroke-dasharray': decided ? '' : '5 4',
           'stroke-linecap': 'round', 'pointer-events': 'none',
         }));
+        // a hatched value paints its pattern INTO the stroke, so a sloped wall is diagonally hashed
+        for (const { id, opacity } of hatchesFor(m, SEGS, SEG_HATCH)) {
+          svg.append(svgEl('line', {
+            x1: X(px), y1: Y(py), x2, y2, stroke: `url(#${id})`, 'stroke-width': wide,
+            'stroke-linecap': 'round', opacity, 'pointer-events': 'none',
+          }));
+        }
       };
       if (hasN(px)) line(X(px + 1), Y(py), f.wallN, 'wallN');
       if (hasW(py)) line(X(px), Y(py + 1), f.wallW, 'wallW');
@@ -330,16 +338,25 @@ function render(): void {
         else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
       });
       svg.append(dot);
-      if (domainSize(f.wallType) === 1 && f.wallType !== wallTypes('solid')) {
-        svg.append(svgEl('circle', {
-          cx: X(px), cy: Y(py), r: 11, fill: 'none', stroke: '#d9c05a', 'stroke-width': 2, 'pointer-events': 'none',
-        }));
+      // OPENING — a ring in the opening's own colour, so door/arch/window are told apart at a glance
+      // rather than all reading as "something non-solid here"
+      if (f.wallType !== wallTypes('solid')) {
+        const opts = maskValues(f.wallType, WALL_TYPES).filter((t) => t !== 'solid');
+        if (opts.length) {
+          svg.append(svgEl('circle', {
+            cx: X(px), cy: Y(py), r: 11, fill: 'none',
+            stroke: domColor(f.wallType, WALL_TYPES, WALLTYPE_COLOR),
+            'stroke-width': 2, 'stroke-dasharray': domainSize(f.wallType) === 1 ? '' : '3 3',
+            'pointer-events': 'none',
+          }));
+        }
       }
     }
   }
 
   drawEdgeHandles(svg);
   buildReadout(res);
+  buildBrushBar();
   schedule3d();
 }
 
@@ -385,6 +402,82 @@ function firstWalkable(res: (Cell | null)[]): number {
     if (c && c.floor !== 'none' && c.floor !== 'rock') return nodeId(stride(), x, y);
   }
   return -1;
+}
+
+/* ------------------------------ legend + brush ------------------------------- */
+
+/** One swatch, drawn exactly the way the grid draws that value — same colour table, same hatch. */
+function swatch(color: string, hatch?: string | undefined, size = 14): SVGElement {
+  const svg = svgEl('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  svg.innerHTML = patternDefs(size * 3);
+  svg.append(svgEl('rect', { x: 0, y: 0, width: size, height: size, rx: 3, fill: color }));
+  if (hatch) svg.append(svgEl('rect', { x: 0, y: 0, width: size, height: size, rx: 3, fill: `url(#${hatch})` }));
+  svg.append(svgEl('rect', { x: 0.5, y: 0.5, width: size - 1, height: size - 1, rx: 3, fill: 'none', stroke: '#0006' }));
+  return svg;
+}
+
+/**
+ * WHAT AM I PAINTING? The brush lived only in the panel's chip rows, which are scrolled away half the
+ * time and never showed the MIX — a two-value brush looked the same as a one-value brush. This strip
+ * sits above the schematic and shows the resolved swatch, so what you are about to lay down is drawn
+ * in the same language as what is already on the board.
+ */
+function buildBrushBar(): void {
+  const bar = document.getElementById('brushbar');
+  if (!bar) return;
+  bar.innerHTML = '';
+
+  const chosen = (): { vals: string[]; color: string; hatches: { id: string; opacity: number }[] } => {
+    if (brush.mode === 'wall') {
+      const m = brush.seg.size ? segs(...brush.seg) : 0;
+      return { vals: [...brush.seg], color: mixMask(m, SEGS, SEG_COLOR), hatches: hatchesFor(m, SEGS, SEG_HATCH) };
+    }
+    if (brush.mode === 'floor') {
+      const m = brush.floor.size ? floors(...brush.floor) : 0;
+      return { vals: [...brush.floor], color: mixMask(m, FLOOR_MATERIALS, FLOOR_COLOR), hatches: hatchesFor(m, FLOOR_MATERIALS, FLOOR_HATCH) };
+    }
+    if (brush.mode === 'corner') {
+      const m = brush.corner.size ? corners(...brush.corner) : 0;
+      return { vals: [...brush.corner], color: mixMask(m, CORNERS, CORNER_COLOR), hatches: [] };
+    }
+    if (brush.mode === 'wallType') {
+      const m = brush.wallType.size ? wallTypes(...brush.wallType) : 0;
+      return { vals: [...brush.wallType], color: mixMask(m, WALL_TYPES, WALLTYPE_COLOR), hatches: [] };
+    }
+    return { vals: [], color: '#3b6ea5', hatches: [] };
+  };
+
+  const { vals, color, hatches } = chosen();
+  const sw = swatch(color, hatches[0]?.id, 18);
+  bar.append(h('span', { class: 'bb-label' }, 'painting'));
+  bar.append(sw);
+  bar.append(h('span', { class: 'bb-mode' }, brush.mode === 'stamp' ? (activeBrush ?? 'stamp') : brush.mode));
+  bar.append(h('span', { class: 'bb-vals' },
+    vals.length === 0 ? (brush.mode === 'select' || brush.mode === 'stamp' ? '' : 'nothing selected')
+      : vals.length === 1 ? vals[0]!
+        : `${vals.join(' + ')}  — a SET, left undecided`));
+  bar.append(h('span', { class: 'bb-hint' }, 'right-click = abstain'));
+}
+
+/** The key. Generated from the same tables the grid draws from, so it cannot go stale. */
+function buildLegend(): void {
+  const box = document.getElementById('legend');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const group of legend()) {
+    box.append(h('h2', {}, group.title));
+    const rows = h('div', { class: 'legend-rows' });
+    for (const r of group.rows) {
+      const row = h('div', { class: 'legend-row' });
+      row.append(swatch(r.color, r.hatch));
+      row.append(h('span', {}, r.label));
+      rows.append(row);
+    }
+    box.append(rows);
+  }
+  box.append(h('div', { class: 'hint' },
+    'Colours MIX: a field that allows several values shows all of them blended, and the number in the '
+    + 'square is how many. A hatch means that value is possible; a solid hatch means it is certain.'));
 }
 
 function buildReadout(res: (Cell | null)[]): void {
@@ -483,6 +576,7 @@ function listBox(store: Record<string, Stored>, onPick: (n: string) => void, onD
 }
 
 function buildPanel(): void {
+  buildLegend();
   const p = el('panel');
   p.innerHTML = '';
   p.append(h('h1', {}, 'Cell Editor · 2u'));
@@ -678,11 +772,23 @@ function init3d(): void {
   frameCamera();
 }
 
+/**
+ * Frame on WHAT IS ACTUALLY BUILT, not on the cell count. A 2x2 structure spans three lattice cells
+ * but its staircase is five units wide and four tall, so a distance derived from the grid size puts
+ * the camera inside the model. The union of the meshes and the ground plate is the honest extent.
+ */
 function frameCamera(): void {
   if (!scene) return;
-  const span = Math.max(W, H) * CELL;
-  camera.position.set(span * 0.85, span * 0.8, span * 0.85);
-  controls3d.target.set(0, 0, 0);
+  const plate = new THREE.Box3(
+    new THREE.Vector3((-(W + 1) * CELL) / 2, 0, (-(H + 1) * CELL) / 2),
+    new THREE.Vector3(((W + 1) * CELL) / 2, 0, ((H + 1) * CELL) / 2),
+  );
+  const box = built ? new THREE.Box3().setFromObject(built).union(plate) : plate;
+  const centre = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(1, box.getSize(new THREE.Vector3()).length() / 2);
+  const dist = radius / Math.sin((camera.fov * Math.PI) / 360);
+  camera.position.set(centre.x + dist * 0.62, centre.y + dist * 0.58, centre.z + dist * 0.62);
+  controls3d.target.copy(centre);
   controls3d.update();
 }
 
@@ -693,12 +799,17 @@ function schedule3d(): void {
   timer = window.setTimeout(() => void rebuild3d(), 140);
 }
 
+let framedFor = '';
 async function rebuild3d(): Promise<void> {
   if (!scene) return;
   const group = await buildGrid(resolved(), stride(), H + 1, { w: W, h: H });
   if (built) scene.remove(built);
   built = group;
   scene.add(group);
+  // Re-frame when the SUBJECT changes, not on every stroke — otherwise the camera yanks back to
+  // default mid-edit and you lose the angle you were inspecting from.
+  const key = `${W}x${H}`;
+  if (key !== framedFor) { framedFor = key; frameCamera(); }
 }
 
 /* --------------------------------- splitter --------------------------------- */
