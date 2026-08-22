@@ -34,10 +34,11 @@
 // output), a coordinate-hash pick at collapse, dense-array iteration, no float / no Math.random.
 
 import { makeRng, mixSeeds, nextInt, nextRange, subStream, type Rng } from './rng.ts';
-import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type TileGrid, type Region, type Stamp } from './tile-grid.ts';
+import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type TileGrid, type Region, type Stamp, type Tx } from './tile-grid.ts';
 import { template, segs, centres, floors, wallTypes, type Mask } from './wall-tile-field.ts';
 import { DIRS, FLOOR_CORNERS, type Dir, type FloorCorner, type WallTile } from './wall-tile.ts';
 import { listStructures, getStructure, type SavedStructure } from './structures.ts';
+import { crossSeam, stampSeam, cohere, allPointSeams, allCrossSeams } from './seams.ts';
 import { cornerId } from './corner-graph.ts';
 import {
   type ArmEdge,
@@ -126,33 +127,41 @@ export interface EmergentResult {
     ringSealed: number;
     /** Ring cells left open because sealing them would have closed a guaranteed route — the doors. */
     doorsKept: number;
+    /** Split-across-tiles features pulled into agreement (cross seams + point seams). */
+    seamsCohered: number;
   };
 }
 
 /* ------------------------------- proposals ------------------------------- */
 
 /**
- * Stage one full-height wall arm. The tile owns its N/W edge cells; its E/S edge cells belong to the
- * neighbour (docs/16 §12 #4), so an E/S wall is written as the NEIGHBOUR's W/N edge — the shared cell
- * is narrowed exactly once, and the two tiles cannot end up disagreeing. At the map border there is
- * no neighbour and the outer edge is already the perimeter shell, so only the inner cell is written.
+ * Stage a full-height wall across ONE TILE BOUNDARY — the whole CROSS seam (seams.ts), not one tile's
+ * arm. Setting only the near tile's arm leaves its partner to settle to nothing, so the wall runs from
+ * A's centre to the boundary and stops with an end-cap: the stub. Setting all three cells makes it a
+ * continuous centre-to-centre run, which is what a wall is supposed to look like.
+ *
+ * `d` is taken from tile (x,y); the seam itself is stored east/south of a tile, so a N or W direction
+ * addresses the seam belonging to the neighbour on that side.
  */
-function stampWallArm(tx: ReturnType<typeof begin>, x: number, y: number, d: Dir): void {
+function stampWallArm(tx: Tx, g: TileGrid, x: number, y: number, d: Dir): void {
+  const seam =
+    d === 'E' ? crossSeam(g, x, y, 'E')
+    : d === 'S' ? crossSeam(g, x, y, 'S')
+    : d === 'W' ? crossSeam(g, x - 1, y, 'E')
+    : crossSeam(g, x, y - 1, 'S');
+  if (seam) { stampSeam(tx, seam, WALL); return; }
+  // no second tile — the map border. The outer edge is already the perimeter shell, so only this
+  // tile's own inner half exists to be set.
   const inner: Partial<Record<Dir, Mask>> = {};
   inner[d] = WALL;
   stamp(tx, { x, y, w: 1, h: 1 }, template({ inner }));
-
-  if (d === 'N') stamp(tx, { x, y, w: 1, h: 1 }, template({ edge: { N: WALL } }));
-  else if (d === 'W') stamp(tx, { x, y, w: 1, h: 1 }, template({ edge: { W: WALL } }));
-  else if (d === 'E') stamp(tx, { x: x + 1, y, w: 1, h: 1 }, template({ edge: { W: WALL } }));
-  else stamp(tx, { x, y: y + 1, w: 1, h: 1 }, template({ edge: { N: WALL } }));
 }
 
 /** A straight run of `len` arms from (x,y) in direction `d`: the arms sit on successive tiles ALONG
  *  the wall's own line (a W arm is vertical, so the run steps south; an N arm is horizontal, so it
  *  steps east). Out-of-grid steps are simply skipped — a short run is still a legal proposal. */
-function stampWallRun(tx: ReturnType<typeof begin>, g: TileGrid, x: number, y: number, d: Dir, len: number): void {
-  for (const a of runArms(g, x, y, d, len)) stampWallArm(tx, a.x, a.y, a.d);
+function stampWallRun(tx: Tx, g: TileGrid, x: number, y: number, d: Dir, len: number): void {
+  for (const a of runArms(g, x, y, d, len)) stampWallArm(tx, g, a.x, a.y, a.d);
 }
 
 /**
@@ -207,7 +216,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const stats: EmergentResult['stats'] = {
     roomsPlaced: 0, roomsRejectedConflict: 0, roomsRejectedUnreachable: 0, roomsRejectedTooBig: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
-    ringSealed: 0, doorsKept: 0,
+    ringSealed: 0, doorsKept: 0, seamsCohered: 0,
   };
 
   /** Everywhere connectivity must survive to: the exit, plus one interior corner per placed room.
@@ -316,7 +325,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
           if (masks.inner !== POROUS) continue;
 
           const tx = begin(grid);
-          stampWallArm(tx, x, y, d);
+          stampWallArm(tx, grid, x, y, d);
           const at = txAt(tx);
           if (!at(x, y) || !routeGuaranteed(at, route)) { rollback(tx); stats.doorsKept++; continue; }
           if (!commit(tx)) { stats.doorsKept++; continue; }
@@ -336,6 +345,23 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
      Defaults: arms/centre → `none` (open space, no pillar), floor → `stone` (the corridor ground),
      wallType → `solid`. Opening can only ADD reachability, so this needs no gate; cells already
      narrowed to a wall no longer contain `none` and are untouched. ---- */
+  /* ---- phase 4b: COHERE the seams. Before anything defaults, pull every split-across-tiles feature
+     toward agreement: each CROSS seam (2 tiles — the wall line over a boundary) and each POINT seam
+     (4 tiles — the floor quadrants meeting at a lattice point). Narrowing to the intersection where
+     one is still available lets a decision made in one tile carry into its partners, which is what
+     stops walls half-crossing a boundary and floors changing material four ways around a point. A
+     seam whose members were genuinely decided differently has an empty intersection and is left
+     alone — coherence is a tendency, never an override. ---- */
+  const cohereTx = begin(grid);
+  {
+    const at = txAt(cohereTx);
+    for (const seam of allCrossSeams(grid)) if (cohere(cohereTx, at, seam)) stats.seamsCohered++;
+    for (const seam of allPointSeams(grid)) if (cohere(cohereTx, at, seam)) stats.seamsCohered++;
+  }
+  if (!commit(cohereTx)) {
+    throw new Error('emergent: cohering a seam emptied a domain — impossible, the intersection was checked');
+  }
+
   const settleTx = begin(grid);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {

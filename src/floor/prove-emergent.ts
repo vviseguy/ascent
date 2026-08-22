@@ -20,6 +20,7 @@
 import { generateEmergent, resolveEmergent, type EmergentConfig } from './emergent.ts';
 import { buildCornerGraph, reachableFromSet } from './corner-graph.ts';
 import { gridAt, reaches, routeGuaranteed } from './tile-reach.ts';
+import { seamDisagreements } from './seams.ts';
 import { domainSize } from './wall-tile-field.ts';
 import { DIRS } from './wall-tile.ts';
 
@@ -40,6 +41,8 @@ let totalWalls = 0;
 let totalDoors = 0;
 let rejectedUnreachable = 0;
 let rejectedConflict = 0;
+let cohered = 0;
+let seamDrift = 0;
 
 for (const [w, h] of SIZES) {
   for (const seed of SEEDS) {
@@ -53,6 +56,8 @@ for (const [w, h] of SIZES) {
     totalDoors += r.stats.doorsKept;
     rejectedUnreachable += r.stats.wallsRejectedUnreachable + r.stats.roomsRejectedUnreachable;
     rejectedConflict += r.stats.wallsRejectedConflict + r.stats.roomsRejectedConflict;
+    cohered += r.stats.seamsCohered;
+    seamDrift += seamDisagreements(r.grid, gridAt(r.grid)).length;
 
     // 1. determinism
     if (JSON.stringify(generateEmergent(cfg).grid) === JSON.stringify(r.grid)) deterministic++;
@@ -97,6 +102,11 @@ controls.push({
   name: 'the AND-gate refuses trespass (a wall proposed inside a room)',
   pass: rejectedConflict > 0,
   detail: `${rejectedConflict} proposal(s) rejected because a domain emptied — no policing code involved`,
+});
+controls.push({
+  name: 'split-across-tile features are pulled into agreement',
+  pass: cohered > floors * 100 && seamDrift < floors,
+  detail: `${cohered} seams cohered, ${seamDrift} still disagree across ${floors} floors (<1 per floor)`,
 });
 controls.push({
   name: 'the floors are actually walled (not empty rooms)',

@@ -85,7 +85,22 @@ complete alternative front-end that produces the same `TileGrid` stage 9 hands t
 | # | Stage | File | Produces | Invariant | Gate | Status |
 |---|---|---|---|---|---|---|
 | E1 | Domain reachability | `src/floor/tile-reach.ts` | `may` / `must` arm predicates, domain corner-graph, `pinRouteOpen` | `MUST ⇒ MAY` for every representable domain pair; pinning touches only tile-private inner cells | `tile-reach.test.ts` (17, incl. negative controls) | **BUILT** |
-| E2 | Emergent generator | `src/floor/emergent.ts` | `EmergentResult` (settled `TileGrid` + pinned routes) | Every target reachable at every moment; field fully settled at the end | `emergent.test.ts` (10), `prove:emergent` | **BUILT** |
+| E2 | Seams | `src/floor/seams.ts` | `crossSeam` (2 tiles) / `pointSeam` (4 tiles), `cohere` | Coherence is a TENDENCY — `cohere` narrows to the intersection only when non-empty, never overriding a decision | `seams.test.ts` (15, incl. negative controls) | **BUILT** |
+| E3 | Emergent generator | `src/floor/emergent.ts` | `EmergentResult` (settled `TileGrid` + pinned routes) | Every target reachable at every moment; field fully settled at the end; rooms come ONLY from `structures.json` | `emergent.test.ts` (10), `prove:emergent` | **BUILT** |
+
+**SEAMS — the two places the tile decomposition leaks.** Cutting the world into 4u tiles splits some
+physical features across tiles, and the split parts are stored independently, so they drift. Drift is
+what reads as "malformed". There are exactly two such splits:
+
+| Seam | Spans | Cells | Drift looks like |
+|---|---|---|---|
+| **cross** | **2 tiles** | `A.inner.E` · the shared edge · `B.inner.W` | a wall that runs from one tile's centre and stops dead at the boundary with an end-cap — a **stub** |
+| **point** | **4 tiles** | the four floor QUADRANTS meeting at a lattice point (`se`/`sw`/`ne`/`nw` of the tiles around it) | ground changing material four ways around a single point — a **checkerboard** |
+
+A wall proposal stamps the whole cross seam, so every wall is a continuous centre-to-centre run by
+construction. A `cohere` pass before settle pulls both kinds toward agreement wherever they are still
+free to move. `seamDisagreements()` reports what is left — a diagnostic, not an error, since a doorway
+in a wall run and a material change at a room edge are both legitimate disagreement.
 
 ```
 makeGrid()                     every cell fullField() — a blank field is MAXIMALLY connected
