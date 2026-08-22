@@ -21,7 +21,7 @@ import { WinCondition, type MatchConfig } from './match.ts';
 import { generateFloor } from '../floor/generate.ts';
 import { compileTower, FLOOR_HEIGHT, GAME_GRID_SIZE } from './tower.ts';
 import { compileCellTower, type CellFloor } from './cell-tower.ts';
-import { generateEmergent } from '../floor/cell-emergent.ts';
+import { generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveGrid } from '../floor/cell-grid.ts';
 
 export interface SceneHandle {
@@ -178,15 +178,20 @@ export function buildTower(opts: {
   if (substrate === '2u') {
     // TWICE the grid in each direction covers the same ground: a 2u cell is half a 4u tile.
     const cw = gridSize * 2, ch = gridSize * 2;
-    const cellFloors: CellFloor[] = [];
-    for (let s = 0; s < numStrata; s++) {
-      const r = generateEmergent({ width: cw, height: ch, seed: seed + BigInt(s) });
-      cellFloors.push({ cells: resolveGrid(r.grid), width: cw, height: ch, entry: r.entry, exit: r.exit });
-    }
+    /* The WHOLE STACK at once, not a floor at a time: a stairwell spans two storeys, and a structure
+       can only be placed across floors that exist together. Generating them independently is what made
+       every flight climb into a ceiling. */
+    const stack = generateEmergentTower({ width: cw, height: ch, seed, levels: numStrata });
+    const cellFloors: CellFloor[] = stack.floors.map((f) => ({
+      cells: resolveGrid(f.grid), width: cw, height: ch, entry: f.entry, exit: f.exit,
+    }));
     const t = compileCellTower(cellFloors, 0, { groundY, killPlaneY });
+    // said out loud rather than silently producing a tower you cannot climb
     if (t.strataWithoutStairs.length) {
-      // said out loud rather than silently producing a tower you cannot climb
       console.warn(`[tower] no way up from stratum ${t.strataWithoutStairs.join(', ')} — no stair flight on that floor`);
+    }
+    if (t.ceilingSealedFlights.length) {
+      console.warn(`[tower] ${t.ceilingSealedFlights.length} flight(s) climb into a floored-over ceiling`);
     }
     tower = t;
   } else {

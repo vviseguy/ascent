@@ -114,9 +114,15 @@ the 4u path below, so that is what it draws. Neither is deleted; nothing is half
 A cell owns `{floor, wallN, wallW, corner, wallType}`. **The stored grid is the lattice of POINTS**,
 not of cells: a w×h structure stores (w+1)×(h+1) entries **per STOREY**, so it owns all four of its
 borders and rotates losslessly. `levels` (absent = 1) stacks those lattices FLOOR_HEIGHT apart, which
-is how a staircase says there is a hole in the ceiling above it. The generator builds one floor at a
-time and **declines** multi-storey structures (counted in `stats.structuresSkippedMultiLevel`) rather
-than flattening them to their ground floor. `wallN` is the edge running east from a point, `wallW` the edge running south,
+is how a staircase says there is a hole in the ceiling above it. `generateEmergentTower` builds the
+whole stack at once so a structure can span storeys, and **guarantees a stairwell starts on every
+storey below the top** (`stats.storeysWithoutStairwell` is the alarm).
+
+`src/game/cell-tower.ts` compiles those floors into the SAME IR the 4u compiler produces — both meet
+at `StratumCellGrid.wallPlacements`. `buildTower({ substrate: '2u' })` or `?substrate=2u` selects it;
+**4u is still the default** because PROOF 8's input-driven climb is written against the 4u synthetic
+stair. `cell-tower.test.ts` proves the 2u tower on its own terms (every shaft open, summit route
+holds across seeds, plus a negative control). `wallN` is the edge running east from a point, `wallW` the edge running south,
 `corner` the junction at it; only `floor` belongs to the cell south-east of it.
 
 Two rules that keep biting if forgotten:

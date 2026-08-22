@@ -19,9 +19,13 @@
 //   STAIRS      REAL ones. The 4u compiler synthesises a straight staircase at a fixed column pair,
 //               because the 4u floor graph has no notion of an authored stair. Here a flight is a
 //               block of `stairs` cells that an author drew, found by `stairFlight`, and its collider
-//               is a ramp of steps built to the same 8×0.50 rise the mesh has. A floor with no flight
-//               therefore has NO WAY UP, and that is reported rather than papered over with a
-//               synthetic one — the fix is multi-storey structures, not a second stair system.
+//               is a stack of steps built to the same 8×0.50 rise the mesh has. A floor with no flight
+//               has NO WAY UP and says so rather than being papered over with a synthetic one — the
+//               generator guarantees a stairwell starts on every storey below the top.
+//
+//               THE ART'S STAIRCASES ARE 45 DEGREES (4.00 up over a 4.00 run), so their treads are
+//               0.5 deep and `ANCHOR_PROBE.minSide` of 0.8 rejects them. `CELL_PROBE` is the same
+//               probe told the right tread size; see the note on it.
 //
 //   METADATA    `roomId`/`roomRole` are -1 and there are no puzzle spawns. Those are 4u `Floor`
 //               concepts (rooms, roles, locked doors) with no equivalent here yet; the renderer reads

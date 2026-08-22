@@ -64,6 +64,22 @@ export const ANCHOR_PROBE: RouteProbe = {
   minSide: 0.8,
 };
 
+/**
+ * The same probe for a tower built on AUTHORED staircases — identical but for `minSide`.
+ *
+ * THE ART'S STAIRCASES ARE 45 DEGREES: every stair mesh in the kit climbs 4.00 over a 4.00 run, in
+ * eight treads, so a tread is 0.5 deep. `ANCHOR_PROBE.minSide` is 0.8, which rejects them — not
+ * because they are unclimbable but because `minSide` asks whether ONE surface is big enough to stand
+ * on, and nobody stands on one tread of a staircase. You stand across several, which a per-surface
+ * minimum cannot express.
+ *
+ * The 4u tower never hit this: its staircase is synthesised at roughly 29 degrees, with treads deeper
+ * than the art's. So the threshold is not being loosened to make a proof pass — it is being told the
+ * tread size of the stairs it is actually looking at. Every other constraint (the 0.6 rise it can hop,
+ * the headroom, the reach) is unchanged, and those are the ones that decide climbability.
+ */
+export const CELL_PROBE: RouteProbe = { ...ANCHOR_PROBE, minSide: 0.45 };
+
 /** One standable box-top surface (float meters). */
 interface StandNode {
   top: number;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { listStructures, getStructure, stride, STORED_VALUE_SETS } from './cell-structures.ts';
+import { listStructures, getStructure, levelsOf, stride, STORED_VALUE_SETS } from './cell-structures.ts';
 import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from './cell.ts';
 import { collapse, domainSize, fullField } from './cell-field.ts';
 
@@ -29,10 +29,10 @@ describe('cell-structures — the store matches the model it was written against
     }
   });
 
-  it('every structure stores the POINT lattice — (w+1)×(h+1) entries', () => {
+  it('every structure stores the POINT lattice — (w+1)×(h+1) entries PER STOREY', () => {
     for (const n of listStructures()) {
       const s = getStructure(n)!;
-      expect(s.cells).toHaveLength(stride(s) * (s.h + 1));
+      expect(s.cells).toHaveLength(stride(s) * (s.h + 1) * levelsOf(s));
     }
   });
 

@@ -1,10 +1,11 @@
 // The 2u tower compiler: does a generated 2u floor become terrain the sim can actually stand on?
 import { describe, it, expect } from 'vitest';
 import { fromInt, fromFloatConst, toFloat, toRaw } from '../sim/fixed/fixed.ts';
-import { generateEmergent } from '../floor/cell-emergent.ts';
+import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveGrid } from '../floor/cell-grid.ts';
 import { compileCellTower, cellCentre2u, cellWorldPlacements, wallMask2u, CELL_SIZE_2U, type CellFloor } from './cell-tower.ts';
 import { FLOOR_HEIGHT } from './tower.ts';
+import { summitRoute, CELL_PROBE } from './route-check.ts';
 import type { Cell } from '../floor/cell.ts';
 
 const W = 24, H = 20;
@@ -128,6 +129,47 @@ describe('cell-tower — the geometry lines up', () => {
     for (const p of cellWorldPlacements(cells, 2, 2)) {
       if (p.unit.url.includes('floor_')) expect(p.unit.boxes).toEqual([]);
     }
+  });
+});
+
+
+describe('cell-tower — the tower is CLIMBABLE, not merely built', () => {
+  /* The whole chain, end to end: a two-storey stairwell placed across floors paints its own shaft,
+     the compiler turns the flight into steps, and an independent route check walks entry -> top over
+     the compiled AABBs. Every link has to hold or this fails. */
+  const W = 40, H = 40, N = 4;
+  const seeds = [0x5a17ed_1234n, 1000n, 8919n];
+
+  it.each(seeds.map((s) => [String(s), s] as const))(
+    'seed %s: every storey has a way up, every shaft is open, and the summit is reachable',
+    (_label, seed) => {
+      const stack = generateEmergentTower({ width: W, height: H, seed, levels: N });
+      const floors: CellFloor[] = stack.floors.map((f) => ({
+        cells: resolveGrid(f.grid), width: W, height: H, entry: f.entry, exit: f.exit,
+      }));
+      const t = compileCellTower(floors, 0, PARAMS);
+
+      expect(stack.stats.storeysWithoutStairwell).toBe(0);
+      expect(t.strataWithoutStairs).toEqual([]);
+      expect(t.ceilingSealedFlights).toEqual([]);
+
+      const r = summitRoute(t, CELL_PROBE);
+      expect(r.ok, `${r.reason} (${r.reached}/${r.nodes} nodes)`).toBe(true);
+    },
+  );
+
+  it('the route check is not vacuous — flooring the shafts breaks it', () => {
+    const stack = generateEmergentTower({ width: W, height: H, seed: 1000n, levels: N });
+    const floors: CellFloor[] = stack.floors.map((f) => ({
+      cells: resolveGrid(f.grid), width: W, height: H, entry: f.entry, exit: f.exit,
+    }));
+    // fill every hole back in: now each flight climbs into a ceiling and nothing can get up
+    for (const f of floors) {
+      for (const c of f.cells) if (c && c.floor === 'none') c.floor = 'stone';
+    }
+    const sealed = compileCellTower(floors, 0, PARAMS);
+    expect(sealed.ceilingSealedFlights.length).toBeGreaterThan(0);
+    expect(summitRoute(sealed, CELL_PROBE).ok).toBe(false);
   });
 });
 

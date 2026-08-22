@@ -28,18 +28,18 @@
 //
 // Deterministic: seeded sub-streams per phase, index-sorted iteration, integer hashes, no float.
 
-import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
-import { template, settleMask, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
+import { makeGrid, begin, stamp, commit, rollback, txConflicts, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
+import { previewCell, template, settleMask, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
 import {
   gridAt, txAt, findRoute, pinRouteOpen, routeGuaranteed, reachSet, keepsReach, stillConnected,
   type StepEdge,
 } from './cell-reach.ts';
 import { planMaze, type MazeParams } from './cell-maze.ts';
-import { getStructure, levelsOf, listStructures } from './cell-structures.ts';
+import { getStructure, levelsOf, listStructures, type CellStructure } from './cell-structures.ts';
 import { orientStructure, ORIENTATIONS, type Orientation } from './cell-orient.ts';
 import { makeRng, subStream, nextInt, mixSeeds, type Rng } from './rng.ts';
-import type { Cell } from './cell.ts';
+import { isStairFloor, type Cell } from './cell.ts';
 
 const WALL: Mask = segs('wall');
 const NONE: Mask = segs('none');
@@ -60,7 +60,22 @@ export interface EmergentConfig {
   structureAttempts?: number;
   /** Which carver shapes the space between structures. */
   maze?: MazeParams;
+  /**
+   * Where structures come from. Defaults to the authored store.
+   *
+   * A seam, not a knob: multi-storey placement is the generator's most consequential behaviour and it
+   * cannot be exercised at all unless a multi-storey structure exists, so without this the only way to
+   * test it would be to put one in the shipped store and assert against art someone may edit.
+   */
+  structures?: StructureSource;
 }
+
+export interface StructureSource {
+  names: () => string[];
+  get: (name: string) => CellStructure | undefined;
+}
+
+const AUTHORED: StructureSource = { names: listStructures, get: getStructure };
 
 export interface PlacedStructure {
   name: string;
@@ -80,8 +95,11 @@ export interface EmergentResult {
   routes: StepEdge[][];
   stats: {
     structuresPlaced: number;
-    /** Declined for spanning more than one storey — see `structureStamp`. */
+    /** Declined for being taller than the tower. */
     structuresSkippedMultiLevel: number;
+    /** Storeys left with no stairwell, so no way up. Non-zero means the tower is not climbable —
+     *  either the store has no multi-storey staircase, or one would not fit. */
+    storeysWithoutStairwell: number;
     structuresRejectedConflict: number;
     structuresRejectedOverlap: number;
     wallsPlaced: number;
@@ -112,51 +130,78 @@ const overlaps = (a: Region, b: Region): boolean =>
  * wall proposed in there meets {none} ∩ {wall} = ∅, the transaction conflicts, and the AND-gate
  * rejects it with no policing code involved. Anything the author DID paint is left exactly as painted.
  */
-function structureStamp(name: string, porousPerimeter: boolean, o: Orientation): { stamp: (lx: number, ly: number) => CellField; w: number; h: number } | null {
-  const base = getStructure(name);
+function structureStamp(
+  name: string, porousPerimeter: boolean, o: Orientation, level = 0, src: StructureSource = AUTHORED,
+): { stamp: (lx: number, ly: number) => CellField; w: number; h: number; levels: number } | null {
+  const base = src.get(name);
   if (!base) return null;
-  /* MULTI-STOREY STRUCTURES ARE DECLINED, not flattened. This generator builds ONE floor, so it has
-     nowhere to put a structure's upper levels — and stamping just level 0 would silently drop the very
-     thing those levels exist to say (the hole in the ceiling above a staircase, and the absence of a
-     wall where you arrive). Placing half a structure is worse than not placing it, so it waits until
-     the generator can span storeys. */
-  if (levelsOf(base) > 1) return null;
   const st = orientStructure(base, o); // 4 turns x mirrored = 8 placements per authored piece
+  const nLevels = levelsOf(st);
+  if (level >= nLevels) return null;
+
+  /* WALLS THAT HOLD UP A STAIRCASE ARE NOT NEGOTIABLE.
+     The porous rule below exists so the generator can cut a doorway into a room, and for a room that
+     is right: the author said "wall", and a door through it costs nothing. A stairwell is different.
+     Which way a flight climbs is DERIVED from exactly one end being walled, so a door cut through the
+     head does not merely open a room — it stops the staircase being a staircase, and the cells settle
+     back to ordinary ground.
+     It is not hypothetical: the router treats every structure's middle as a target, walked in through
+     the head wall of a 2x2 stairwell, pinned it open, and the flight vanished. So a wall bounding a
+     stair cell stays exactly as the author drew it. */
+  const preview = st.cells.slice(level * (st.w + 1) * (st.h + 1), (level + 1) * (st.w + 1) * (st.h + 1))
+    .map((f) => previewCell(f));
+  const lw = st.w + 1, lh = st.h + 1;
+  const isStair = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < lw && y < lh && isStairFloor(preview[y * lw + x]?.floor ?? 'none');
+  // wallN at (x,y) separates (x,y-1) from (x,y); wallW separates (x-1,y) from (x,y)
+  const holdsStairN = (x: number, y: number): boolean => isStair(x, y) || isStair(x, y - 1);
+  const holdsStairW = (x: number, y: number): boolean => isStair(x, y) || isStair(x - 1, y);
   const loosen = (m: Mask): Mask => (m === WALL && porousPerimeter ? POROUS : m);
   // "still allows `none`" is the robust test for "the author did not put a wall here". Comparing
   // against `fullField()` does NOT work: a migrated structure's domains were converted from the old
   // four-value model, so an unpainted wall carries {none,wall,barrier} and never the new full set.
   const assertAir = (m: Mask): Mask => ((m & NONE) !== 0 ? NONE : m);
   const sw = st.w + 1; // the stored grid is the POINT lattice, one larger than the floor extent
+  const lvBase = level * (st.w + 1) * (st.h + 1); // levels are stored one lattice after another
   return {
     w: sw,
     h: st.h + 1,
+    levels: nLevels,
     stamp: (lx, ly) => {
-      const f = st.cells[ly * sw + lx]!;
+      const f = st.cells[lvBase + ly * sw + lx]!;
       const onEdge = lx === 0 || ly === 0 || lx === st.w || ly === st.h;
       return onEdge
-        ? { ...f, wallN: loosen(f.wallN), wallW: loosen(f.wallW) }
+        ? {
+          ...f,
+          wallN: holdsStairN(lx, ly) ? f.wallN : loosen(f.wallN),
+          wallW: holdsStairW(lx, ly) ? f.wallW : loosen(f.wallW),
+        }
         : { ...f, wallN: assertAir(f.wallN), wallW: assertAir(f.wallW) };
     },
   };
 }
 
-export function generateEmergent(cfg: EmergentConfig): EmergentResult {
-  const { width: w, height: h, seed } = cfg;
-  const grid = makeGrid(w, h);
-  const base = makeRng(seed);
-  const stats: EmergentResult['stats'] = {
-    structuresPlaced: 0, structuresSkippedMultiLevel: 0, structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
-    wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
-    ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
-  };
+/** Everything one storey needs handed to it, so the phases below can run per level. */
+interface Storey {
+  grid: CellGrid;
+  placed: PlacedStructure[];
+  porousWalls: { x: number; y: number; side: 'N' | 'W' }[];
+}
 
-  /* ---- 1. STRUCTURES — the only rooms there are ---- */
-  const names = listStructures(); // sorted, so iteration is deterministic
-  const sRng: Rng = subStream(base, STREAM.structures);
-  const placed: PlacedStructure[] = [];
-  const porousWalls: { x: number; y: number; side: 'N' | 'W' }[] = [];
-  const copies = cfg.structureAttempts ?? Math.max(2, Math.floor((w * h) / 400));
+/**
+ * Place the authored structures across a STACK of storeys.
+ *
+ * A multi-storey structure lands whole or not at all, ACROSS levels: its transactions on every storey
+ * it touches are staged, checked together, and committed together. Committing them one at a time would
+ * leave a stairwell with its shaft on the floor above and nothing under it when the lower half was
+ * refused — which is exactly the kind of half-placed thing the transactional grid exists to prevent,
+ * just one dimension up.
+ */
+function placeStructures(
+  storeys: Storey[], w: number, h: number, sRng: Rng, copies: number,
+  stats: EmergentResult['stats'], src: StructureSource = AUTHORED,
+): void {
+  const names = src.names(); // sorted, so iteration is deterministic
 
   /* LARGEST FIRST. Bin-packing's oldest heuristic, and it matters here for the reason it always does:
      a big piece placed late has nowhere left to go, so the floor ends up with small rooms scattered in
@@ -166,45 +211,172 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
      Positions run the FULL extent, right up to the border. Insetting by one kept the largest pieces
      away from exactly the edges they fit best against, and left a rim of corridor all the way round. */
   const byArea = names
-    .map((n) => ({ n, st: getStructure(n)! }))
+    .map((n) => ({ n, st: src.get(n)! }))
     .filter((e) => e.st)
     .sort((a, b) => (b.st.w * b.st.h) - (a.st.w * a.st.h) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
 
   const POSITION_TRIES = 24;
+
+  /** Storeys that have a stairwell STARTING on them — the half with the stairs, not the shaft. */
+  const wellStartsAt = new Array<boolean>(storeys.length).fill(false);
+
+  /** One attempt: pick an orientation and a spot, stage every storey, commit or roll the lot back.
+   *  Returns the base storey it landed on, or null. */
+  const tryPlace = (name: string, nLevels: number, baseLevel: number | null): number | null => {
+    const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;
+    const s = structureStamp(name, true, o, 0, src);
+    if (!s || s.w > w || s.h > h) return null;
+    const region: Region = {
+      x: nextInt(sRng, w - s.w + 1),
+      y: nextInt(sRng, h - s.h + 1),
+      w: s.w, h: s.h,
+    };
+    // a multi-storey piece needs `nLevels` consecutive storeys with room for it at that spot
+    const b = baseLevel ?? nextInt(sRng, storeys.length - nLevels + 1);
+    if (b < 0 || b + nLevels > storeys.length) return null;
+    const span = Array.from({ length: nLevels }, (_, k) => b + k);
+    if (span.some((lv) => storeys[lv]!.placed.some((q) => overlaps(q.region, region)))) {
+      stats.structuresRejectedOverlap++; return null;
+    }
+
+    // stage EVERY storey, then decide once — see the note on this function
+    const txs = span.map((lv, k) => {
+      const sk = structureStamp(name, true, o, k, src)!;
+      const tx = begin(storeys[lv]!.grid);
+      stamp(tx, region, (lx, ly) => sk.stamp(lx, ly));
+      return tx;
+    });
+    if (txs.some((tx) => txConflicts(tx).length > 0)) {
+      for (const tx of txs) rollback(tx);
+      stats.structuresRejectedConflict++; return null;
+    }
+    for (const tx of txs) commit(tx);
+
+    for (const lv of span) {
+      storeys[lv]!.placed.push({
+        name, orientation: o, region,
+        centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
+      });
+      for (let ly = 0; ly < region.h; ly++) {
+        for (let lx = 0; lx < region.w; lx++) {
+          if (!(lx === 0 || ly === 0 || lx === region.w - 1 || ly === region.h - 1)) continue;
+          storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
+          storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
+        }
+      }
+    }
+    stats.structuresPlaced++;
+    return b;
+  };
+
+  /* ---- A WAY UP FROM EVERY STOREY, placed FIRST ----------------------------------------------
+     A stairwell is not decoration, so it does not compete for space on equal terms with the rooms.
+     Left to the opportunistic pass below, whether a floor got one came down to where the dice fell:
+     five storeys, and storey 2 would have no stair on it at all, which is a tower you cannot climb.
+     So every storey below the top gets one FIRST, while the floor is empty and a spot is easy to find.
+
+     A stairwell is recognised, not declared: a structure that spans storeys AND has stair ground on
+     it. Nothing has to be tagged, and an author who draws a two-storey staircase gets one. */
+  const wells = byArea.filter((e) => levelsOf(e.st) > 1 && hasStairGround(e.st));
+  if (wells.length > 0) {
+    for (let lv = 0; lv + 1 < storeys.length; lv++) {
+      /* It must START here. A stairwell seated on the storey BELOW also occupies this one — with its
+         SHAFT, the hole you arrive through — and counting that as "this storey has a stairwell" left
+         every other floor with no way up while looking, from the outside, like it had one. */
+      if (wellStartsAt[lv]) continue;
+      for (let t = 0; t < POSITION_TRIES * 4 && !wellStartsAt[lv]; t++) {
+        const pick = wells[nextInt(sRng, wells.length)]!;
+        const n = levelsOf(pick.st);
+        if (lv + n > storeys.length) continue; // will not fit above this storey
+        if (tryPlace(pick.n, n, lv) === lv) wellStartsAt[lv] = true;
+      }
+      if (!wellStartsAt[lv]) stats.storeysWithoutStairwell++;
+    }
+  } else if (storeys.length > 1) {
+    // no authored stairwell exists at all — every storey is unreachable from the one below, and that
+    // is a fact about the STORE, not about this run
+    stats.storeysWithoutStairwell += storeys.length - 1;
+  }
+
+  /* ---- and then the rooms, opportunistically ---- */
   for (const { n: name, st } of byArea) {
-    if (levelsOf(st) > 1) { stats.structuresSkippedMultiLevel++; continue; } // counted, not silent
+    const nLevels = levelsOf(st);
+    if (nLevels > storeys.length) { stats.structuresSkippedMultiLevel++; continue; } // taller than the tower
     for (let copy = 0; copy < copies; copy++) {
       for (let t = 0; t < POSITION_TRIES; t++) {
-        const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;
-        const s = structureStamp(name, true, o);
-        if (!s || s.w > w || s.h > h) break;
-        const region: Region = {
-          x: nextInt(sRng, w - s.w + 1),
-          y: nextInt(sRng, h - s.h + 1),
-          w: s.w, h: s.h,
-        };
-        if (placed.some((q) => overlaps(q.region, region))) { stats.structuresRejectedOverlap++; continue; }
-
-        const tx = begin(grid);
-        stamp(tx, region, (lx, ly) => s.stamp(lx, ly));
-        if (!commit(tx)) { stats.structuresRejectedConflict++; continue; }
-
-        placed.push({
-          name, orientation: o, region,
-          centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
-        });
-        stats.structuresPlaced++;
-        for (let ly = 0; ly < region.h; ly++) {
-          for (let lx = 0; lx < region.w; lx++) {
-            if (!(lx === 0 || ly === 0 || lx === region.w - 1 || ly === region.h - 1)) continue;
-            porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
-            porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
-          }
+        const at = tryPlace(name, nLevels, null);
+        if (at !== null) {
+          if (nLevels > 1 && hasStairGround(st)) wellStartsAt[at] = true;
+          break;
         }
-        break; // placed this copy
       }
     }
   }
+}
+
+/** Does any storey of this structure pin STAIR ground? That is what makes it a stairwell rather than
+ *  a two-storey room — read off the art, so nothing has to be tagged. */
+function hasStairGround(st: CellStructure): boolean {
+  return st.cells.some((f) => isStairFloor(previewCell(f)?.floor ?? 'none'));
+}
+
+/** Substream for one storey. Without the level in the mix every floor gets an identical maze. */
+const levelStream = (base: Rng, id: number, level: number): Rng => subStream(base, id + level * 16);
+
+export function generateEmergent(cfg: EmergentConfig): EmergentResult {
+  const t = generateEmergentTower({ ...cfg, levels: 1 });
+  return { ...t.floors[0]!, stats: t.stats };
+}
+
+/** One storey of a tower, shaped exactly like a single-floor result minus the shared stats. */
+export type EmergentFloor = Omit<EmergentResult, 'stats'>;
+
+export interface EmergentTower {
+  floors: EmergentFloor[];
+  stats: EmergentResult['stats'];
+}
+
+/**
+ * Generate a STACK of floors, so a structure can span storeys.
+ *
+ * The structures are placed across the whole stack FIRST — that is the only phase that knows about
+ * more than one floor — and then every storey is finished on its own: its own routes, its own seal,
+ * its own maze, its own fill. Each floor's solvability is therefore exactly the property it always
+ * was, proven per floor, and the only thing levels add is that some ground was already claimed.
+ */
+export function generateEmergentTower(cfg: EmergentConfig & { levels?: number }): EmergentTower {
+  const { width: w, height: h, seed } = cfg;
+  const levels = Math.max(1, cfg.levels ?? 1);
+  const base = makeRng(seed);
+  const stats: EmergentResult['stats'] = {
+    structuresPlaced: 0, structuresSkippedMultiLevel: 0, storeysWithoutStairwell: 0,
+    structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
+    wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
+    ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
+  };
+
+  /* ---- 1. STRUCTURES — the only rooms there are, and the only phase that spans storeys ---- */
+  const storeys: Storey[] = Array.from({ length: levels }, () => ({
+    grid: makeGrid(w, h), placed: [], porousWalls: [],
+  }));
+  const copies = cfg.structureAttempts ?? Math.max(2, Math.floor((w * h) / 400));
+  placeStructures(storeys, w, h, subStream(base, STREAM.structures), copies, stats, cfg.structures ?? AUTHORED);
+
+  const floors: EmergentFloor[] = [];
+  for (let lv = 0; lv < levels; lv++) {
+    floors.push(finishStorey(storeys[lv]!, w, h, base, lv, cfg, stats));
+  }
+  return { floors, stats };
+}
+
+function finishStorey(
+  st: Storey, w: number, h: number, base: Rng, level: number,
+  cfg: EmergentConfig, stats: EmergentResult['stats'],
+): EmergentFloor {
+  const { grid, placed, porousWalls } = st;
+
+  /* Phase 1 (STRUCTURES) already ran, across the whole stack — it is the only phase that knows about
+     more than one storey. Everything from here is this floor on its own. */
 
   /* ---- 2. ROUTE + PIN. The route is DISCOVERED in the field, not imposed on a map. ---- */
   const entry = nodeId(w, 1, 1);
@@ -242,7 +414,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   /* ---- 4. MAZE. Every proposal must keep EVERY cell reachable — not just the targets. That is the
      difference between a maze and a field of sealed pockets. ---- */
   const maze: MazeParams = cfg.maze ?? { kind: 'backtracker', braid: 0.3 };
-  const mRng: Rng = subStream(base, STREAM.maze);
+  const mRng: Rng = levelStream(base, STREAM.maze, level);
   {
     // `scatter` keeps the OLD, WEAK gate on purpose: targets only, nobody asks about the rest of the
     // floor. It is retained as the control that shows what the full-connectivity gate is worth.
@@ -320,8 +492,8 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     if (!commit(tx)) throw new Error('emergent: settle emptied a domain — impossible, every narrowing is a subset of the surviving options');
   }
 
-  stats.reachableCells = reachSet(gridAt(grid), w, h, 'may', entry).filter(Boolean).length;
-  return { grid, placed, entry, exit, routes, stats };
+  stats.reachableCells += reachSet(gridAt(grid), w, h, 'may', entry).filter(Boolean).length;
+  return { grid, placed, entry, exit, routes };
 }
 
 /** Collapse the finished field. Fully settled, so the pick has nothing left to decide — but it is
