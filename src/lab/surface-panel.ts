@@ -104,6 +104,54 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   rowB.append(bUnhide, bSave);
   panel.appendChild(rowB);
 
+  // --- GROUPS: the partition, as a list you can point at ---
+  // The viewport shows the partition as colour; this shows it as an inventory. You need both — the
+  // colours tell you the SHAPE of the split, the list tells you how many there are and lets you act
+  // on one you cannot conveniently hover (a facet behind the model, or a sliver too small to hit).
+  const groupsHdr = document.createElement('label');
+  Object.assign(groupsHdr.style, { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', margin: '10px 0 4px', paddingTop: '8px', borderTop: '1px solid rgba(120,130,170,.22)' } as Partial<CSSStyleDeclaration>);
+  const gcb = document.createElement('input');
+  gcb.type = 'checkbox';
+  const gtxt = document.createElement('span');
+  gtxt.innerHTML = '<b style="color:#cfe3ff">show groups</b>';
+  groupsHdr.append(gcb, gtxt);
+  panel.appendChild(groupsHdr);
+
+  const groupCount = document.createElement('div');
+  Object.assign(groupCount.style, { fontSize: '10px', opacity: '.6', margin: '0 0 5px' } as Partial<CSSStyleDeclaration>);
+  panel.appendChild(groupCount);
+
+  const groupList = document.createElement('div');
+  Object.assign(groupList.style, { maxHeight: '190px', overflowY: 'auto', margin: '0 0 8px', display: 'none' } as Partial<CSSStyleDeclaration>);
+  panel.appendChild(groupList);
+
+  const hue = (id: number): string => `hsl(${((id * 0.61803398875) % 1) * 360}deg 62% 55%)`;
+
+  const renderGroups = (): void => {
+    const h = select();
+    const list = h ? h.facets() : [];
+    groupCount.textContent = list.length ? `${list.length} facet${list.length === 1 ? '' : 's'} at this tolerance` : '—';
+    groupList.style.display = gcb.checked && list.length ? '' : 'none';
+    if (!gcb.checked) return;
+    groupList.replaceChildren();
+    for (const f of list) {
+      const row = document.createElement('div');
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' } as Partial<CSSStyleDeclaration>);
+      row.innerHTML = `<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${hue(f.id)}"></span>` +
+        `<span style="flex:1 1 auto">#${f.id}</span>` +
+        `<span style="opacity:.65">${f.tris.length} tri</span>` +
+        `<span style="opacity:.5;width:44px;text-align:right">${f.area.toFixed(2)} m²</span>`;
+      row.addEventListener('mouseenter', () => { row.style.background = 'rgba(78,161,255,.16)'; select()?.highlightFacet(f.id); });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; select()?.highlightFacet(null); });
+      // left adds, right removes — the same two meanings as in the viewport
+      row.addEventListener('click', () => { select()?.commitFacet(f.id, true); sync(); });
+      row.addEventListener('contextmenu', (ev) => { ev.preventDefault(); select()?.commitFacet(f.id, false); sync(); });
+      groupList.appendChild(row);
+    }
+  };
+
+  gcb.addEventListener('change', () => { select()?.setShowGroups(gcb.checked); renderGroups(); });
+
   const status = document.createElement('div');
   Object.assign(status.style, { fontSize: '10px', minHeight: '2.4em', marginTop: '5px', wordBreak: 'break-word' } as Partial<CSSStyleDeclaration>);
   status.textContent = meshUrl.split('/').pop() ?? '';
@@ -133,7 +181,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
     enableTxt.style.color = cb.checked ? '#ffc76f' : '';
     sync();
   });
-  tol.addEventListener('input', () => { tolVal.textContent = `${Number(tol.value).toFixed(1)}°`; select()?.setTolerance(Number(tol.value)); sync(); });
+  tol.addEventListener('input', () => { tolVal.textContent = `${Number(tol.value).toFixed(1)}°`; select()?.setTolerance(Number(tol.value)); sync(); renderGroups(); });
   bHide.addEventListener('click', () => { select()?.hideSelected(); sync(); refit(); say('hidden — Save to persist'); });
   bClear.addEventListener('click', () => { select()?.clearSelection(); sync(); });
   bUnhide.addEventListener('click', () => { select()?.unhideAll(); sync(); refit(); say('restored — Save to persist'); });
@@ -143,6 +191,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
 
   tolVal.textContent = '15.0°';
   sync();
+  renderGroups();
   container.appendChild(panel);
 
   const rebind = (): void => {
@@ -150,7 +199,9 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
     if (!h) return;
     h.setTolerance(Number(tol.value));
     h.setEnabled(cb.checked);
+    h.setShowGroups(gcb.checked);
     sync();
+    renderGroups();
   };
 
   // keep the readout live as the pointer moves over the model
