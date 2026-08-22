@@ -56,21 +56,17 @@ describe('maze — the edge set is the CROSS SEAMS, one per corner connection', 
 });
 
 describe('maze — THE invariant a real maze keeps that a target-only gate does not', () => {
-  it('every carver leaves most of the floor reachable; `scatter` demonstrably does not', () => {
+  it('every carver keeps essentially the whole floor; `scatter` strands a large slice of it', () => {
     for (const seed of [3n, 23n, 101n]) {
+      const scatter = measure('scatter', 0, seed).reachable / cornerCount(W, H);
       for (const kind of CARVERS) {
-        expect(measure(kind, 0.15, seed).reachable / cornerCount(W, H)).toBeGreaterThan(0.85);
+        const carver = measure(kind, 0.15, seed).reachable / cornerCount(W, H);
+        expect(carver).toBeGreaterThan(0.95);
+        // the real claim, stated relatively so it cannot rot into a magic number: maintaining
+        // connectivity over EVERY corner beats a target-only gate by a wide margin, on every seed.
+        expect(carver - scatter).toBeGreaterThan(0.15);
       }
-      // THE CONTROL: the old target-only gate seals off half the floor and still "passes" its own gate
-      expect(measure('scatter', 0, seed).reachable / cornerCount(W, H)).toBeLessThan(0.7);
-    }
-  });
-
-  it('the DFS carvers are the tightest — backtracker and prim leave ≥95%', () => {
-    for (const seed of [3n, 23n, 101n]) {
-      for (const kind of ['backtracker', 'prim'] as MazeKind[]) {
-        expect(measure(kind, 0.15, seed).reachable / cornerCount(W, H)).toBeGreaterThan(0.95);
-      }
+      expect(scatter).toBeLessThan(0.85); // ...and the control genuinely does strand a lot
     }
   });
 });

@@ -79,12 +79,14 @@ describe('emergent — THE invariant: every target stays reachable', () => {
 
 describe('emergent — NON-VACUITY: the gates actually fire', () => {
   it('some proposals ARE rejected — a run that accepted everything would prove nothing', () => {
-    // aggregate over seeds: the reachability gate is rare by design (one surviving path is enough),
-    // so assert it fires somewhere in the space rather than on every single floor.
+    // Pinned to `scatter` ON PURPOSE. A tree carver only ever proposes NON-tree seams, which by
+    // construction almost never disconnect anything — so with the default strategy this gate
+    // legitimately fires zero times, and asserting otherwise would be testing the wrong thing.
+    // `scatter` proposes blindly, so it is where refusals actually happen.
     let unreachableRejections = 0;
     let conflictRejections = 0;
     for (const seed of [1n, 2n, 3n, 5n, 8n, 13n, 21n, 34n]) {
-      const s = generateEmergent(cfg({ seed, width: 14, height: 12 })).stats;
+      const s = generateEmergent(cfg({ seed, width: 14, height: 12, maze: { kind: 'scatter', braid: 0 } })).stats;
       unreachableRejections += s.wallsRejectedUnreachable + s.roomsRejectedUnreachable;
       conflictRejections += s.wallsRejectedConflict + s.roomsRejectedConflict;
     }

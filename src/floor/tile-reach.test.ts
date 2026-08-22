@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { makeGrid, begin, stamp, commit, applyBatch, type TileGrid } from './tile-grid.ts';
 import { template, segs, fullField } from './wall-tile-field.ts';
 import { cornerId } from './corner-graph.ts';
+import { generateEmergent } from './emergent.ts';
 import {
+  reachSet,
+  keepsReach,
   armMayBeOpen,
   armMustBeOpen,
   armMasks,
@@ -198,5 +201,29 @@ describe('tile-reach — determinism', () => {
     expect(route[0]!.a).toBe(NW);
     expect(route[route.length - 1]!.b).toBe(SE);
     for (let i = 1; i < route.length; i++) expect(route[i]!.a).toBe(route[i - 1]!.b);
+  });
+});
+
+describe('tile-reach — the two graphs must admit the SAME edges', () => {
+  // THE REGRESSION. `reachSet` goes through domainCornerGraph; `findRoute` builds its own adjacency.
+  // When openings were taught to one and not the other, reachability reported a target as reachable
+  // and the router then found no path to it — which surfaced as "invariant broken", not as the graph
+  // mismatch it actually was. Any future edge kind has to be added to both, and this catches it.
+  it('anything reachSet calls reachable, findRoute can actually route to', () => {
+    for (const seed of [3n, 23n, 101n]) {
+      const r = generateEmergent({ width: 12, height: 10, seed });
+      const at = gridAt(r.grid);
+      const reach = reachSet(at, 12, 10, 'may', r.entryCorner);
+      for (let n = 0; n < reach.length; n++) {
+        if (!reach[n]) continue;
+        expect(findRoute(at, 12, 10, 'may', r.entryCorner, n), `no route to corner ${n}`).not.toBeNull();
+      }
+    }
+  });
+
+  it('keepsReach allows growth and forbids loss', () => {
+    expect(keepsReach([true, false], [true, true])).toBe(true); // gained one — fine
+    expect(keepsReach([true, true], [true, false])).toBe(false); // lost one — not fine
+    expect(keepsReach([true, true], [true, true])).toBe(true);
   });
 });

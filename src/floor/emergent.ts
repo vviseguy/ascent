@@ -50,6 +50,8 @@ import {
   pinRouteOpen,
   reachesAll,
   reachCount,
+  reachSet,
+  keepsReach,
   routeGuaranteed,
   txAt,
 } from './tile-reach.ts';
@@ -307,8 +309,10 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
       stats.wallsPlaced++;
     }
   } else if (maze.kind !== 'none') {
-    // the connectivity budget: however much of the floor is reachable NOW is what must survive
-    const budget = reachCount(gridAt(grid), w, h, 'may', entryCorner);
+    // the connectivity budget: whichever corners are reachable NOW are the ones that must survive.
+    // A SET, not a count — an opening can add links, so a commit could lose one corner and gain
+    // another and leave the total unchanged (see tile-reach.ts:reachSet).
+    const budget = reachSet(gridAt(grid), w, h, 'may', entryCorner);
     const plan = planMaze(grid, wallRng, maze, entryCorner);
     stats.mazeNote = plan.note;
     for (const e of plan.order) {
@@ -316,7 +320,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
       stampSeam(tx, e.seam, WALL);
       const at = txAt(tx);
       if (!at(e.seam[0]!.x, e.seam[0]!.y)) { rollback(tx); stats.wallsRejectedConflict++; continue; }
-      if (reachCount(at, w, h, 'may', entryCorner) !== budget) {
+      if (!keepsReach(budget, reachSet(at, w, h, 'may', entryCorner))) {
         rollback(tx); stats.wallsRejectedUnreachable++; continue; // a corner would have been lost
       }
       if (!commit(tx)) { stats.wallsRejectedConflict++; continue; }
@@ -350,7 +354,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   // sealing must defend the SAME thing the maze phase did: walling a ring cell may not strand a
   // corner. Gating only on the pinned routes let seal quietly close off room interiors after the
   // maze had carefully kept every corner reachable.
-  const sealBudget = reachCount(gridAt(grid), w, h, 'may', entryCorner);
+  const sealBudget = reachSet(gridAt(grid), w, h, 'may', entryCorner);
   for (const m of rooms) {
     for (let y = m.y; y < m.y + m.h; y++) {
       for (let x = m.x; x < m.x + m.w; x++) {
@@ -368,7 +372,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
           stampWallArm(tx, grid, x, y, d);
           const at = txAt(tx);
           if (!at(x, y) || !routeGuaranteed(at, route)
-              || reachCount(at, w, h, 'may', entryCorner) !== sealBudget) {
+              || !keepsReach(sealBudget, reachSet(at, w, h, 'may', entryCorner))) {
             rollback(tx); stats.doorsKept++; continue;
           }
           if (!commit(tx)) { stats.doorsKept++; continue; }

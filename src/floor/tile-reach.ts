@@ -148,6 +148,11 @@ export interface ArmEdge {
   x: number;
   y: number;
   dir: Dir;
+  /** Set when this hop crosses tile (x,y)'s OPENING (a door/arch clearing its centre) rather than an
+   *  arm. Nothing to pin: `tileOpeningCertain` is monotone — a wallType domain that is already a
+   *  subset of {door,arch} stays one under narrowing, and arms pinned to exactly {wall} cannot move —
+   *  so once an opening is certain it is permanent. `dir` is meaningless on these. */
+  via?: 'opening';
 }
 
 /** The two corner ids an arm links. */
@@ -176,15 +181,29 @@ export function findRoute(at: FieldAt, w: number, h: number, p: Polarity, start:
   const nodeCount = (w + 1) * (h + 1);
   if (start < 0 || start >= nodeCount || goal < 0 || goal >= nodeCount) return null;
 
-  // adjacency as arms, built once in a fixed order so BFS is reproducible
+  // Adjacency, built once in a fixed order so BFS is reproducible. This MUST admit exactly what
+  // `domainCornerGraph` admits — if the two disagree, reachability reports a target as reachable and
+  // the router then fails to find any path to it, which reads as a broken invariant rather than the
+  // graph mismatch it is. So openings are enumerated here too.
   const arms: ArmEdge[][] = Array.from({ length: nodeCount }, () => []);
+  const link = (e: ArmEdge): void => {
+    arms[e.a]!.push(e);
+    arms[e.b]!.push({ ...e, a: e.b, b: e.a });
+  };
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       for (const d of DIRS) {
         if (!armPassable(at, x, y, d, p)) continue;
         const [a, b] = armCorners(w, x, y, d);
-        arms[a]!.push({ a, b, x, y, dir: d });
-        arms[b]!.push({ a: b, b: a, x, y, dir: d });
+        link({ a, b, x, y, dir: d });
+      }
+      // an opening clears the tile's centre → its four corners are one component (corner-graph.ts)
+      if (tileOpeningCertain(at, x, y)) {
+        const nw = cornerId(w, x, y), ne = cornerId(w, x + 1, y);
+        const se = cornerId(w, x + 1, y + 1), sw = cornerId(w, x, y + 1);
+        for (const [a, b] of [[nw, ne], [ne, se], [se, sw], [sw, nw]] as [number, number][]) {
+          link({ a, b, x, y, dir: 'N', via: 'opening' });
+        }
       }
     }
   }
@@ -219,6 +238,23 @@ export function findRoute(at: FieldAt, w: number, h: number, p: Polarity, start:
 export function reaches(at: FieldAt, w: number, h: number, p: Polarity, start: number, goal: number): boolean {
   return reachesAll(at, w, h, p, start, [goal]);
 }
+
+/**
+ * WHICH corners are reachable from `start`, as a boolean array indexed by node id.
+ *
+ * Use THIS, not a count, for any "nothing was lost" gate. Counting was only ever safe while walls
+ * could exclusively REMOVE reachability; an opening (a door completing its wall line) can ADD links,
+ * so one commit may lose a corner and gain another, leave the total identical, and slip through a
+ * count comparison. The set says what actually happened.
+ */
+export function reachSet(at: FieldAt, w: number, h: number, p: Polarity, start: number): boolean[] {
+  return reachableFromSet(domainCornerGraph(at, w, h, p), [start]);
+}
+
+/** True when every corner reachable in `before` is still reachable in `after`. Reachability may GROW
+ *  (an opening is good news); it may never shrink. */
+export const keepsReach = (before: readonly boolean[], after: readonly boolean[]): boolean =>
+  before.every((wasReachable, i) => !wasReachable || after[i] === true);
 
 /** How many corners are reachable from `start`? The full-connectivity gate a real maze algorithm
  *  needs: walls only ever REMOVE reachability, so "the count did not change" means "no corner was
@@ -283,5 +319,7 @@ export function pinRouteOpen(tx: Tx, route: readonly ArmEdge[]): void {
 /** Does every arm of `route` still read as GUARANTEED open in this view? The gate a proposed placement
  *  must survive: a committed route may never stop being guaranteed. */
 export function routeGuaranteed(at: FieldAt, route: readonly ArmEdge[]): boolean {
-  return route.every((e) => armPassable(at, e.x, e.y, e.dir, 'must'));
+  return route.every((e) =>
+    e.via === 'opening' ? tileOpeningCertain(at, e.x, e.y) : armPassable(at, e.x, e.y, e.dir, 'must'),
+  );
 }
