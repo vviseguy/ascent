@@ -1,10 +1,9 @@
 # Lab asset coloring — the RECOLOR system
 
 This is the **authoritative** guide for how lab assets get their colors/materials. It supersedes
-the older "theme / retexture / palette-role" approach described in `themes.ts`, `retexture.ts`,
-and `materials.ts` (those remain only for the game renderer `src/render/dungeon.ts` and for the
-`RetextureRule` variant type — see **Legacy** below). When they disagree with this file, **this
-file wins.**
+the older "theme / retexture / palette-role" approach (the now-deleted `themes.ts` and the residual
+`retexture.ts` / `materials.ts` — see **Legacy** below). The game renderer (`src/render/dungeon.ts`)
+also colors via this engine now. When anything disagrees with this file, **this file wins.**
 
 ## The one idea
 
@@ -28,47 +27,184 @@ Result: the model keeps its exact silhouette **and** KayKit's baked light/shadow
 flat color family for a chosen tint + surface. No geometry splitting, no per-triangle matching, no
 coalescence, no tolerance tuning. **A part's look is a pure function of its own color.**
 
-### Real tiling textures + the per-type settings menu
+### Real surfaces: tiling textures, relief, roughness, AO ([tiling.ts](tiling.ts))
 
-The bake gives color + gradient, but it's on the **atlas UVs**, so it can't show repeating grain
-(masonry, planks, metal). So a **small world-space shader** (`patchTilingDetail` in
-[recolor.ts](recolor.ts)) adds the real texture on top:
+The bake gives colour + gradient, but it sits on the **atlas UVs**, so it can never show repeating
+grain (masonry courses, plank runs) or react to light like a real surface. A world-space shader
+patch in [tiling.ts](tiling.ts) adds that on top of the baked material:
 
 ```
-ORM map  = baked per-pixel:  R = tiling SLOT (per material TYPE / preset),  G = roughness,  B = metalness
-shader   = sample the slot's chosen texture in WORLD space (box-planar UV, physical scale)
-         → take its LUMINANCE × (1/mean)  (averages to 1)  → MULTIPLY onto the baked albedo
-result   = baked color × gradient × tiling PATTERN    (pattern only; the type's tint keeps the colour)
+uTexArr [layer]  = the texture ALBEDO                            (sRGB)
+uSurfArr[layer]  = PACKED  R,G = normal.xy   B = roughness RATIO/2   A = ambient occlusion
+uShade           = the baked KayKit gradient on its own (per atlas pixel, LINEAR-filtered)
+uSlot[13]        = per material TYPE: (layer, 1/scale, 1/meanLuma, colourMode)
 ```
 
-- **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
-  is the library (`TEXTURES`: masonry, brick, concrete, marble, cobble, planks, dark-wood, brushed
-  steel, worn/dark iron, linen, …) **plus** the per-type config (`DEFAULT_CONFIG`: which texture +
-  roughness + metalness each preset wears) and a compact URL codec.
-- **The in-app menu** ([texture-settings.ts](texture-settings.ts), object mode) lets you pick the
-  texture and tune roughness/metalness per type. A change re-bakes the object live and persists to
-  `?tex=stone:masonry:95:0,…` (shareable / screenshottable). `Reset` restores `DEFAULT_CONFIG`.
-- Grain is **luminance only** (a scalar pattern), so the type's tint owns the colour and ANY texture
-  can sit on ANY type predictably. It's **world-space** (not atlas UVs) so the tile size is physical
-  and never stretches — the proven `materials.ts` approach, driven by the config.
-- `PRESET_SLOT` gives each type a fixed slot baked into ORM.r; the shader only emits a branch for the
-  slots whose config texture isn't flat. The ORM map is `NearestFilter` (slot/rough/metal are
-  per-swatch **constants** — linear filtering would average a slot at a seam into a wrong texture).
-  Tiling textures load as **sRGB** (decode to linear) so the multiply is in the right space; the
-  normalising mean is **computed** from each image (no magic numbers).
-- **Metals need reflections.** [lab.ts](lab.ts) adds an IBL `RoomEnvironment` (`scene.environment`):
-  metalness is a reflection property, so without an env a metal goes dark/flat grey and reads as
-  stone. With it (+ a brushed-steel texture + high metalness) metal reads as metal.
-- **RELIEF (normal maps).** The global **Relief** slider (`getRelief`, URL `?relief=`) turns on real
-  normal-map bump: each used texture's `*_nor.jpg` is sampled in world space and applied via a planar
-  tangent basis (KayKit faces are axis-aligned, so no mesh tangents needed) → clean grooves/depth, no
-  derivative-bump noise. To keep diff+nor under the 16-sampler floor, the bake binds textures only for
-  the presets THIS object uses (`present` set → `patchTilingDetail`); past 5 distinct textures relief
-  auto-drops for that object (logged). Relief 0 (default) = albedo grain only, no extra samplers.
-- This is the **only** custom shader; color/gradient/surface stay a plain CPU bake.
+**Two `sampler2DArray`s hold the whole working set.** The shader indexes them by the SLOT already
+baked into `ORM.r`, so there is no branch chain, no per-object sampler budget, and no cap on how
+many distinct textures an object may wear. (The previous version bound one `sampler2D` per texture
+plus a second for its normal map, so relief silently switched itself OFF past 5 distinct textures
+and every object had to thread a `present` preset set through the bake just to stay under the
+16-sampler floor. Both of those are gone.) The arrays are built from the textures the CURRENT
+config references — typically ~8 layers at 1024² ≈ 86 MB — and rebuild only when that set changes.
+`?texres=512|1024|2048` overrides the layer size.
+
+**What makes light catch it:**
+
+| channel | effect | note |
+|---|---|---|
+| normal | real per-texel slopes | world-space planar tangent basis; KayKit faces are axis-aligned, so no mesh tangents needed |
+
+| roughness | specular breakup | stored as a RATIO around 1 (mean-normalised at bake), so the TYPE keeps its authored roughness as the average and the map only adds variation |
+| AO | crevice darkening | multiplies **indirect** light only, so the key light still models the form |
+
+**Tangent handedness is not optional.** A tangent-space normal map is defined with
+`cross(T, B) == the OUTWARD normal`. Picking the projection plane from `abs(normal)` alone ignores
+which WAY a face points, and then `cross(T,B)` comes out as `-Y` / `-X` / `+Z` for the three cases —
+so every up-facing surface, and every face on the negative side of its axis, gets a mirrored frame
+and its bumps light as DENTS. `planarFrame` flips `B` (and V with it, so grain and relief stay
+registered) whenever the frame comes out left-handed. Ground truth for eyeballing it: brick mortar
+is recessed and the KayKit mesh has its own protruding bricks — the painted courses and the real
+geometry must agree about where the light is.
+
+The **Relief** and **AO** sliders (global, `?relief=` / `?ao=`) drive strength. Relief defaults to
+**0.45** — enough to read as carved stone, short of the noise that starts competing with silhouette
+past ~0.6 (docs/06: bold forms over photo-texture). The panel also carries **Light ∠ / Light ↑**
+(`?rake=az:el`), which move the studio key light: a normal map shows nothing under a flat frontal
+key, so being able to rake the light is what makes relief judgeable at all.
+
+**It composes with every light in the scene, including the game’s.** The perturbed normal is
+written into three’s `normal` *before* the `lights_fragment_*` chunks, so directional, hemisphere,
+IBL and POINT lights all use it — the game’s torches (`dungeon.ts`: up to `MAX_TORCH_LIGHTS`
+orange `PointLight`s, decay 2) rake the grain for free. The lab has a **Torch** slider (`?torch=`)
+that adds the same light so dungeon materials can be judged the way they will actually be lit.
+Two caveats worth knowing: relief only reads under **grazing** light (a light hitting a face
+head-on sits at the flat top of the cosine and reveals almost nothing — which is why the torch is
+parked beside the object rather than in front of it), and a normal map does **not** self-shadow,
+so relief cannot occlude itself. That needs parallax occlusion, which is the next rung up.
+
+Both sources carry a **tint** swatch (`?keytint=` / `?torchtint=`), because a material is a
+response to a light and judging one under a neutral studio white is judging it under conditions
+it will never ship in — the game mixes a cool key + hemisphere with warm torch points, which is
+exactly the warm/cool split docs/06 asks for ("cool desaturated neutrals, plus one warm
+resolved-and-lit accent"). The same stone reads as sandstone under a sodium key and as basalt
+under a blue one, with no change to the material at all.
+
+**Cost.** Per textured fragment: 3 texture fetches (albedo array, surface array, shade map) plus
+the slot read, no branch chain. Program count is the number worth watching, and it is now FLAT:
+every recolored material emits byte-identical source, so they share ONE compiled program.
+Measured on the contact sheet, `linkProgram` calls stay at **8 whether the page shows 1 object or
+14** — before the shared cache key it was 5 / 8 / 18, i.e. one shader compile per object, a
+load-time hitch that grew with the asset set. Array build is a one-off ~2-4 s of CPU (canvas
+decode + channel packing) for 8 layers at 1024², and only reruns when the config’s texture set
+changes. `npm run` nothing — measure with a WebGL-level probe, not `renderer.info`, if you change
+this: the headless GL here is SwiftShader, so absolute frame times are meaningless and only
+counts (programs, draws, fetches) transfer.
+
+**Colour mode** (per TextureOption, `color:`):
+
+- `grain` (default) — LUMINANCE only, normalised to mean 1 and multiplied onto the baked tint. The
+  texture contributes PATTERN, the swatch keeps the COLOUR, so any texture sits on any type
+  predictably. Right for masonry, concrete, brushed metal.
+- `albedo` — the texture’s OWN colour, re-shaded by `uShade` (the baked KayKit gradient, extracted
+  at bake time as `pixelL / swatchRefL`). For scanned materials where the colour variation IS the
+  asset — the Poly Haven woods — because a luminance-only read throws exactly that away.
+
+**The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
+is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;
+[texture-settings.ts](texture-settings.ts) is the in-app menu (object mode). A change re-bakes live
+and persists to `?tex=stone:masonry:95:0,…` (shareable / screenshottable). `Reset` restores defaults.
+
+**Sources.** ambientCG (CC0) for the original set, Poly Haven (CC0) for the wood scans. Poly Haven
+publishes each asset’s real-world `dimensions`, which IS our `scale` (metres per repeat) — no
+guessing. Its packed `arm` map (R=AO, G=rough, B=metal) covers two of our channels in one file.
+
+**Tileability is checked, not assumed.** `npm run tex:seams` compares the wrap-seam pixel delta to
+the image’s own interior gradient; ratio ≈1 = seamless, >2 = a visible line every repeat. This is
+how `wood_diff.jpg` (the old `planks` default) was caught at **9.8×** — it had been laying a hard
+seam across every planked object. It is kept in the library only so old `?tex=` URLs resolve;
+`wood`/`grained` now default to verified Poly Haven scans. Run it on any texture before adding it.
+`npm run tex:tile <file...>` renders a 3×3 tiling if you want to see a seam rather than score it.
 
 To add a texture: drop the files in `public/textures/`, add a `TEXTURES` entry (id + label + group +
-`diff` + `scale`), done — it shows up in every type's dropdown.
+`diff` + `scale`, plus `nor` / `arm` / `rough` / `ao` / `color` as available), run `npm run tex:seams`,
+done — it shows up in every type’s dropdown.
+
+## Profiles: naming a look, and sharing it ([material-profiles.ts](material-profiles.ts))
+
+The per-type config above is ONE live config. That is enough to tune a look and not enough to keep
+one — there was no way to name it, save it, diff two of them, or have a second. The only
+persistence was a `?tex=` query string.
+
+A **profile** is a named, git-tracked set of per-type overrides, stored in
+[material-profiles.json](material-profiles.json) and edited from the PROFILE bar at the top of
+TEXTURE SETTINGS ([profile-bar.ts](profile-bar.ts)):
+
+```jsonc
+"dungeon-default": { "label": "Dungeon (default)" },          // the house look
+"timber-hall":     { "label": "Timber hall",
+                     "extends": "dungeon-default",            // <- the sharing mechanism
+                     "types": { "stone": { "texture": "brick" },
+                                "wood":  { "texture": "rough-planks" } } }
+```
+
+- **`extends` is how a look is shared.** A variant names only its deltas, so editing the base moves
+  every profile that inherits from it. `Save as variant` runs `captureDelta`, which diffs the LIVE
+  state against the parent and writes only the difference — a variant can never silently freeze a
+  full copy of its parent and stop tracking it.
+- **The 4-layer swatch cascade below is untouched.** It still decides which material TYPE a given
+  swatch asks for; a profile only swaps the answer table underneath it. Two orthogonal axes:
+  cascade = *which type*, profile = *what that type is made of*.
+- **`rev` is a content hash** (FNV-1a over the resolved values). Two profiles that resolve the same
+  share a rev; an edited profile gets a new one. Nobody has to remember to bump a version.
+- Cycles and unknown parents warn and degrade to a shorter chain — a broken profile still renders
+  something you can look at and fix.
+- Written through `POST /__lab/profiles` (dev middleware, vite.config.ts), key-sorted, so a look
+  change reviews as a readable diff instead of living in someone’s URL.
+
+### Approval linkage — which objects have fallen behind
+
+Approving still freezes a COPY of the resolved materials (that is what keeps the game stable while
+the lab is being retuned), but the entry now also records `materials.profile = { id, rev }`. So:
+
+```
+approvedProfile(id)     the profile ref an object was approved under
+staleAgainst(rev)       approved ids whose frozen materials do NOT match rev
+```
+
+`rev` is the **live** rev at approval time, not the profile’s — if the reviewer had drifted off the
+profile before approving, the store records the drift, because that is what was actually frozen.
+Entries approved before profiles existed have no ref and count as stale: their look is unknown,
+not known-current.
+
+## The CONTACT SHEET — `npm run sheet` ([sheet.ts](sheet.ts))
+
+The lab shows one object at a time, which is right for approving a footprint and wrong for judging
+a material: you tune stone on a wall, it looks great, and three objects later it has wrecked the
+barrels. Every material decision is a decision about the whole SET.
+
+`/ascent/sheet.html` renders every object on one grid under the current profile, with the same
+PROFILE + TEXTURE SETTINGS panel. Change a texture and they all re-bake together — affordable
+precisely because [tiling.ts](tiling.ts) shares materials across objects, so N objects cost one
+array build, not N.
+
+| param | effect |
+|---|---|
+| *(default)* | the approved store — the set that actually ships |
+| `?pack=<id>` | a whole KayKit pack (`dungeon_remastered`, `furniture`, …) |
+| `?ids=a,b,c` | an explicit list |
+| `?limit=<n>` `?cols=<n>` | cap the grid (default 48) / override the column count |
+
+Cells are badged **current / behind / not approved** against the live rev, and the HUD totals them,
+so staleness is something you SEE rather than something you have to remember to ask about. The
+camera is ORTHOGRAPHIC front-3/4: every cell is framed identically (a perspective camera would
+foreshorten the far rows and you would be comparing materials at different apparent scales), and
+rows are spaced 1.75x deeper than they are wide so the front row does not stand in front of the one
+behind it.
+
+**Not yet built: bulk re-approve from the sheet.** It is the obvious next button, but the sheet
+normalises each object’s scale into its cell, which would corrupt the footprint if approval read
+the placed root. Capture the build BEFORE `place()` scales it, or it will write wrong boxes.
 
 ## Hop 1: swatch → PRESET is a 4-layer cascade (most-specific wins)
 
@@ -152,14 +288,13 @@ auto-fit (box-fit, edge density auto-targets ≥95% fill) + recolor
 
 ## Legacy (do not extend)
 
-- `themes.ts`, `retexture.ts` are the **old** lab approach (palette roles → tiling PBR via
-  per-triangle retexture + coalescence + name-regex exceptions). The lab no longer uses them for
-  rendering. They stay because: `src/render/dungeon.ts` (the game) still colors via `themes.ts`
-  (migrating the game to recolor.ts is a future task), and `MeshObjectSpec.variants` still types its
-  rules as `RetextureRule`. Don't add new coloring logic there — add it here.
-- `materials.ts` is **partly live**: the recolor's tiling layer reuses its CC0 texture files
-  (`public/textures/*_diff.jpg`) and its proven world-space box-planar projection idea. The game
-  still uses its full `DungeonMaterials` class. Recolor re-implements the (simpler, albedo-only)
-  world tiling itself in `patchTilingDetail` rather than calling `DungeonMaterials`, to stay the
-  single source for lab coloring — but the textures and the approach are shared, not legacy.
+- `themes.ts` is **deleted** — the game renderer colors via `recolor.ts` too. `retexture.ts` survives
+  only for the `RetextureRule` type (`MeshObjectSpec.variants`, dormant) + the `presentSwatchHexes`
+  legend sampler. Don't add new coloring logic there — add it here.
+- `materials.ts` is **partly live, not legacy**: the tiling layer reuses its CC0 texture files
+  (`public/textures/*`) and its proven world-space box-planar projection ([tiling.ts](tiling.ts)
+  re-implements it over texture arrays rather than calling `DungeonMaterials`, to stay the single
+  source for lab coloring), and it stays the flame-glow / no-atlas render fallback in `dungeon.ts`.
+  Its triplanar blend (3 samples, no hard switch at the dominant axis) is the one thing tiling.ts
+  does NOT yet port — box-planar is exact for axis-aligned KayKit faces and cheaper.
 ```

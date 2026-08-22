@@ -4,8 +4,8 @@
  * This is the "one data structure" the generator produces and the verifier
  * consumes. It is intentionally a coarse CELL GRID whose adjacent cells are joined
  * by TRAVERSAL EDGES (GENERATION-SOLVABILITY.md §"Generation"). The model is the
- * minimal graph needed to PROVE solvability; authored chunk geometry is layered on
- * later and is out of scope here (we only tag each cell with a chunk-type hook).
+ * minimal graph needed to PROVE solvability; authored wall/room geometry is layered
+ * on later and is out of scope here (a cell only carries its layout role + room id).
  *
  * DESIGN PRINCIPLES
  *  - Plain data only: no classes-with-behavior, no methods. Everything is a struct
@@ -170,12 +170,6 @@ export interface Cell {
   x: number;
   /** Grid row [0, height); 0 = entry band, height-1 = exit band. */
   y: number;
-  /**
-   * Authored-chunk hook: a coarse chunk-type id used later by dressing to pick
-   * furniture matching this cell's edge tags. Generation only TAGS it; no geometry
-   * is produced here. Stable small integer; meaning defined by the dressing layer.
-   */
-  chunkType: number;
   /**
    * Layout ROLE of this cell (see CellType) — which room/corridor/wall/void slot it
    * fills. OPTIONAL & purely cosmetic-for-routing: the generator now always sets it

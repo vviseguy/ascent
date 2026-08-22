@@ -8,7 +8,7 @@
 // saturated accent hues (banners, bottles, gems, cloth). Because the atlas is SHARED
 // across the whole pack, a given swatch is the IDENTICAL colour on every model — so a
 // single swatch→material mapping reskins the ENTIRE pack at once. That is what makes
-// "themes" (themes.ts) cheap: author per-SWATCH, once, not per-object.
+// per-SWATCH reskinning cheap: author once, not per-object (recolor.ts).
 //
 // The hexes + ROLES below are EVIDENCE-BASED, not eyeballed: a probe samples the atlas
 // colour at the centroid UV of every triangle in the real GLBs and reports which swatch
@@ -22,9 +22,9 @@
 //     strap / torch bracket use for "metal", but those props are rare next to the shell,
 //     and a pure colour map CANNOT tell shell-stone from prop-metal (they're the same
 //     swatch). So the whole grey family defaults to `stone` — the common case wins. Metal
-//     props will theme as stone; override them per-object (variant rules) when it matters.
-//     (The real GAME dungeon paints metal correctly via materials.ts tile-key classify;
-//     themes are a LAB MOOD tool, not that path.)
+//     props default to stone; override them per-object (variant rules) when it matters.
+//     (This per-swatch palette is a LAB tool; the game dungeon colors via recolor.ts —
+//     per-pixel, gradient-preserving — see src/lab/CLAUDE.md.)
 //   • THE NEUTRAL GREY BAND HAS A RANGE. The atlas bottom band is one white→black ramp,
 //     so models sample many greys off it; we anchor it with several points (neutralLight/
 //     neutralGrey/darkSteel + the warm stoneWarm/stoneDark) so shell coverage stays high.
@@ -76,7 +76,7 @@ export type SwatchName =
 
 /**
  * The KayKit dungeon atlas palette, with the colours real triangles actually sample.
- * Order is just for readability; matching is purely nearest-colour (themes.ts).
+ * Order is just for readability; matching is purely nearest-colour (recolor.ts).
  */
 export const PALETTE: Record<SwatchName, Swatch> = {
   // --- GREYS → stone: the dungeon shell (walls/columns/stairs/floors) + neutral band. ---

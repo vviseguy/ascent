@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCENT — Tile Board</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; font: 13px/1.45 system-ui, sans-serif; color: #cdd; }
+      #view { position: fixed; inset: 0; }
+      #panel { position: fixed; left: 12px; top: 12px; width: 230px; background: rgba(10,10,22,.82); padding: 12px 14px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.4); }
+      #panel h1 { font-size: 13px; margin: 0 0 8px; color: #fff; letter-spacing: .3px; }
+      #buttons button { display: block; width: 100%; text-align: left; margin: 4px 0; padding: 6px 9px; background: #23233a; color: #cde; border: 1px solid #34344e; border-radius: 6px; cursor: pointer; font: inherit; }
+      #buttons button:hover { background: #2e2e4c; }
+      #status { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c; color: #aab; min-height: 2.4em; word-break: break-word; }
+      #status .ok { color: #6fe3d0; }
+      #status .bad { color: #ff8a78; }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="panel">
+      <h1>Tile Board — transactions</h1>
+      <div id="buttons"></div>
+      <div id="status"></div>
+    </div>
+    <script type="module" src="/src/lab/board.ts"></script>
+  </body>
+</html>

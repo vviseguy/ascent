@@ -4,9 +4,10 @@
 > level must be *provably completable*, including its puzzles. The independent verifier
 > (`src/floor`, per docs/GENERATION-SOLVABILITY.md) is the source of truth — it stays independent
 > of the generator. This doc adds (1) richer terrain, (2) puzzle types, (3) the verifier extended
-> to **lock-and-key reachability**. The 9-cell wall model (docs/13 Layer C) is the *eventual*
-> structure walls/doors sit on; puzzles below are built on the current door-cell structure and
-> carry over unchanged when Layer C lands.
+> to **lock-and-key reachability**. The 9-cell wall model has since **shipped** — see
+> [`13-generation-architecture.md`](13-generation-architecture.md) for the as-built pipeline. Puzzles
+> below are built on the coarse `Floor` graph's door-cell structure, which the tile layer consumes
+> rather than replaces, so they carried over unchanged.
 
 ---
 
@@ -59,17 +60,25 @@ space. Recommendation: **design + build it separately** after terrain+puzzles, b
 in the *systems it touches* (physics in a tall void, camera framing, fog), not the generation.
 Captured here so it isn't lost.
 
-## 6. ✅ Done — the wall pipeline (was "the 9-cell square") = docs/13 Layer C
-The "9 cells per square" shipped — but **generalised** into a full layered pipeline:
-`Blueprint → Style → Placement[] → {render, collision}` (`src/floor/{blueprint,wall-style,
-wall-model}.ts`, projected by `src/game/tower.ts`). The board is a uniform grid of **2u KayKit
-modules** at **native scale** (one floor tile = 4u = 2 modules, so corners tile with no fudge);
-**walls own squares** (data layer), realized as the native wall-piece family (straight / corner /
-tee / cross / cap / pillar / doorway). Render and collision consume one `WorldPlacement[]` IR, so
-they match by construction; collision merges collinear modules into minimal run-boxes. Doors are
-`DOORWAY` placements (carry `doorId`); break-gates become a LOW passable `profile`. New wall types
-(partial / arched / windowed / walled-stairs) are **registry/profile rows**, and finer `k`
-sub-module detail drops in without touching the pipeline.
+## 6. ✅ Done — the wall pipeline (was "the 9-cell square")
+The "9 cells per square" shipped — and then shipped *again*, differently. **The current pipeline is
+`Floor → TileGrid → WallTile → TileUnit → WorldPlacement[] → {render, collision}`** — see
+[`13-generation-architecture.md`](13-generation-architecture.md) for the as-built map.
+
+> **Historical note.** This section originally described a `Blueprint → Style → Placement[]` chain in
+> `src/floor/{blueprint,wall-style,wall-model}.ts`. **Those three modules were deleted 2026-06-30**;
+> the 9-cell TILE lattice superseded them wholesale, and the 2u half-module went with them — a tile is
+> now one uniform **4u** square carrying its own walls. Reasoning preserved in
+> [`archive/13-abstract-piece-pipeline.md`](archive/13-abstract-piece-pipeline.md).
+
+What still holds, unchanged, in the tile pipeline: **walls own squares** (data layer) at **native 4u**
+scale; the piece family (straight / corner / bend / tee / cross / cap / column) is real, but as
+**derived labels** (`wall-tile.ts:label()`) rather than stored piece kinds; render and collision
+consume **one** `WorldPlacement[]` IR, so they match by construction; break-gates become a LOW
+passable arm. Doors are no longer `DOORWAY` placements — `floor-tiles.ts:reconcileDoors` clears the
+room wall-ring wherever `floor.edges` actually connects. The puzzles below are unaffected: they are
+built on the door-cell structure of the coarse `Floor` graph, which the tile layer consumes rather
+than replaces.
 
 ---
 

@@ -30,11 +30,17 @@ lives at the repo root: [`../CLAUDE.md`](../CLAUDE.md).
 | [ENGINE-ARCHITECTURE.md](ENGINE-ARCHITECTURE.md) | The custom fixed-point physics engine; Rapier = test oracle only. |
 | [GENERATION-SOLVABILITY.md](GENERATION-SOLVABILITY.md) | The solvability invariant + the independent verifier contract. |
 
-## Current build — the worldgen / asset overhaul (implemented)
+## Current build — the worldgen / asset overhaul
+
+> **Start at [13-generation-architecture.md](13-generation-architecture.md)** — the AS-BUILT map
+> (stage → file → invariant → gate → BUILT/DESIGNED). **[16](16-generation-overhaul.md) is the
+> design rationale, and much of it is not yet code** — docs/13 §6 is the authoritative list of what
+> actually exists.
 
 | Doc | What it covers |
 |---|---|
-| [13-generation-architecture.md](13-generation-architecture.md) | **The realized dungeon pipeline** (Blueprint→Style→Placement→IR→{render,collision}) + tracked debt. |
+| [13-generation-architecture.md](13-generation-architecture.md) | **The as-built worldgen map** — every stage's file, output, invariant, gate, and build status; the authoring pages; the "change X → touch Y" table. **Read first.** |
+| [16-generation-overhaul.md](16-generation-overhaul.md) | **The design rationale** — the 9-cell tile model, the corner-graph solvability predicate, the constraint-collapse plan + migration sequence. Mixed BUILT/DESIGNED; see 13 §6. |
 | [14-terrain-puzzles-solvability.md](14-terrain-puzzles-solvability.md) | Richer terrain (30×30), puzzle types, lock-and-key reachability. |
 | [15-world-object-model.md](15-world-object-model.md) | The sim-vs-view split; the `WorldObject` abstraction (variants + footprint). |
 | [ART-LAB.md](ART-LAB.md) | The Asset Lab — catalog viewer + screenshot review loop. |
@@ -50,6 +56,7 @@ lives at the repo root: [`../CLAUDE.md`](../CLAUDE.md).
 
 Point-in-time documents, kept for history, superseded by the live docs above:
 
+- `archive/13-abstract-piece-pipeline.md` — the Blueprint→Style→`Placement[]` wall pipeline and its A/B/C/D layer sketch. **Its three modules were deleted 2026-06-30**; the 9-cell tile lattice replaced them. Kept for the reasoning, not as a description of the code.
 - `archive/AUDIT-v1.md` — the v1 audit; superseded by `GAPS.md` (v2).
 - `archive/audit2/` — the six dimension re-audits that were synthesized into `GAPS.md`.
 - `archive/ROADMAP.md` — the P0–P5 build sequencing + the netcode "Two-Browser Grab Proof" keystone. Still the reference for forward sequencing; immediate priorities now live in `BACKLOG.md`.

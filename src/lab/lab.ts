@@ -48,9 +48,11 @@ import { fitBoxesWithStats, aabbToFootprintBox, voxelGridForViz, lastStitchInfo,
 import { buildFitControls, readFitStateFromParams, fitStateToOpts } from './fit-controls.ts';
 import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catalog.ts';
 import { buildRecolorLegend } from './recolor-legend.ts';
-import { buildTextureSettings } from './texture-settings.ts';
-import { buildApproveButton } from './approve.ts';
-import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam } from './texture-catalog.ts';
+import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
+import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
+import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
+import { buildApproveButton, approveObject } from './approve.ts';
+import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
 // canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
@@ -66,6 +68,8 @@ type LabWindow = Window & {
   __labList?: () => string[];
   /** The fitted footprint of the shown object (for box-fit tooling/verification). */
   __labFootprint?: Footprint | null;
+  /** Headless approve (scripts/lab-approve.mjs): refit at `edgeDensity` then publish. Object mode only. */
+  __labApprove?: (edgeDensity?: number) => Promise<unknown>;
 };
 const W = window as LabWindow;
 
@@ -265,7 +269,11 @@ async function boot(): Promise<void> {
   // TEXTURE CONFIG (which texture + surface per type) + RELIEF: parse the URL into the shared config
   // BEFORE the first build, so a shared/screenshotted ?tex=…&relief=… link bakes correctly on load.
   setConfig(configFromParam(params.get('tex')));
+  // snapshot the catalog's out-of-the-box relief/AO BEFORE the URL overrides them, so resolving a
+  // profile inherits the real defaults rather than whatever this link happened to pin.
+  captureCatalogDefaults();
   setRelief(reliefFromParam(params.get('relief')));
+  setAOStrength(aoFromParam(params.get('ao')));
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -315,8 +323,45 @@ async function boot(): Promise<void> {
   // ---- studio scene: neutral dark, soft key + fill, shadowed ground disc ----
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x14141e);
-  const key = new THREE.DirectionalLight(0xfff2e0, 2.4);
-  key.position.set(4, 7, 3);
+  // TINTS are authoring inputs, not constants. A material is a response to a light: the same stone
+  // reads as warm sandstone under a sodium key and as cold basalt under a blue one, and the game
+  // mixes exactly that (cool hemisphere + directional, warm torches). ?keytint= / ?torchtint=.
+  const hexParam = (k: string, d: string): string => {
+    const v = params.get(k);
+    return v && /^[0-9a-fA-F]{6}$/.test(v) ? '#' + v.toLowerCase() : d;
+  };
+  const tints = { key: hexParam('keytint', '#fff2e0'), torch: hexParam('torchtint', '#ffa64d') };
+  const key = new THREE.DirectionalLight(new THREE.Color(tints.key), 2.4);
+  // RAKE: the key's direction is a control, not a constant. A normal map only shows itself when the
+  // light crosses the grain at a low angle — with a fixed high frontal key, relief looks broken even
+  // when it is working. Azimuth/elevation are driven from the TEXTURE SETTINGS panel (render-only,
+  // no re-bake) and persist in the URL so a screenshot reproduces its own lighting.
+  const KEY_DIST = 8.6;
+  const lightRake = { az: 0.10, el: 0.62 }; // matches the original (4, 7, 3) placement
+  {
+    const [az, el] = (params.get('rake') ?? '').split(':').map(Number);
+    if (Number.isFinite(az)) lightRake.az = Math.min(1, Math.max(0, az! / 100));
+    if (Number.isFinite(el)) lightRake.el = Math.min(1, Math.max(0, el! / 100));
+  }
+  const applyRake = (): void => {
+    const a = lightRake.az * Math.PI * 2;
+    const e = 0.06 + lightRake.el * (Math.PI / 2 - 0.12); // never exactly horizon/zenith
+    key.position.set(KEY_DIST * Math.cos(e) * Math.cos(a), KEY_DIST * Math.sin(e), KEY_DIST * Math.cos(e) * Math.sin(a));
+  };
+  applyRake();
+
+  // TORCH — a warm POINT light, matching what the game actually puts on a wall
+  // (dungeon.ts: PointLight 0xffa64d, decay 2, up to MAX_TORCH_LIGHTS of them). The studio key is a
+  // directional light at infinity; a torch is close, decaying, and off to one side, so it rakes the
+  // grain completely differently. Materials for a torch-lit dungeon should be judged under one.
+  // Costs nothing at intensity 0 — three skips lights with zero intensity.
+  const torch = new THREE.PointLight(new THREE.Color(tints.torch), 0, 7, 2);
+  torch.position.set(-1.75, 0.6, 0.55); // beside the wall and low, so it RAKES the face — a light
+  // hitting a surface head-on barely reveals a normal map (N.L is flat near the cosine peak).
+  scene.add(torch);
+  const torchLevel = { v: Math.min(1, Math.max(0, Number(params.get('torch')) || 0)) };
+  const applyTorch = (): void => { torch.intensity = torchLevel.v * 26; };
+  applyTorch();
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
   key.shadow.camera.left = key.shadow.camera.bottom = -6;
@@ -545,14 +590,51 @@ async function boot(): Promise<void> {
       } finally {
         rebuilding = false;
       }
+      writeSurfaceUrl();
+    };
+    // The surface state (textures, relief, AO, light rake) all round-trips through the URL, so a
+    // shared link or a screenshot script reproduces exactly what you were looking at.
+    function writeSurfaceUrl(): void {
       const tex = configToParam(getConfig());
       const rel = reliefToParam(getRelief());
+      const ao = aoToParam(getAOStrength());
       const u = new URLSearchParams(location.search);
       if (tex) u.set('tex', tex); else u.delete('tex');
       if (rel) u.set('relief', rel); else u.delete('relief');
+      if (ao) u.set('ao', ao); else u.delete('ao');
+      const prof = profileBar?.current()?.id;
+      if (prof) u.set('profile', prof); else u.delete('profile');
+      u.set('rake', `${Math.round(lightRake.az * 100)}:${Math.round(lightRake.el * 100)}`);
+      if (torchLevel.v > 0) u.set('torch', String(torchLevel.v.toFixed(2))); else u.delete('torch');
+      if (tints.key !== '#fff2e0') u.set('keytint', tints.key.slice(1)); else u.delete('keytint');
+      if (tints.torch !== '#ffa64d') u.set('torchtint', tints.torch.slice(1)); else u.delete('torchtint');
       history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
-    };
-    buildTextureSettings({ container: document.body, onChange: () => { void rebuildObject(); } });
+      profileBar?.refresh(); // the drift indicator is only true until the next edit
+    }
+    let texPanel: TextureSettingsHandle | undefined;
+    let profileBar: ProfileBarHandle | undefined;
+    texPanel = buildTextureSettings({
+      container: document.body,
+      onChange: () => { void rebuildObject(); },
+      header: (mount) => {
+        profileBar = mountProfileBar({
+          mount,
+          initial: params.get('profile'),
+          // a profile REPLACES the live config wholesale, so every widget in the panel has to be
+          // pulled back into line before the re-bake — otherwise the sliders lie about what is on.
+          onApplied: () => { texPanel?.resync(); void rebuildObject(); },
+        });
+      },
+      extras: [
+        { label: 'Light ∠', get: () => lightRake.az, set: (v) => { lightRake.az = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'Light ↑', get: () => lightRake.el, set: (v) => { lightRake.el = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'Torch', get: () => torchLevel.v, set: (v) => { torchLevel.v = v; applyTorch(); writeSurfaceUrl(); renderOnce(); } },
+      ],
+      colors: [
+        { label: 'key', get: () => tints.key, set: (v) => { tints.key = v; key.color.set(v); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'torch', get: () => tints.torch, set: (v) => { tints.torch = v; torch.color.set(v); writeSurfaceUrl(); renderOnce(); } },
+      ],
+    });
 
     // ---- APPROVE & SAVE: freeze this object's auto-fit + materials to the published store ----
     // Reads the LIVE fit/material state on click (post-refit), POSTs to the dev middleware.
@@ -566,8 +648,26 @@ async function boot(): Promise<void> {
         autoEdge: fitState.autoEdge,
         recolor: (built as WorldObjectBuild).recolor,
         present: (built as WorldObjectBuild).presentSwatches,
+      // record the LIVE rev, not the profile's: if the reviewer drifted off the profile before
+      // approving, what got frozen is the drift, and the store should say so.
+      profile: profileBar?.current() ? { id: profileBar.current()!.id, rev: liveRev() } : undefined,
       }),
     });
+
+    // Headless approval (scripts/lab-approve.mjs): refit at a chosen edge density, then approve —
+    // so the wall pieces can be box-fit + frozen in bulk without manual clicks. autoEdge off → honour `ed`.
+    W.__labApprove = (ed = 0.4): Promise<unknown> => {
+      refit({ ...fitState, autoEdge: false, edgeDensity: ed });
+      return approveObject(objId, {
+        footprint,
+        stats: lastFitStats,
+        seedMode: fitState.seedMode,
+        autoEdge: false,
+        recolor: (built as WorldObjectBuild).recolor,
+        present: (built as WorldObjectBuild).presentSwatches,
+        profile: profileBar?.current() ? { id: profileBar.current()!.id, rev: liveRev() } : undefined,
+      });
+    };
   }
 
   // ---- CONTENT PICKER (both modes): TEXT-ONLY double-nested clickable list ----

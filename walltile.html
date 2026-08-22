@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCENT — Wall-Tile Debug</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; font: 13px/1.45 system-ui, sans-serif; color: #cdd; }
+      #view { position: fixed; inset: 0; }
+      #panel {
+        position: fixed; left: 12px; top: 12px; width: 210px; max-height: calc(100% - 24px);
+        overflow: auto; background: rgba(10,10,22,.82); padding: 12px 14px; border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0,0,0,.4);
+      }
+      #panel h1 { font-size: 13px; margin: 0 0 8px; color: #fff; letter-spacing: .3px; }
+      #panel .row { display: flex; justify-content: space-between; align-items: center; margin: 5px 0; }
+      #panel label { color: #9aa; }
+      #panel select { background: #20202e; color: #def; border: 1px solid #383850; border-radius: 6px; padding: 3px 6px; font: inherit; }
+      #panel .group { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c; }
+      #presets button {
+        display: block; width: 100%; text-align: left; margin: 3px 0; padding: 5px 8px;
+        background: #23233a; color: #cde; border: 1px solid #34344e; border-radius: 6px; cursor: pointer; font: inherit;
+      }
+      #presets button:hover { background: #2e2e4c; }
+      #readout {
+        position: fixed; right: 12px; top: 12px; width: 280px; background: rgba(10,10,22,.82);
+        padding: 12px 14px; border-radius: 10px;
+      }
+      #readout .case { font-size: 18px; font-weight: 600; color: #6fe3d0; text-transform: uppercase; letter-spacing: .5px; }
+      #readout .desc { color: #aab; margin-top: 6px; word-break: break-word; }
+      #readout .legend { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c; color: #889; font-size: 12px; }
+      .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+      .chk { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #9aa; }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="panel">
+      <h1>Wall-Tile Debug</h1>
+      <div id="fields"></div>
+      <label class="chk"><input type="checkbox" id="objects" /> show objects (torches / floor)</label>
+      <label class="chk"><input type="checkbox" id="collision" /> show collision (box-fit AABBs)</label>
+      <div class="group" id="presets"><div style="color:#778;margin-bottom:4px">presets</div></div>
+    </div>
+    <div id="readout">
+      <div class="case" id="case">—</div>
+      <div class="desc" id="desc"></div>
+      <div class="desc" id="warn" style="color:#ff8a78"></div>
+      <div class="legend">
+        <div><span class="sw" style="background:#8a8a96"></span>wall (full height)</div>
+        <div><span class="sw" style="background:#9c6b3f"></span>barrier (low)</div>
+        <div><span class="sw" style="background:#ffae42"></span>object / torch flame</div>
+      </div>
+    </div>
+    <script type="module" src="/src/lab/walltile.ts"></script>
+  </body>
+</html>

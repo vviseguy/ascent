@@ -3,10 +3,10 @@
 // ============================================================================
 //
 // ⚠ LEGACY for the lab. Lab assets are now colored by recolor.ts (per-pixel, gradient-
-// preserving) — see src/lab/CLAUDE.md (authoritative). This file is kept for: the GAME path
-// (src/render/dungeon.ts via themes.ts), the `RetextureRule`/`MaterialSpec` types still used by
-// MeshObjectSpec.variants, and `presentSwatchHexes` (the legend's "present" sampler). Don't add
-// new lab coloring logic here.
+// preserving) — see src/lab/CLAUDE.md (authoritative). The game path (src/render/dungeon.ts)
+// colors via recolor.ts too, so this file is kept ONLY for the `RetextureRule`/`MaterialSpec`
+// types still used by MeshObjectSpec.variants, and `presentSwatchHexes` (the legend's "present"
+// sampler). Don't add new lab coloring logic here.
 //
 // THE USER'S EXACT ASK: "change ONLY the things that are one colour, to another
 // material/metalness." KayKit dungeon meshes are UV-mapped onto a single shared

@@ -36,7 +36,7 @@ interface Failure {
 /** Build a bare 1×N corridor floor: cells 0..N-1 in a row, WALK edges between neighbours. */
 function lineFloor(n: number): Floor {
   const cells: Cell[] = [];
-  for (let x = 0; x < n; x++) cells.push({ id: x, x, y: 0, chunkType: 0 });
+  for (let x = 0; x < n; x++) cells.push({ id: x, x, y: 0 });
   const edges: Edge[] = [];
   for (let x = 0; x + 1 < n; x++) {
     edges.push({ a: x, b: x + 1, kind: 'WALK', breakable: false, perimeter: true, spine: 0 });

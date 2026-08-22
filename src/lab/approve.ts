@@ -23,6 +23,12 @@ export interface ApproveState {
   autoEdge: boolean;
   recolor: ResolvedSwatch[] | undefined;
   present: ReadonlySet<number> | undefined;
+  /** Which PROFILE these materials came from, and the content rev of the values actually approved.
+   *  The frozen `swatches` stay the source of truth for rendering; this pair is what makes
+   *  "which approved objects have fallen behind the current profile?" answerable at all. If the
+   *  reviewer had drifted off the profile, `rev` is the drifted state — it records what was
+   *  approved, not what the profile says. */
+  profile: { id: string; rev: string } | undefined;
 }
 
 /** Build the JSON payload (footprint + fit provenance + frozen per-swatch materials) from state. */
@@ -42,7 +48,7 @@ function buildAsset(s: ApproveState): Record<string, unknown> {
       seedMode: s.seedMode,
       autoEdge: s.autoEdge,
     },
-    materials: { relief: getRelief(), swatches },
+    materials: { relief: getRelief(), profile: s.profile ?? null, swatches },
   };
 }
 

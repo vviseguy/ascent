@@ -16,7 +16,7 @@ import { cellId, type Floor, type Edge } from './types.ts';
 function blankFloor(width: number, height: number, edges: Edge[], k: number): Floor {
   const cells = [];
   for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) cells.push({ id: cellId(width, x, y), x, y, chunkType: 0 });
+    for (let x = 0; x < width; x++) cells.push({ id: cellId(width, x, y), x, y });
   const exits: number[] = [];
   for (let x = 0; x < width; x++) exits.push(cellId(width, x, height - 1));
   return {
@@ -158,7 +158,7 @@ describe('SMOKE/FUZZ: verifier finds all generated floors solvable & routed', ()
 /** A 1×n corridor: cells 0..n-1, WALK edges between neighbours, entry 0, exit n-1. */
 function corridor(n: number): Floor {
   const cells = [];
-  for (let x = 0; x < n; x++) cells.push({ id: x, x, y: 0, chunkType: 0 });
+  for (let x = 0; x < n; x++) cells.push({ id: x, x, y: 0 });
   const edges: Edge[] = [];
   for (let x = 0; x + 1 < n; x++) edges.push(walk(x, x + 1));
   return {

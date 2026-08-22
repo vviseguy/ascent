@@ -70,7 +70,12 @@ async function boot(): Promise<void> {
   const seed = seedParam !== null
     ? BigInt(seedParam)
     : (BigInt(Math.floor(Math.random() * 0xffffffff)) << 21n) ^ BigInt(Math.floor(Math.random() * 0x1fffff)) ^ 0x9e3779b1n;
-  const scene = buildTower({ crewSize: 3, numStrata: 5, seed });
+  // `?grid=N` sizes the stratum (cells/side) — smaller is easier to eyeball generation. No param =
+  // the game default (GAME_GRID_SIZE). Use `?grid=15` for a quick, legible inspection map.
+  const gridRaw = params.get('grid');
+  const gridParam = gridRaw !== null ? Math.floor(Number(gridRaw)) : NaN;
+  const gridSize = Number.isFinite(gridParam) && gridParam >= 4 ? gridParam : undefined;
+  const scene = buildTower({ crewSize: 3, numStrata: 5, seed, ...(gridSize ? { gridSize } : {}) });
   const renderer = new Renderer(canvas);
   // WORLD-STYLE: default to 'clean' (preferred); `?world=NAME` overrides.
   const worldName = params.get('world') ?? 'clean';
