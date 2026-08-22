@@ -11,7 +11,7 @@ file is the map + the non-obvious rules that must not be reverted. Full design c
 - [`docs/ENGINE-ARCHITECTURE.md`](docs/ENGINE-ARCHITECTURE.md) — the custom physics engine (fixed-point; Rapier = test oracle only).
 - [`docs/GENERATION-SOLVABILITY.md`](docs/GENERATION-SOLVABILITY.md) — the solvability invariant + the independent verifier.
 - **Working on world generation / rendering?** → **[`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) first** — the AS-BUILT map: every stage's file, output, invariant, gate, and BUILT-vs-DESIGNED status, plus a "you want to change X → touch Y" table. Then [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md) for *why* the design is what it is (large parts of it are design-only — docs/13 §6 says which), and [`docs/14`](docs/14-terrain-puzzles-solvability.md) / [`docs/15`](docs/15-world-object-model.md) for puzzles + the WorldObject split.
-- **Working on assets / colors?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) (authoritative — the `recolor.ts` swatch system, the `tiling.ts` surface layer, and material PROFILES) + [`docs/ART-LAB.md`](docs/ART-LAB.md).
+- **Working on assets / colors / the lab?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) — the area router. It points at the three deep docs: [`MATERIALS.md`](src/lab/MATERIALS.md) (authoritative for colour + surface: the swatch cascade, the tiling shader, profiles, the approval freeze), [`SURFACES.md`](src/lab/SURFACES.md) (per-triangle mesh editing), [`TOOLING.md`](src/lab/TOOLING.md) (drawers, contact sheet, headless measurement). [`docs/ART-LAB.md`](docs/ART-LAB.md) covers the separate PROCEDURAL element catalog.
 - **What to work on next** → [`BACKLOG.md`](BACKLOG.md) (the live queue) + [`docs/GAPS.md`](docs/GAPS.md) (the intent audit it draws from).
 
 ## Run / prove / test
@@ -134,6 +134,16 @@ The abstract-piece pipeline they formed is gone; the tile lattice replaced it wh
 **Most of `docs/16` is DESIGN, not code** — sockets, tags, AC-3 collapse, the requirement queue, and
 the Structure/Slot model are all unbuilt. `docs/13 §6` is the authoritative BUILT-vs-DESIGNED list.
 Check it before assuming a mechanism exists.
+
+## Documentation layout
+Root [CLAUDE.md](CLAUDE.md) stays GENERAL — the map, the non-negotiables, the cross-cutting rules.
+Anything specific to one area lives in that area's own `CLAUDE.md`, which acts as a router when the
+area is big enough to need more than one doc (see `src/lab/`). Design *rationale* that outlives any
+one folder goes in [`docs/`](docs/).
+
+**Update the area doc in the same commit as the change.** A doc that lags is worse than no doc: the
+next session trusts it. If an area doc passes ~250 lines it is probably covering two concerns —
+split it and leave the area `CLAUDE.md` as the index.
 
 ## Conventions
 - TS strict, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`.
