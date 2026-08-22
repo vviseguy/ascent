@@ -5,7 +5,7 @@
 > invariant it must not break**, **which gate proves that**, and **whether it is BUILT or only
 > DESIGNED**. Read this before touching `src/floor` or `src/game/tower.ts`.
 >
-> **Verified against the tree at `c3fab30` (2026-07-01).** Every file path, export name, and status
+> **§0 verified at `2e97723`; §1–§4 (the 4u pipeline) verified at `c3fab30`.** Every file path, export name, and status
 > below was checked against the source, not carried forward from a previous revision.
 >
 > - **Why the design is what it is** → [`16-generation-overhaul.md`](16-generation-overhaul.md).
@@ -14,6 +14,65 @@
 >   [`archive/13-abstract-piece-pipeline.md`](archive/13-abstract-piece-pipeline.md). Nothing in this
 >   tree imports those modules any more; if a doc or comment still mentions `blueprint.ts`,
 >   `wall-style.ts`, or `wall-model.ts` as live code, it is stale — fix it.
+
+---
+
+## 0. THE 2u CELL MIGRATION — in progress, and it changes the substrate
+
+> **Two substrates exist in the tree right now.** The 4u tile pipeline (§1–§4) still runs and is what
+> the game renders. The 2u CELL pipeline below is complete through generation, proven, and is what
+> everything moves to. Neither is deleted yet; nothing is half-converted.
+
+**The 4u tile split each side into `inner` + `edge` and kept a `centre`, so a coarse cell could
+express detail finer than itself — a sub-grid simulated inside a cell.** The 2u model just *has* the
+sub-grid. A tile becomes a 2×2 block of 2u cells and carries no data of its own.
+
+Every irregularity that cost us time traces to that simulation, and each one becomes unrepresentable:
+
+| 4u problem | at 2u |
+|---|---|
+| an arm could be HALF expressed (`inner` without `edge`) — drawing a full wall while reading PASSABLE | a wall is one field: present or absent |
+| the CROSS seam — three cells across two tiles describing one wall | a wall is one owned field |
+| the POINT seam — four floor quadrants meeting at a lattice point | floor is one value per cell |
+| `centre` as a special cell | an ordinary lattice point |
+| an opening had to be inferred from `wallType` + a full wall line, so a corner could never have a door | `corner: 'air'` states it directly, and the test is two fields on ONE cell |
+
+**A cell owns `{floor, wallN, wallW, corner, wallType}` and nothing else.** Its south wall is the south
+neighbour's `wallN`; its east wall is the east neighbour's `wallW`. Single ownership is now the *only*
+rule in the model, because there is nothing left two cells could disagree about.
+
+| # | Stage | File | Produces | Gate | Status |
+|---|---|---|---|---|---|
+| C1 | The cell model | `src/floor/cell.ts` | `Cell`, `blocks`, `cornerIsOpen` | `cell-grid.test.ts` | **BUILT** |
+| C2 | Domains | `src/floor/cell-field.ts` | `CellField` (bitmasks), `andGate`, `collapse` | `cell-grid.test.ts` | **BUILT** |
+| C3 | Transactional grid | `src/floor/cell-grid.ts` | `CellGrid`, `begin`/`stamp`/`commit`/`rollback` | `cell-grid.test.ts` (31) | **BUILT** |
+| C4 | Traversal graph | `src/floor/cell-graph.ts` | `CellGraph` — cells are the nodes | `cell-grid.test.ts` | **BUILT** |
+| C5 | Reachability over domains | `src/floor/cell-reach.ts` | may/must, `edgesOf`, `findRoute`, pinning | `cell-reach.test.ts` (16) | **BUILT** |
+| C6 | Maze carvers | `src/floor/cell-maze.ts` | `planMaze` — kruskal / backtracker / prim / scatter | `cell-emergent.test.ts` | **BUILT** |
+| C7 | Structure migration | `src/floor/structure-migrate.ts` | 4u tiles → 2u cells | `structure-migrate.test.ts` (25) | **BUILT** |
+| C8 | Authored structures | `src/floor/cell-structures.json` + `.ts` | the ONLY rooms | — | **BUILT** |
+| C9 | The generator | `src/floor/cell-emergent.ts` | a settled `CellGrid` | `cell-emergent.test.ts` (25), `prove:cell` | **BUILT** |
+| C10 | Cells → meshes | — | — | — | **NOT BUILT** — the 2u floors cannot render yet |
+
+**One edge enumeration.** `cell-reach.ts:edgesOf` is the single place a traversable connection comes
+into existence, and both the graph and the router are built from it. That is not tidiness: in the 4u
+model the two derived edges separately, one learned about openings and the other did not, and the
+disagreement surfaced as a phantom "invariant broken" rather than as the mismatch it was.
+
+**The generator's phases** — structures → route+pin → seal → maze → settle. Doors are *discovered*:
+SEAL tries to close every porous perimeter wall, and the ones that refuse — because closing them would
+strand a cell or break a pinned route — are the doors.
+
+### Migration status
+
+- **Done:** the substrate, the generator, and all three authored structures — converted cell-for-cell
+  against the *old code* as oracle, and confirmed visually at matching scale.
+- **Not done:** `cell-place.ts` (cells → meshes), so 2u floors do not render in the game; the editor
+  still authors 4u; the 4u modules are still present.
+- **Known lossy point:** the old `centre: 'barrier'` (a low pillar) converts to `column`, dropping the
+  low-ness. Nothing in the authored set used it.
+- **Open question, not a bug:** a 2u maze gives 2u corridors. Whether the maze should carve on a
+  2-cell step so corridors read at 4u is a gameplay call, not a constraint.
 
 ---
 

@@ -94,7 +94,14 @@ src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock 
                    to a live 2-browser match (that's BACKLOG "Pressure + the race"). Grafts Frequency.
 ```
 
-### The worldgen pipeline (the load-bearing seam — read docs/13 before editing it)
+### ⚠ TWO SUBSTRATES right now — read docs/13 §0 first
+A **2u CELL** model (`src/floor/cell*.ts`) is replacing the 4u tile model. It is complete through
+generation and proven (`npm run prove:cell`), and the authored structures have been migrated onto it
+cell-for-cell. It does NOT render yet — there is no cells→meshes step — so the 4u pipeline below is
+still what the game draws. Neither is deleted; nothing is half-converted. A cell owns
+`{floor, wallN, wallW, corner, wallType}`; its S and E walls belong to its neighbours.
+
+### The 4u worldgen pipeline (still what renders — read docs/13 before editing it)
 ```
 Floor graph  (src/floor/generate.ts)   spines → openness → rooms → puzzles   → Floor
   → verify   (src/floor/verify.ts)     INDEPENDENT solvability proof (generator-blind)
