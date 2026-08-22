@@ -24,6 +24,7 @@
 // ============================================================================
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { kaykitObjects, objectPack } from './kaykit-catalog.ts';
 import type { WorldObject, WorldObjectBuild } from './world-object.ts';
 import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
@@ -104,7 +105,9 @@ async function main(): Promise<void> {
   scene.add(key);
   scene.add(new THREE.HemisphereLight(0x8899cc, 0x33301f, 0.8));
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new THREE.Scene(), 0.04).texture;
+  // RoomEnvironment, matching the lab exactly — an empty scene here would give metals nothing to
+  // reflect, and they would read as dark stone on the sheet but as metal in the lab.
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environmentIntensity = 0.55;
 
   const lightRake = { az: 0.1, el: 0.62 };

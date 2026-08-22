@@ -325,9 +325,17 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
       ].join('\n'));
   };
 
-  // UNIQUE per material: a shared cache key would let three reuse one program and SKIP
-  // onBeforeCompile for later materials, leaving their tiling uniforms unbound.
-  const id = ++_matSeq;
-  mat.customProgramCacheKey = () => 'recolorTiled' + id;
+  // SHARED cache key — one compiled program for every recolored material in the scene.
+  //
+  // This used to be unique per material, and had to be: the old design emitted a different sampler
+  // set and a different if/else chain per object, so two materials sharing a key meant the second
+  // one ran against the first one's source and its uniforms went unbound. With the arrays, every
+  // material emits BYTE-IDENTICAL source and differs only in uniform VALUES (uShade, uSlot), which
+  // three keeps per material. So they can share, and should: measured on the contact sheet, the
+  // unique key cost one shader compile per object (5 programs at 1 object, 18 at 14) — a load-time
+  // hitch that grew with the asset set for no benefit.
+  //
+  // If you ever make the generated SOURCE depend on the material again, this key must encode
+  // whatever varies, or you will resurrect the unbound-uniform bug.
+  mat.customProgramCacheKey = () => 'recolorTiled1';
 }
-let _matSeq = 0;

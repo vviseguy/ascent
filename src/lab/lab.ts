@@ -341,6 +341,19 @@ async function boot(): Promise<void> {
     key.position.set(KEY_DIST * Math.cos(e) * Math.cos(a), KEY_DIST * Math.sin(e), KEY_DIST * Math.cos(e) * Math.sin(a));
   };
   applyRake();
+
+  // TORCH — a warm POINT light, matching what the game actually puts on a wall
+  // (dungeon.ts: PointLight 0xffa64d, decay 2, up to MAX_TORCH_LIGHTS of them). The studio key is a
+  // directional light at infinity; a torch is close, decaying, and off to one side, so it rakes the
+  // grain completely differently. Materials for a torch-lit dungeon should be judged under one.
+  // Costs nothing at intensity 0 — three skips lights with zero intensity.
+  const torch = new THREE.PointLight(0xffa64d, 0, 7, 2);
+  torch.position.set(-1.75, 0.6, 0.55); // beside the wall and low, so it RAKES the face — a light
+  // hitting a surface head-on barely reveals a normal map (N.L is flat near the cosine peak).
+  scene.add(torch);
+  const torchLevel = { v: Math.min(1, Math.max(0, Number(params.get('torch')) || 0)) };
+  const applyTorch = (): void => { torch.intensity = torchLevel.v * 26; };
+  applyTorch();
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
   key.shadow.camera.left = key.shadow.camera.bottom = -6;
@@ -584,6 +597,7 @@ async function boot(): Promise<void> {
       const prof = profileBar?.current()?.id;
       if (prof) u.set('profile', prof); else u.delete('profile');
       u.set('rake', `${Math.round(lightRake.az * 100)}:${Math.round(lightRake.el * 100)}`);
+      if (torchLevel.v > 0) u.set('torch', String(torchLevel.v.toFixed(2))); else u.delete('torch');
       history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
       profileBar?.refresh(); // the drift indicator is only true until the next edit
     }
@@ -604,6 +618,7 @@ async function boot(): Promise<void> {
       extras: [
         { label: 'Light ∠', get: () => lightRake.az, set: (v) => { lightRake.az = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
         { label: 'Light ↑', get: () => lightRake.el, set: (v) => { lightRake.el = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'Torch', get: () => torchLevel.v, set: (v) => { torchLevel.v = v; applyTorch(); writeSurfaceUrl(); renderOnce(); } },
       ],
     });
 
