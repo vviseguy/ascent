@@ -37,8 +37,8 @@ import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts
 import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
 import {
-  CASING, channelColor, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend, maskValues,
-  openingIsPlain, openingRings, patternDefs, rgb, segInk, segValueColor,
+  CASING, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend,
+  openingIsPlain, openingRings, patternDefs, segInk, segValueColor,
   CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH,
 } from './cell-visual.ts';
 import * as THREE from 'three';
@@ -318,6 +318,15 @@ function render(): void {
           x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
           fill: floorValueColor(c.floor), opacity: 0.2, 'pointer-events': 'none',
         }));
+        // the ghost keeps its HATCH: a staircase below is the thing you are lining a hole up with, and
+        // a flat wash of colour does not tell you where it is
+        const gh = floorValueHatch(c.floor);
+        if (gh) {
+          svg.append(svgEl('rect', {
+            x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
+            fill: `url(#${gh})`, opacity: 0.35, 'pointer-events': 'none',
+          }));
+        }
       }
     }
     for (let py = 0; py <= H; py++) {
