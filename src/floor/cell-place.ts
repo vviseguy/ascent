@@ -22,7 +22,7 @@
 
 import { type Fixed, fromInt, fromFloatConst, neg } from '../sim/fixed/fixed.ts';
 import {
-  isOpenType, type Axis, type Cell, type FloorMaterial, type Seg, type WallType,
+  blocks, isOpenType, type Axis, type Cell, type Dir, type FloorMaterial, type Seg, type WallType,
 } from './cell.ts';
 
 const PACK = 'models/kaykit_dungeon_remastered';
@@ -36,6 +36,7 @@ export const PIECE = {
   barrierHalf: u('barrier_half'),
   barrierColumn: u('barrier_column'),
   arch: u('wall_arched'),
+  stairs: u('stairs_narrow'), // 4x4 footprint — exactly a two-cell run, unlike `stairs` (5 wide)
   window: u('wall_archedwindow_open'),
   gate: u('wall_gated'),
   broken: u('wall_broken'),
@@ -63,7 +64,7 @@ const HALF = fromFloatConst(0.5); // a 4u floor piece rendered as a 2u cell
 /** Point a +X-extending piece toward a direction. Matches the 4u convention exactly. */
 const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
 
-const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock'>, string> = {
+const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs'>, string> = {
   stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
 };
 
@@ -91,6 +92,16 @@ function wallPiece(seg: Seg): string | null {
 const cellAt = (cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): Cell | null =>
   x < 0 || y < 0 || x >= w || y >= h ? null : cells[y * w + x] ?? null;
 
+/** The wall on side `d` of (x,y), read from whichever cell owns it; off the map is the perimeter. */
+function wallOn(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, d: Dir): Seg {
+  const o = d === 'N' ? { x, y, side: 'N' as const }
+    : d === 'W' ? { x, y, side: 'W' as const }
+      : d === 'S' ? { x, y: y + 1, side: 'N' as const }
+        : { x: x + 1, y, side: 'W' as const };
+  const c = cellAt(cells, w, h, o.x, o.y);
+  return c ? c[o.side === 'N' ? 'wallN' : 'wallW'] : 'wall';
+}
+
 /** Is there a live 4u opening at point (px,py) on `axis`? An `air` corner with a walk-through type,
  *  and the two collinear segments either side really being walls for it to sit in. */
 export function openingAt(
@@ -112,6 +123,64 @@ export function openingAxis(
   if (openingAt(cells, w, h, px, py, 'H')) return 'H';
   if (openingAt(cells, w, h, px, py, 'V')) return 'V';
   return null;
+}
+
+/* ----------------------------------- stairs ----------------------------------- */
+
+/**
+ * A STAIR RUN is two adjacent `stairs` cells — 4u, exactly the `stairs_narrow` footprint. Which way it
+ * climbs is DERIVED from the walls at its two ends and never stored:
+ *
+ *     [ open ] stairs | stairs [ wall ]        climbs toward the wall
+ *
+ * You walk in at the open end and rise toward the closed one. That is the same principle as the
+ * opening axis — a fact about the walls should be read from the walls, not duplicated beside them
+ * where it can disagree.
+ *
+ * AMBIGUOUS RUNS DRAW NOTHING. Open at both ends, or closed at both, and there is no telling which way
+ * it goes, so it falls back to ordinary ground rather than guessing — the same under-claiming rule the
+ * cross-junction opening uses.
+ *
+ * The run is owned by its LOWER-coordinate cell so exactly one of the pair emits the mesh.
+ */
+export interface StairRun {
+  /** The axis the flight runs along. */
+  axis: 'H' | 'V';
+  /** Which way it CLIMBS: toward the walled end. */
+  up: Dir;
+}
+
+export function stairRun(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+): StairRun | null {
+  const c = cellAt(cells, w, h, x, y);
+  if (!c || c.floor !== 'stairs') return null;
+
+  for (const axis of ['H', 'V'] as const) {
+    const nx = axis === 'H' ? x + 1 : x, ny = axis === 'H' ? y : y + 1;
+    const partner = cellAt(cells, w, h, nx, ny);
+    if (!partner || partner.floor !== 'stairs') continue;
+    // a cell already in a run to its west/north is not the owner of this one
+    const prev = cellAt(cells, w, h, axis === 'H' ? x - 1 : x, axis === 'H' ? y : y - 1);
+    if (prev?.floor === 'stairs') continue;
+
+    const lowSide: Dir = axis === 'H' ? 'W' : 'N';
+    const highSide: Dir = axis === 'H' ? 'E' : 'S';
+    const closedLow = blocks(wallOn(cells, w, h, x, y, lowSide));
+    const closedHigh = blocks(wallOn(cells, w, h, nx, ny, highSide));
+    if (closedLow === closedHigh) continue;               // ambiguous — draw nothing
+    return { axis, up: closedHigh ? highSide : lowSide };
+  }
+  return null;
+}
+
+/** Is this cell part of a run owned by a neighbour? Such a cell contributes no ground of its own. */
+function inRunOwnedElsewhere(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): boolean {
+  return stairRun(cells, w, h, x - 1, y) !== null && cellAt(cells, w, h, x - 1, y)?.floor === 'stairs'
+    ? stairRun(cells, w, h, x - 1, y)!.axis === 'H'
+    : stairRun(cells, w, h, x, y - 1) !== null && cellAt(cells, w, h, x, y - 1)?.floor === 'stairs'
+      ? stairRun(cells, w, h, x, y - 1)!.axis === 'V'
+      : false;
 }
 
 /* --------------------------------- placement --------------------------------- */
@@ -138,7 +207,20 @@ export function cellPlacements(
      and column, because those padding entries abstain and settle to stone like anything else.
      A generator floor passes nothing: every cell there is real. */
   const fw = floorExtent?.w ?? w, fh = floorExtent?.h ?? h;
-  if (c.floor !== 'none' && x < fw && y < fh) out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
+  const inFloor = x < fw && y < fh;
+
+  // STAIRS replace the ground of BOTH cells of the run with one 4u flight, placed on the midpoint
+  // between them and turned to face the climb.
+  const run = stairRun(cells, w, h, x, y);
+  if (run && inFloor) {
+    const half = run.axis === 'H' ? at(PIECE.stairs, TURN[run.up], ONE, Z) : at(PIECE.stairs, TURN[run.up], Z, ONE);
+    out.push(half);
+  } else if (c.floor === 'stairs') {
+    // part of a run owned by the other cell, or a lone `stairs` cell with nowhere to climb
+    if (!inRunOwnedElsewhere(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
+  } else if (c.floor !== 'none' && inFloor) {
+    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
+  }
 
   // the NW corner point of this cell, in cell-local coordinates
   const CX = NEG_ONE, CZ = NEG_ONE;

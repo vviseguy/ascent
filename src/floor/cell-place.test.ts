@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, PIECE, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, openingAxis, stairRun, PIECE, wallTypeUrl } from './cell-place.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
 const W = 4, H = 4;
@@ -147,5 +147,62 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
     // The south border (wallN at y === SH) and east border (wallW at x === SW) are KEPT — they are
     // real edges of the structure, which is the whole reason for the padding.
     expect(walls({ w: SW, h: SH })).toBe(SW * sh + sw * SH);
+  });
+});
+
+describe('cell-place — stair runs', () => {
+  const SW = 5, SH = 3;
+  const mk = (mut: (c: Cell, x: number, y: number) => void): Cell[] => {
+    const out: Cell[] = [];
+    for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) { const c = openCell(); mut(c, x, y); out.push(c); }
+    return out;
+  };
+  const drew = (cs: Cell[], x: number, y: number): string[] =>
+    cellPlacements(cs, SW, SH, x, y).map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+
+  /** `[open] stairs | stairs [wall]` — the flight climbs toward the closed end. */
+  const run = (wallSide: 'E' | 'W' | 'none'): Cell[] => mk((c, x, y) => {
+    if (y === 1 && (x === 1 || x === 2)) c.floor = 'stairs';
+    if (wallSide === 'E' && y === 1 && x === 3) c.wallW = 'wall';
+    if (wallSide === 'W' && y === 1 && x === 1) c.wallW = 'wall';
+  });
+
+  it('climbs toward the walled end, whichever end that is', () => {
+    expect(stairRun(run('E'), SW, SH, 1, 1)).toEqual({ axis: 'H', up: 'E' });
+    expect(stairRun(run('W'), SW, SH, 1, 1)).toEqual({ axis: 'H', up: 'W' });
+  });
+
+  it('one flight per run: the lower-coordinate cell owns it, the partner draws nothing', () => {
+    const cs = run('E');
+    expect(drew(cs, 1, 1)).toEqual(['stairs_narrow']);
+    expect(drew(cs, 2, 1)).toEqual([]);
+  });
+
+  it('uses stairs_narrow — 4×4, exactly the two-cell run (plain `stairs` is 5 wide and would overhang)', () => {
+    expect(cellPlacements(run('E'), SW, SH, 1, 1)[0]!.url).toContain('stairs_narrow');
+  });
+
+  it('AMBIGUOUS runs draw ordinary ground rather than guessing a direction', () => {
+    expect(stairRun(run('none'), SW, SH, 1, 1)).toBeNull();     // open at both ends
+    expect(drew(run('none'), 1, 1)).toEqual(['floor_tile_large']);
+    const closedBoth = mk((c, x, y) => {
+      if (y === 1 && (x === 1 || x === 2)) c.floor = 'stairs';
+      if (y === 1 && (x === 1 || x === 3)) c.wallW = 'wall';
+    });
+    expect(stairRun(closedBoth, SW, SH, 1, 1)).toBeNull();
+  });
+
+  it('a lone `stairs` cell is not a flight', () => {
+    const lone = mk((c, x, y) => { if (x === 1 && y === 1) c.floor = 'stairs'; });
+    expect(stairRun(lone, SW, SH, 1, 1)).toBeNull();
+    expect(drew(lone, 1, 1)).toEqual(['floor_tile_large']);
+  });
+
+  it('runs on either axis', () => {
+    const vert = mk((c, x, y) => {
+      if (x === 2 && (y === 0 || y === 1)) c.floor = 'stairs';
+      if (x === 2 && y === 2) c.wallN = 'wall';
+    });
+    expect(stairRun(vert, SW, SH, 2, 0)).toEqual({ axis: 'V', up: 'S' });
   });
 });

@@ -75,11 +75,15 @@ export const BLOCKING_SEGS: readonly Seg[] = ['wall', 'sloped'];
  *   rock            SOLID FILL — the cell is not a place at all. This is the fallback that turns an
  *                   unreachable pocket into filled stone, so a floor reads as carved OUT of rock
  *                   rather than as an open field someone put walls on.
+ *   stairs          part of a STAIR RUN. Two adjacent `stairs` cells make one 4u flight; which way it
+ *                   climbs is derived from the walls at its two ends, never stored (see
+ *                   `cell-place.ts:stairRun`). A lone `stairs` cell is not a flight and draws as
+ *                   ordinary ground.
  *
  * APPEND-ONLY, like `SEGS` — masks are serialised by bit position.
  */
-export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock';
-export const FLOOR_MATERIALS: readonly FloorMaterial[] = ['none', 'stone', 'dirt', 'wood', 'rock'];
+export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock' | 'stairs';
+export const FLOOR_MATERIALS: readonly FloorMaterial[] = ['none', 'stone', 'dirt', 'wood', 'rock', 'stairs'];
 
 /** Is this cell solid fill — somewhere a body can never be? Unlike every other floor value this one
  *  affects TRAVERSAL: a rock cell contributes no edges at all, walls notwithstanding. */

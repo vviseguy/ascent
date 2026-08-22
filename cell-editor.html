@@ -12,7 +12,13 @@
   /* three columns: controls | schematic | 3D — a VERTICAL split, so both views stay large */
   #panel { width: 260px; flex: none; padding: 14px; overflow-y: auto; border-right: 1px solid #2b3038; }
   #twod  { flex: 1 1 55%; min-width: 0; overflow: auto; padding: 22px; position: relative; }
-  #view3d { flex: 1 1 45%; min-width: 0; border-left: 1px solid #2b3038; position: relative; }
+  #view3d { flex: 1 1 45%; min-width: 0; position: relative; }
+  /* the grabber between the two views — 7px is wide enough to hit without hunting */
+  #split { flex: none; width: 7px; cursor: col-resize; background: #2b3038; position: relative; }
+  #split:hover, #split.drag { background: #3b6ea5; }
+  #split::after { content: ''; position: absolute; inset: 0 -5px; }  /* forgiving hit area */
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing #view3d canvas { pointer-events: none; }  /* the orbit control must not steal the drag */
   #view3d canvas { display: block; }
   #v3label { position: absolute; left: 10px; top: 8px; font-size: 10px; letter-spacing: .08em;
              text-transform: uppercase; color: #7c8794; pointer-events: none; z-index: 2; }
@@ -54,6 +60,7 @@
 <body>
   <div id="panel"></div>
   <div id="twod"><svg id="grid"></svg><div class="hint" id="hint"></div></div>
+  <div id="split" title="drag to resize"></div>
   <div id="view3d"><div id="v3label">3D — what the generator will build</div></div>
   <div id="veil"><div id="modal"></div></div>
   <script type="module" src="/src/lab/cell-editor.ts"></script>

@@ -41,7 +41,7 @@ import { buildGrid, CELL } from './cell-preview.ts';
 
 const SEG_COLOR: Record<Seg, string> = { none: '#333a44', wall: '#e8e3da', barrier: '#7fa8c9', sloped: '#c9a87f' };
 const FLOOR_COLOR: Record<FloorMaterial, string> = {
-  none: '#101318', stone: '#6f6a63', dirt: '#6b5540', wood: '#8a6136', rock: '#241c14',
+  none: '#101318', stone: '#6f6a63', dirt: '#6b5540', wood: '#8a6136', rock: '#241c14', stairs: '#b08d57',
 };
 const CORNER_COLOR: Record<Corner, string> = { solid: '#8a939d', column: '#e8e3da', air: '#5ad98b' };
 const AMBIGUOUS = '#4a5568';
@@ -692,6 +692,38 @@ async function rebuild3d(): Promise<void> {
   scene.add(group);
 }
 
+/* --------------------------------- splitter --------------------------------- */
+
+/**
+ * Drag the divider to trade space between the schematic and the 3D. Sizes are set as flex-BASIS in
+ * percent, so the split survives a window resize instead of drifting; the ResizeObserver on the 3D
+ * pane picks the new size up on its own.
+ */
+function initSplit(): void {
+  const bar = el('split'), left = el('twod'), right = el('view3d');
+  bar.addEventListener('mousedown', (down) => {
+    down.preventDefault();
+    bar.classList.add('drag');
+    document.body.classList.add('resizing');
+    const move = (ev: MouseEvent): void => {
+      const host = left.parentElement!.getBoundingClientRect();
+      const panel = el('panel').getBoundingClientRect().width;
+      const avail = host.width - panel - bar.offsetWidth;
+      const pct = Math.min(85, Math.max(15, ((ev.clientX - host.left - panel) / avail) * 100));
+      left.style.flex = `0 0 ${pct}%`;
+      right.style.flex = `1 1 ${100 - pct}%`;
+    };
+    const up = (): void => {
+      bar.classList.remove('drag');
+      document.body.classList.remove('resizing');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
 /* ---------------------------------- boot ------------------------------------ */
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -703,5 +735,6 @@ el('hint').textContent =
   + 'and they are what the padding exists for.';
 cells = blankGrid();
 init3d();
+initSplit();
 buildPanel();   // draw immediately; the store fetch only fills the two lists
 void refresh();
