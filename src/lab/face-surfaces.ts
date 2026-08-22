@@ -85,6 +85,16 @@ export function forEachMesh(root: THREE.Object3D, fn: (mesh: THREE.Mesh, index: 
   });
 }
 
+/** Where `applyHiddenFaces` parks the geometry it replaced. Everything that reasons in TRIANGLE
+ *  INDICES has to work from this: stored indices number the ORIGINAL buffer, so a tool that reads
+ *  the filtered mesh instead is off by however many triangles were dropped before it. */
+export const SOURCE_GEOM = '__srcGeom';
+
+/** The unfiltered geometry behind a mesh — itself, unless hiding has already been applied. */
+export function sourceGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
+  return (mesh.userData[SOURCE_GEOM] as THREE.BufferGeometry | undefined) ?? mesh.geometry;
+}
+
 /** Triangle count of a mesh's geometry. */
 export function triCount(g: THREE.BufferGeometry): number {
   return (g.index ? g.index.count : g.getAttribute('position').count) / 3;
@@ -137,14 +147,19 @@ export function filterGeometry(g: THREE.BufferGeometry, hidden: readonly number[
 export function applyHiddenFaces(root: THREE.Object3D, meshUrl: string): void {
   const entry = _store.meshes[meshUrl];
   if (!entry || !Object.keys(entry.hidden).length) return;
-  const now = geometryHash(root);
+  // hash the ORIGINALS: on a re-entrant call (a rebuild) some meshes may already be filtered
+  const list: THREE.BufferGeometry[] = [];
+  forEachMesh(root, (mesh) => list.push(sourceGeometry(mesh)));
+  const now = geometryHashOf(list);
   if (entry.geom !== now) {
     console.warn(`[surfaces] "${meshUrl}" hidden faces SKIPPED — geometry changed (stored ${entry.geom}, now ${now}). Re-author the selection.`);
     return;
   }
   forEachMesh(root, (mesh, i) => {
     const hidden = entry.hidden[String(i)];
-    if (hidden?.length) mesh.geometry = filterGeometry(mesh.geometry, hidden);
+    if (!hidden?.length) return;
+    mesh.userData[SOURCE_GEOM] = mesh.geometry; // so the picker can still see the original numbering
+    mesh.geometry = filterGeometry(mesh.geometry, hidden);
   });
 }
 
