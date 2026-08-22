@@ -69,3 +69,22 @@ Screenshot the live WebGL pages with headless Playwright (`--use-gl=swiftshader`
 pane: a continuously-rAF-ing canvas makes the pane time out. `scripts/lab-snap.mjs` is the worked
 example. When testing a pointer tool, draw a marker at the cursor position before the screenshot —
 a screenshot has no cursor in it, and "is the highlight under the pointer" is otherwise unanswerable.
+
+## Headless runs WRITE the authoring stores
+
+The dev middleware exists to write `src/game/*.json` — that is what Approve and the surfaces Save
+button are for. So any headless run that drives those buttons writes them too, and a fixture left
+behind by a test is indistinguishable in review from an authored edit. This has already shipped
+once: a Playwright run committed 344 of the dungeon wall’s 494 triangles as hidden.
+
+Remembering to reset the file is not a control. Use the guard:
+
+```bash
+node scripts/store-guard.mjs node tmp/whatever.mjs   # run, then restore whatever it wrote
+npm run stores:check                                 # before committing — exit 1 if a store is dirty
+npm run stores:restore                               # after an interactive session
+```
+
+`store-guard --check` is the one to reach for reflexively: it answers "is a data store dirty
+relative to HEAD", which is the question you actually have before every commit in this folder.
+Add any new middleware-written store to the `STORES` list in the script.
