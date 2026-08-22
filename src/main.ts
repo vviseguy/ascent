@@ -75,9 +75,9 @@ async function boot(): Promise<void> {
   const gridRaw = params.get('grid');
   const gridParam = gridRaw !== null ? Math.floor(Number(gridRaw)) : NaN;
   const gridSize = Number.isFinite(gridParam) && gridParam >= 4 ? gridParam : undefined;
-  // `?substrate=2u` builds the tower from the CELL model — authored structures, real staircases the
-  // author drew — instead of the 4u tile lattice. 4u remains the default; see buildTower's note.
-  const substrate = params.get('substrate') === '2u' ? '2u' as const : undefined;
+  // The tower is built from the CELL model by default — authored structures, real staircases the
+  // author drew. `?substrate=4u` selects the older tile lattice; see buildTower's note.
+  const substrate = params.get('substrate') === '4u' ? '4u' as const : undefined;
   const scene = buildTower({
     crewSize: 3, numStrata: 5, seed,
     ...(gridSize ? { gridSize } : {}),

@@ -35,8 +35,8 @@
 
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
-import { blocks, type Cell } from '../floor/cell.ts';
-import { gridPlacements, stairFlight, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
+import { blocks, isStairFloor, type Cell } from '../floor/cell.ts';
+import { gridPlacements, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
 import { objIdOf, transformBox, type FixedBox } from './tile-units.ts';
 import { getApproved } from './approved-assets.ts';
 import {
@@ -75,6 +75,13 @@ export function cellCentre2u(w: number, h: number, index: number): { x: Fixed; z
 /** Ground you can stand on. `none` is a hole and `rock` is solid fill; neither is a floor. */
 const walkable = (c: Cell | null): boolean => c !== null && c.floor !== 'none' && c.floor !== 'rock';
 
+const Z: Fixed = fromInt(0);
+const ONE: Fixed = fromInt(1);
+/** The ground mesh for a material — the same table `cell-place` draws from. */
+const FLOOR_URL: Record<'stone' | 'dirt' | 'wood', string> = {
+  stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
+};
+
 /** Floor meshes render but do not collide — the slab under them already does, and two colliders in
  *  the same place is how a player ends up standing half a unit too high. */
 const isGroundPiece = (url: string): boolean => url.includes('floor_') || url.includes('stairs');
@@ -88,9 +95,39 @@ export function cellWorldPlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
 ): WorldPlacement[] {
   const out: WorldPlacement[] = [];
+
+  /* GROUND IS DRAWN IN 4u BLOCKS WHERE IT CAN BE.
+     A floor mesh is natively 4u and the 2u path draws it at half scale, once per cell — four draws
+     where one would do. At the game's size that is 18,000 of 26,000 meshes, and it was the difference
+     between a tower that loads and one you wait most of a minute for.
+     Only where all four cells of an ALIGNED block share a material: a block spanning two materials, a
+     hole or a staircase still draws per cell, so nothing is merged that would change what you see. */
+  const merged = new Uint8Array(w * h);
+  const groundOf = (cx: number, cy: number): keyof typeof FLOOR_URL | null => {
+    if (cx < 0 || cy < 0 || cx >= w || cy >= h) return null;
+    const c = cells[cy * w + cx];
+    if (!c || c.floor === 'none' || c.floor === 'rock' || isStairFloor(c.floor)) return null;
+    return c.floor;
+  };
+  for (let by = 0; by + 1 < h; by += 2) {
+    for (let bx = 0; bx + 1 < w; bx += 2) {
+      const m = groundOf(bx, by);
+      if (!m) continue;
+      if (groundOf(bx + 1, by) !== m || groundOf(bx, by + 1) !== m || groundOf(bx + 1, by + 1) !== m) continue;
+      const c0 = cellCentre2u(w, h, by * w + bx);
+      out.push({
+        // the block's centre is one world unit south-east of its first cell's centre
+        x: toRaw(add(c0.x, HALF_CELL)), z: toRaw(add(c0.z, HALF_CELL)),
+        unit: { url: FLOOR_URL[m], y: Z, turn: 0, scale: ONE, boxes: [], materials: getApproved(objIdOf(FLOOR_URL[m]))?.materials },
+      });
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) merged[(by + dy) * w + (bx + dx)] = 1;
+    }
+  }
+
   for (const { x, y, placements } of gridPlacements(cells, w, h)) {
     const { x: ccx, z: ccz } = cellCentre2u(w, h, y * w + x);
     for (const p of placements) {
+      if (merged[y * w + x] === 1 && isGroundPiece(p.url)) continue; // drawn by its 4u block
       // a cell-local offset is in half-cells; the box transform wants tile-local world units
       const local: CellPlacement = { ...p, x: mul(p.x, HALF_CELL), z: mul(p.z, HALF_CELL) };
       const a = getApproved(objIdOf(p.url));

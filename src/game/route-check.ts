@@ -27,11 +27,18 @@
 // the same float64 sequence on every run, and no Map/Set iteration order affects
 // the result (plain arrays, ascending index).
 //
-// KNOWN LIMITATION: edges do not model LATERAL blockers (e.g. a guard rail
-// standing between two adjacent tops), so this check can pass a layout a real
-// body cannot squeeze through. The END-TO-END input-driven climb in
-// src/game/prove.ts (PROOF 8) covers that physically for the canonical layout —
-// it caught exactly such a pinch at the stair turn on the first cut.
+// LATERAL BLOCKERS ARE CHECKED. Two adjacent floor slabs are adjacent whether or
+// not a wall stands between them, so without this the graph happily routes
+// straight through walls. On the 4u tower that was survivable — its rooms are
+// open and PROOF 8 walks a hand-picked path along seams known to be clear — but a
+// 2u floor is a maze whose walls ARE the layout, and the check cheerfully claimed
+// routes that a body then wedged against on the first step it tried.
+//
+// So an edge a->b now also asks whether a body can fit through the seam between
+// them: sample across the shared span at standing height and require a contiguous
+// clear run at least a body wide. Still an approximation — it tests the seam, not
+// the whole swept path — so the input-driven climbs (PROOF 8 for 4u, PROOF 9 for
+// 2u) remain the thing that actually settles it.
 // ============================================================================
 
 import { ONE_RAW } from '../sim/fixed/fixed.ts';
@@ -98,6 +105,13 @@ export interface SummitRouteResult {
   reached: number;
   /** Failure description, '' on success (diagnostic for proof output). */
   reason: string;
+  /**
+   * The route itself when `ok` — the centre and height of each standable surface along it, entry
+   * first. A body can be DRIVEN along this, which is the difference between "a path exists in the
+   * graph" and "a body can physically follow it": the graph does not model lateral blockers, so the
+   * two can disagree, and only walking it finds out.
+   */
+  path: { x: number; z: number; top: number }[];
 }
 
 const F = (raw: number): number => raw / ONE_RAW;
@@ -203,7 +217,7 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
   // --- start: the standable top under the stratum-0 entry point ---
   const e0 = tower.entryXZ[0];
   const base0 = F(tower.stratumBaseY[0]!);
-  if (!e0) return { ok: false, nodes: nodes.length, reached: 0, reason: 'no stratum-0 entry' };
+  if (!e0) return { ok: false, nodes: nodes.length, reached: 0, reason: 'no stratum-0 entry', path: [] };
   const ex = F(e0.x);
   const ez = F(e0.z);
   let start = -1;
@@ -215,7 +229,7 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
     start = i;
     break;
   }
-  if (start < 0) return { ok: false, nodes: nodes.length, reached: 0, reason: 'no standable node at the entry' };
+  if (start < 0) return { ok: false, nodes: nodes.length, reached: 0, reason: 'no standable node at the entry', path: [] };
 
   // --- goal: a REAL floor surface (not a stair tread) at the top stratum's base ---
   const isGoal = (n: StandNode): boolean =>
@@ -224,16 +238,76 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
   // --- BFS over node adjacency; candidates from the spatial bucket (reach-expanded
   // rect), so each step scans only nearby nodes instead of all of them. Same edges as
   // the exhaustive scan (the rect is the exact adjacency test's bounding box). ---
+  /**
+   * Can a body get from one surface to the other, or is something standing in the way?
+   *
+   * The seam is the span the two surfaces share, on the axis they meet across. Sampling it at
+   * standing height and looking for a contiguous clear run at least a body wide is what tells a
+   * doorway apart from a wall — both of which look identical to a pair of adjacent rectangles.
+   *
+   * Only asked of surfaces at the SAME height; see the call site for why.
+   */
+  const SAMPLE = 0.1;
+  const bodyWide = probe.shrink * 2;
+  function seamBlocked(a: StandNode, b: StandNode): boolean {
+    const y0 = Math.max(a.top, b.top) + 0.05;
+    const y1 = y0 + probe.headroom * 0.55; // knee to chest — where a wall would stop you
+    // which axis do they meet across? the one where they do NOT overlap
+    const overlapX = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+    const overlapZ = Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ);
+    const acrossX = overlapX < overlapZ;
+    const seam = acrossX
+      ? (a.maxX <= b.minX ? (a.maxX + b.minX) / 2 : (b.maxX + a.minX) / 2)
+      : (a.maxZ <= b.minZ ? (a.maxZ + b.minZ) / 2 : (b.maxZ + a.minZ) / 2);
+    const lo = acrossX ? Math.max(a.minZ, b.minZ) : Math.max(a.minX, b.minX);
+    const hi = acrossX ? Math.min(a.maxZ, b.maxZ) : Math.min(a.maxX, b.maxX);
+    if (hi - lo < bodyWide) return true; // the shared span is narrower than the body
+
+    const near: number[] = [];
+    const seen = new Set<number>();
+    const px0 = acrossX ? seam - SAMPLE : lo, px1 = acrossX ? seam + SAMPLE : hi;
+    const pz0 = acrossX ? lo : seam - SAMPLE, pz1 = acrossX ? hi : seam + SAMPLE;
+    gatherBoxes(px0, px1, pz0, pz1, seen, near);
+
+    let run = 0;
+    for (let t = lo; t <= hi; t += SAMPLE) {
+      const x = acrossX ? seam : t;
+      const z = acrossX ? t : seam;
+      let hit = false;
+      for (const bi of near) {
+        const s2 = solids[bi]!;
+        if (F(s2.maxY) <= y0 || F(s2.minY) >= y1) continue;
+        if (x <= F(s2.minX) || x >= F(s2.maxX) || z <= F(s2.minZ) || z >= F(s2.maxZ)) continue;
+        hit = true; break;
+      }
+      if (hit) { run = 0; continue; }
+      run += SAMPLE;
+      if (run >= bodyWide - 1e-9) return false; // a gap wide enough to walk through
+    }
+    return true;
+  }
+
   const visited = new Array<boolean>(nodes.length).fill(false);
+  const prev = new Array<number>(nodes.length).fill(-1);
   const queue: number[] = [start];
   visited[start] = true;
   let head = 0;
   let reached = 1;
   const aSeen = new Set<number>();
   const aOut: number[] = [];
+  /** Walk `prev` back to the start; the centre of each surface, entry first. */
+  const trace = (end: number): { x: number; z: number; top: number }[] => {
+    const out: { x: number; z: number; top: number }[] = [];
+    for (let i = end; i >= 0; i = prev[i]!) {
+      const n = nodes[i]!;
+      out.push({ x: (n.minX + n.maxX) / 2, z: (n.minZ + n.maxZ) / 2, top: n.top });
+    }
+    return out.reverse();
+  };
   while (head < queue.length) {
-    const a = nodes[queue[head++]!]!;
-    if (isGoal(a)) return { ok: true, nodes: nodes.length, reached, reason: '' };
+    const ai = queue[head++]!;
+    const a = nodes[ai]!;
+    if (isGoal(a)) return { ok: true, nodes: nodes.length, reached, reason: '', path: trace(ai) };
     gatherNodes(a.minX - probe.reach, a.maxX + probe.reach, a.minZ - probe.reach, a.maxZ + probe.reach, aSeen, aOut);
     for (const j of aOut) {
       if (visited[j]) continue;
@@ -241,10 +315,25 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
       if (b.top - a.top > probe.maxStep) continue; // too high to hop (drops are free)
       if (b.minX >= a.maxX + probe.reach || b.maxX <= a.minX - probe.reach) continue;
       if (b.minZ >= a.maxZ + probe.reach || b.maxZ <= a.minZ - probe.reach) continue;
+      // ONLY BETWEEN SURFACES AT THE SAME HEIGHT. Something standing above the seam between two
+      // level surfaces is a wall; between surfaces at different heights it is usually the STEP
+      // itself — a staircase's higher treads sit above its lower ones, which is what a staircase is.
+      // Telling those apart needs the swept-path model this check explicitly is not, so a hop is
+      // left to the input-driven climbs to falsify. (Applying it to hops rejected the 4u tower's own
+      // staircase, which PROOF 8 demonstrably walks.)
+      if (Math.abs(b.top - a.top) < 0.05 && seamBlocked(a, b)) continue;
       visited[j] = true;
+      prev[j] = ai;
       reached++;
       queue.push(j);
     }
   }
-  return { ok: false, nodes: nodes.length, reached, reason: 'top stratum unreachable from the entry' };
+  // diagnostic: how high did it actually get, and onto what?
+  let best = -Infinity;
+  for (let i = 0; i < nodes.length; i++) if (visited[i] && nodes[i]!.top > best) best = nodes[i]!.top;
+  return {
+    ok: false, nodes: nodes.length, reached,
+    reason: `top stratum unreachable from the entry (highest surface reached ${best.toFixed(2)}, goal ${baseTop.toFixed(2)})`,
+    path: [],
+  };
 }

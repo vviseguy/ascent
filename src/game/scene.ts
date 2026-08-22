@@ -169,7 +169,7 @@ export function buildTower(opts: {
   const numStrata = Math.max(2, opts.numStrata ?? 5);
   const seed = opts.seed ?? 0x5a17ed_1234n;
   const gridSize = Math.max(4, opts.gridSize ?? GAME_GRID_SIZE);
-  const substrate = opts.substrate ?? '4u';
+  const substrate = opts.substrate ?? '2u';
 
   const groundY = fromInt(0);
   const killPlaneY = fromInt(-10);

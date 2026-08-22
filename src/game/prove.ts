@@ -38,10 +38,13 @@ import { makeArena, makeBox, flatGround, type Terrain } from '../sim/collide/ter
 import { WinCondition, type MatchConfig, standingMeters } from './match.ts';
 import { clone, restoreInto } from '../sim/world/snapshot.ts';
 import { buildTower } from './scene.ts';
+import { compileCellTower } from './cell-tower.ts';
+import { generateEmergentTower } from '../floor/cell-emergent.ts';
+import { resolveGrid } from '../floor/cell-grid.ts';
 import { drawOffer, boonById } from './boons.ts';
 import { generateFloor } from '../floor/generate.ts';
 import { compileTower, CELL_SIZE, GAME_GRID_SIZE } from './tower.ts';
-import { summitRoute } from './route-check.ts';
+import { summitRoute, CELL_PROBE } from './route-check.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) { ok++; console.log(`  ok   ${label}`); } else { fail++; console.log(`  FAIL ${label}`); } };
@@ -196,7 +199,7 @@ console.log('[6] BOON DRAFT + RUBBER-BAND');
   // climb the REAL compiled tower (slabs exist at each stratum, so committing works);
   // pin the anchor onto each successive stratum surface so it commits + drafts.
   const climb = (): { boons: number[]; hash: number } => {
-    const sc = buildTower({ crewSize: 1, numStrata: 5, seed: 42n });
+    const sc = buildTower({ crewSize: 1, numStrata: 5, seed: 42n, substrate: '4u' });
     const a = sc.anchorIds[0]!;
     const bases = sc.stratumBaseY!;
     for (let floor = 1; floor < bases.length; floor++) {
@@ -233,6 +236,16 @@ const compileForSeed = (seed: bigint, numStrata = 5) => {
   return { floors, tower: compileTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) }) };
 };
 const rawF = (raw: number): number => toFloat(fromRaw(raw));
+
+/** The 2u tower for a seed — the same stack `buildTower({ substrate: '2u' })` builds. */
+const CELL_W = GAME_GRID_SIZE * 2, CELL_H = GAME_GRID_SIZE * 2;
+const compileCellForSeed = (seed: bigint, numStrata = 5) => {
+  const stack = generateEmergentTower({ width: CELL_W, height: CELL_H, seed, levels: numStrata });
+  const floors = stack.floors.map((f) => ({
+    cells: resolveGrid(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
+  }));
+  return { stack, tower: compileCellTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) }) };
+};
 const CS = toFloat(CELL_SIZE); // float cell size — tracks tower.ts CELL_SIZE (no stale hardcodes)
 
 // PROOF 7 — GEOMETRY-LEVEL SOLVABILITY: the compiled tower admits an Anchor-probe
@@ -300,7 +313,7 @@ console.log('[7] GEOMETRY SOLVABILITY (Anchor probe, entry -> top, compiled AABB
 console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump taps)');
 {
   const seed = 0x5a17ed_1234n;
-  const sc = buildTower({ crewSize: 1, numStrata: 5, seed });
+  const sc = buildTower({ crewSize: 1, numStrata: 5, seed, substrate: '4u' });
   // recompile the identical tower for the stair metadata (pure + deterministic)
   const { floors, tower } = compileForSeed(seed);
   const st = tower.stairs[0]!;
@@ -367,6 +380,101 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
   }
   check(`real Anchor summited stratum 0 -> 1 by inputs alone (${t} ticks, no teleport)`, okClimb);
   check('anchor alive for the whole climb', aliveAll);
+}
+
+// PROOF 9 — THE 2u TOWER, on its own terms. Same two questions as 7 and 8, asked of the
+// cell substrate: does the compiled geometry admit a route, and can a real body driven by
+// inputs alone actually follow it?
+//
+// The route is not hand-written this time. PROOF 8 walks a path someone worked out in
+// advance, which only exists because the 4u staircase is synthesised at a known column
+// pair. A 2u floor is a maze around structures an author drew, so there is no such path to
+// write down — the body follows the route the CHECKER found. That is a strictly stronger
+// statement: the check's own answer is handed to physics to falsify, and the graph does not
+// model lateral blockers, so the two really can disagree.
+console.log('[9] THE 2u TOWER — compiled route, then a real Anchor walking it');
+{
+  const seeds: bigint[] = [0x5a17ed_1234n, 1000n, 8919n, 16838n];
+  let routeOk = true;
+  let stairsEverywhere = true;
+  let shaftsOpen = true;
+  for (const seed of seeds) {
+    const { tower } = compileCellForSeed(seed);
+    if (tower.strataWithoutStairs.length) {
+      stairsEverywhere = false;
+      console.log(`       seed ${seed}: no way up from stratum ${tower.strataWithoutStairs.join(', ')}`);
+    }
+    if (tower.ceilingSealedFlights.length) {
+      shaftsOpen = false;
+      console.log(`       seed ${seed}: ${tower.ceilingSealedFlights.length} flight(s) climb into a ceiling`);
+    }
+    const r = summitRoute(tower, CELL_PROBE);
+    if (!r.ok) {
+      routeOk = false;
+      console.log(`       seed ${seed} FAILED: ${r.reason} (${r.reached}/${r.nodes} nodes)`);
+    }
+  }
+  check(`a stairwell starts on every storey below the top (${seeds.length} seeds)`, stairsEverywhere);
+  check('every flight climbs into an OPEN shaft', shaftsOpen);
+  check(`anchor-probe route 0 -> top exists for all ${seeds.length} seeds`, routeOk);
+
+  // NEGATIVE CONTROL: floor the shafts back in and the route must die. Without this the
+  // check above would pass just as happily on a tower with no holes in it at all.
+  {
+    const stack = generateEmergentTower({ width: CELL_W, height: CELL_H, seed: 1000n, levels: 5 });
+    const floors = stack.floors.map((f) => ({
+      cells: resolveGrid(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
+    }));
+    for (const f of floors) for (const c of f.cells) if (c && c.floor === 'none') c.floor = 'stone';
+    const sealed = compileCellTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) });
+    check('negative control: flooring the shafts breaks the route', !summitRoute(sealed, CELL_PROBE).ok);
+  }
+
+  /* --- and now a REAL body, walking the route the checker found --- */
+  const seed = 0x5a17ed_1234n;
+  const sc = buildTower({ crewSize: 1, numStrata: 5, seed, gridSize: CELL_W / 2, substrate: '2u' });
+  const { tower } = compileCellForSeed(seed);
+  const route = summitRoute(tower, CELL_PROBE);
+  const a = sc.anchorIds[0]!;
+  const w = sc.sim.world;
+  const half = rawF(w.halfHeight[a]!);
+  const base1 = rawF(sc.stratumBaseY![1]!);
+
+  // Only as far as stratum 1 — the same bar PROOF 8 sets. Trim the route there so the body
+  // is not asked to walk four more floors to prove one climb.
+  const upTo1 = route.path.findIndex((n) => n.top >= base1 - 0.05);
+  const wps = route.path.slice(0, upTo1 >= 0 ? upTo1 + 1 : route.path.length);
+
+  let wpi = 0, okClimb = false, aliveAll = true, t = 0;
+  for (; t < 20000 && !okClimb; t++) {
+    const px = rawF(w.px[a]!);
+    const pz = rawF(w.pz[a]!);
+    const wp = wps[Math.min(wpi, wps.length - 1)]!;
+    const dx = wp.x - px, dz = wp.z - pz;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.6 && wpi < wps.length - 1) wpi++;
+    const sc2 = d > 1e-6 ? 1 / d : 0;
+    const inp: PlayerInput = {
+      ...NEUTRAL_INPUT,
+      moveX: Math.max(-1024, Math.min(1024, Math.round(dx * sc2 * 1024))),
+      moveZ: Math.max(-1024, Math.min(1024, Math.round(dz * sc2 * 1024))),
+      buttons: t % 12 === 0 ? Button.Jump : 0, // press-edge taps; hop any seam lip
+    };
+    const frame: (PlayerInput | undefined)[] = new Array(w.count);
+    frame[a] = inp;
+    sc.sim.advance(frame);
+    if ((w.flags[a]! & BodyFlag.Alive) === 0) aliveAll = false;
+    const feet = rawF(w.py[a]!) - half;
+    const grounded = (w.flags[a]! & BodyFlag.Grounded) !== 0;
+    if (grounded && feet >= base1 - 0.05) okClimb = true;
+  }
+  if (!okClimb) {
+    const wp = wps[Math.min(wpi, wps.length - 1)]!;
+    console.log(`       stuck at wp ${wpi}/${wps.length} (${wp.x.toFixed(1)}, ${wp.z.toFixed(1)}), `
+      + `pos (${rawF(w.px[a]!).toFixed(2)}, ${rawF(w.py[a]!).toFixed(2)}, ${rawF(w.pz[a]!).toFixed(2)})`);
+  }
+  check(`real Anchor walked the CHECKER'S route to stratum 1 (${t} ticks, no teleport)`, okClimb);
+  check('anchor alive for the whole 2u climb', aliveAll);
 }
 
 console.log('----------------------------------------------------------------');
