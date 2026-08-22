@@ -9,17 +9,20 @@
 // (The 4u model had to pathfind on the CORNERS, because a wall lived inside a tile and cut it into
 // pieces — so a tile was not a single place you could be. A 2u cell is one place, so it is one node.)
 //
-// OPENINGS are the one thing that is not a plain wall test. A 4u door sits on a lattice POINT and
-// spans the two collinear wall segments either side of it, so it connects the cells on one side of
-// that run to the cells on the other — see `cell.ts:openingGroups`. It counts only when both spanned
-// segments really are walls, which is exactly when the renderer has 4u of wall to put the arch into:
-// the graph and the mesh agree by construction, which is the whole point.
+// OPENINGS are the one thing that is not a plain wall test, and they are LOCAL. An `air` corner is a
+// genuine hole at the junction: every wall arm meeting that point stops short of it, so all four
+// quadrants around the point touch the hole and therefore reach each other through it. A cross is no
+// exception — that is a junction open both ways, not a special case.
+//
+// So connectivity reads TWO fields on ONE cell and never looks at a neighbour. The opening's AXIS
+// still matters for RENDERING (which way the arch faces) and is derived there from the walls; it has
+// no bearing on whether a body can get through.
 //
 // Pure + deterministic — integer node ids, ascending adjacency, BFS over dense arrays.
 
 import {
-  AXES, blocks, cornerIsOpen, openingGroups, openingWalls, stepped,
-  type Axis, type Cell, type Dir, type Seg,
+  blocks, cornerIsOpen, stepped,
+  type Cell, type Dir, type Seg,
 } from './cell.ts';
 import { DIRS } from './cell.ts';
 
@@ -46,7 +49,7 @@ export function buildCellGraphFrom(
   w: number,
   h: number,
   stepOpen: (x: number, y: number, d: Dir) => boolean,
-  openingOn?: (x: number, y: number, axis: Axis) => boolean,
+  openingOn?: (x: number, y: number) => boolean,
 ): CellGraph {
   const n = nodeCount(w, h);
   const out: Set<number>[] = Array.from({ length: n }, () => new Set<number>());
@@ -61,13 +64,12 @@ export function buildCellGraphFrom(
         if (!inside(p) || !stepOpen(x, y, d)) continue;
         link(nodeId(w, x, y), nodeId(w, p.x, p.y));
       }
-      if (!openingOn) continue;
-      for (const ax of AXES) {
-        if (!openingOn(x, y, ax)) continue;
-        const { a, b } = openingGroups(x, y, ax);
-        for (const p of a) for (const q of b) {
-          if (inside(p) && inside(q)) link(nodeId(w, p.x, p.y), nodeId(w, q.x, q.y));
-        }
+      // an air corner is a hole at the junction → every cell touching that point joins
+      if (!openingOn || !openingOn(x, y)) continue;
+      const around = [{ x: x - 1, y: y - 1 }, { x, y: y - 1 }, { x: x - 1, y }, { x, y }]
+        .filter(inside).map((p) => nodeId(w, p.x, p.y));
+      for (let i = 0; i < around.length; i++) {
+        for (let j = i + 1; j < around.length; j++) link(around[i]!, around[j]!);
       }
     }
   }
@@ -75,27 +77,12 @@ export function buildCellGraphFrom(
 }
 
 /**
- * Is the opening at cell (x,y)'s NW point live on `axis`?
- *
- * The LOCAL half is `cornerIsOpen` — corner is `air` and the wallType is a door or arch, both fields
- * on this one cell, and it short-circuits so the common case costs no neighbour reads at all.
- *
- * The axis is DERIVED, because an archway is 4u and has to span a straight run: the run exists only
- * if BOTH arms on that axis are walls. A CROSS — both axes walled — is deliberately not an opening;
- * you cannot span a four-way junction with an arch, and guessing an axis there would over-claim
- * reachability, which is the one direction a solvability check must never err.
+ * Is there a live opening at cell (x,y)'s NW point? `corner === 'air'` and a walk-through wallType,
+ * both on this one cell — no neighbours consulted, and it short-circuits on the common case.
  */
-export function openingActive(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, axis: Axis): boolean {
+export function openingActive(cells: readonly (Cell | null)[], w: number, x: number, y: number): boolean {
   const c = cells[y * w + x];
-  if (!c || !cornerIsOpen(c)) return false;
-  const runOn = (ax: Axis): boolean => openingWalls(x, y, ax).every((o) => {
-    if (o.x < 0 || o.y < 0 || o.x >= w || o.y >= h) return true; // the perimeter shell counts as wall
-    const n = cells[o.y * w + o.x];
-    const s: Seg | undefined = n ? n[o.side === 'N' ? 'wallN' : 'wallW'] : 'wall';
-    return s === 'wall';
-  });
-  const other: Axis = axis === 'H' ? 'V' : 'H';
-  return runOn(axis) && !runOn(other);
+  return c ? cornerIsOpen(c) : false;
 }
 
 /** The graph of a resolved grid — the same cells the renderer and the collider consume. */
@@ -112,7 +99,7 @@ export function buildCellGraph(cells: readonly (Cell | null)[], w: number, h: nu
   return buildCellGraphFrom(
     w, h,
     (x, y, d) => (cells[y * w + x] ? !blocks(wallOn(x, y, d)) : false),
-    (x, y, ax) => openingActive(cells, w, h, x, y, ax),
+    (x, y) => openingActive(cells, w, x, y),
   );
 }
 

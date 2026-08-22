@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  openCell, wallOwner, openingGroups, openingWalls, blocks, cornerIsOpen,
+  openCell, wallOwner, openingWalls, blocks, cornerIsOpen,
   type Cell, type Dir, type WallType,
 } from './cell.ts';
 import {
@@ -197,12 +197,12 @@ describe('cell-graph — an opening is a CORNER that is air, plus a door', () =>
   });
 
   it('a door on a SOLID corner is inert — the corner must be air', () => {
-    expect(openingActive(column('door', 'solid'), W, H, 2, 2, 'V')).toBe(false);
+    expect(openingActive(column('door', 'solid'), W, 2, 2)).toBe(false);
     expect(reaches(buildCellGraph(column('door', 'solid'), W, H), id(0, 0), id(4, 4))).toBe(false);
   });
 
   it('a door on a COLUMN corner is inert too — a pillar is not a hole', () => {
-    expect(openingActive(column('door', 'column'), W, H, 2, 2, 'V')).toBe(false);
+    expect(openingActive(column('door', 'column'), W, 2, 2)).toBe(false);
   });
 
   it('the local test short-circuits: air + door is decided on ONE cell', () => {
@@ -211,32 +211,28 @@ describe('cell-graph — an opening is a CORNER that is air, plus a door', () =>
     expect(cornerIsOpen({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'air', wallType: 'window' })).toBe(false);
   });
 
-  it('the AXIS is derived — an arch needs a straight 4u run to span', () => {
-    // only ONE of the two vertical segments is walled → no run → nothing to put an arch in
-    const cs = cells((c, x, y) => {
-      if (x === 2 && y === 2) { c.wallW = 'wall'; c.corner = 'air'; c.wallType = 'door'; }
-    });
-    expect(openingActive(cs, W, H, 2, 2, 'V')).toBe(false);
-  });
-
-  it('a CROSS is deliberately NOT an opening — an arch cannot span a four-way junction', () => {
+  it('a CROSS is an opening too — a junction open both ways, not a special case', () => {
     const cs = cells((c, x, y) => {
       if (x === 2) c.wallW = 'wall';                 // vertical run
       if (y === 2) c.wallN = 'wall';                 // horizontal run, crossing at (2,2)
       if (x === 2 && y === 2) { c.corner = 'air'; c.wallType = 'door'; }
     });
-    expect(openingActive(cs, W, H, 2, 2, 'V')).toBe(false);
-    expect(openingActive(cs, W, H, 2, 2, 'H')).toBe(false); // under-claims on purpose: never over-claim
+    expect(openingActive(cs, W, 2, 2)).toBe(true);
+    const g = buildCellGraph(cs, W, H);
+    // all four quadrants around the point reach each other through the hole
+    const q = [id(1, 1), id(2, 1), id(1, 2), id(2, 2)];
+    for (const a of q) for (const b of q) expect(reaches(g, a, b)).toBe(true);
   });
 
-  it('spans the two collinear segments either side of the point', () => {
+  it('needs no neighbour lookup at all — the whole test is two fields on one cell', () => {
+    const cs = cells((c, x, y) => {
+      if (x === 2 && y === 2) { c.corner = 'air'; c.wallType = 'arch'; } // no walls anywhere
+    });
+    expect(openingActive(cs, W, 2, 2)).toBe(true); // redundant here, never wrong
+  });
+
+  it('spans the two collinear segments either side of the point (render only)', () => {
     expect(openingWalls(2, 2, 'V')).toEqual([{ x: 2, y: 1, side: 'W' }, { x: 2, y: 2, side: 'W' }]);
     expect(openingWalls(2, 2, 'H')).toEqual([{ x: 1, y: 2, side: 'N' }, { x: 2, y: 2, side: 'N' }]);
-  });
-
-  it('connects the two SIDES of the run — never the two cells the run still separates', () => {
-    const { a, b } = openingGroups(2, 2, 'V');
-    expect(a).toEqual([{ x: 1, y: 1 }, { x: 1, y: 2 }]); // west of the vertical run
-    expect(b).toEqual([{ x: 2, y: 1 }, { x: 2, y: 2 }]); // east of it
   });
 });
