@@ -96,10 +96,23 @@ src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock 
 
 ### ⚠ TWO SUBSTRATES right now — read docs/13 §0 first
 A **2u CELL** model (`src/floor/cell*.ts`) is replacing the 4u tile model. It is complete through
-generation and proven (`npm run prove:cell`), and the authored structures have been migrated onto it
-cell-for-cell. It does NOT render yet — there is no cells→meshes step — so the 4u pipeline below is
-still what the game draws. Neither is deleted; nothing is half-converted. A cell owns
-`{floor, wallN, wallW, corner, wallType}`; its S and E walls belong to its neighbours.
+generation and proven (`npm run prove:cell`), the authored structures are migrated onto it
+cell-for-cell, and it has its own editor (`/ascent/cell-editor.html`). It does NOT render yet —
+there is no cells→meshes step — so the 4u pipeline below is still what the game draws, and the 4u
+editor stays for that reason. Neither is deleted; nothing is half-converted.
+
+A cell owns `{floor, wallN, wallW, corner, wallType}`. **The stored grid is the lattice of POINTS**,
+not of cells: a w×h structure stores (w+1)×(h+1) entries, so it owns all four of its borders and
+rotates losslessly. `wallN` is the edge running east from a point, `wallW` the edge running south,
+`corner` the junction at it; only `floor` belongs to the cell south-east of it.
+
+Two rules that keep biting if forgotten:
+- **Abstaining ≠ asserting.** A full domain says "no opinion" and every later phase reads it as
+  "help yourself"; a pinned `none` says "this is air". A room must SAY its interior is air or the
+  maze carves through it.
+- **`SETTLE_DEFAULTS` in `cell-field.ts` is shared** by the generator and the editor preview. Never
+  preview with a bare `collapse` — it takes the canonical-lowest option, and the lowest floor
+  material is `none`, so an unclaimed floor previews as a pit rather than the stone it becomes.
 
 ### The 4u worldgen pipeline (still what renders — read docs/13 before editing it)
 ```

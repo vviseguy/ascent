@@ -52,7 +52,9 @@ rule in the model, because there is nothing left two cells could disagree about.
 | C7 | Structure migration | `src/floor/structure-migrate.ts` | 4u tiles → 2u cells | `structure-migrate.test.ts` (25) | **BUILT** |
 | C8 | Authored structures | `src/floor/cell-structures.json` + `.ts` | the ONLY rooms | — | **BUILT** |
 | C9 | The generator | `src/floor/cell-emergent.ts` | a settled `CellGrid` | `cell-emergent.test.ts` (25), `prove:cell` | **BUILT** |
-| C10 | Cells → meshes | — | — | — | **NOT BUILT** — the 2u floors cannot render yet |
+| C10 | Orientation | `src/floor/cell-orient.ts` | 8 placements per authored piece | `cell-orient.test.ts` (18) | **BUILT** |
+| C11 | The 2u editor | `src/lab/cell-editor.ts` + `cell-editor.html` | authored structures, natively | driven headlessly | **BUILT** |
+| C12 | Cells → meshes | — | — | — | **NOT BUILT** — the 2u floors cannot render yet |
 
 **One edge enumeration.** `cell-reach.ts:edgesOf` is the single place a traversable connection comes
 into existence, and both the graph and the router are built from it. That is not tidiness: in the 4u
@@ -67,12 +69,15 @@ strand a cell or break a pinned route — are the doors.
 
 - **Done:** the substrate, the generator, and all three authored structures — converted cell-for-cell
   against the *old code* as oracle, and confirmed visually at matching scale.
-- **Not done:** `cell-place.ts` (cells → meshes), so 2u floors do not render in the game; the editor
-  still authors 4u; the 4u modules are still present.
+- **Not done:** `cell-place.ts` (cells → meshes), so 2u floors do not render in the game and the
+  editor has no 3D preview. The 4u modules and the 4u editor are still present for that reason.
 - **Known lossy point:** the old `centre: 'barrier'` (a low pillar) converts to `column`, dropping the
   low-ness. Nothing in the authored set used it.
-- **Open question, not a bug:** a 2u maze gives 2u corridors. Whether the maze should carve on a
-  2-cell step so corridors read at 4u is a gameplay call, not a constraint.
+- **Resolved:** corridors carve on a 2-cell step (`MazeParams.step`, default 2) so a hallway is 4u
+  across — the width the meshes were authored for.
+- **Generation cost:** 38 ms for 36×28, 189 ms for 60×48. The gate is `stillConnected` (an early-exit
+  search between the endpoints of what you just walled), NOT a full reachability recompute — that was
+  8× slower and was the entire runtime.
 
 ---
 
