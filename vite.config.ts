@@ -50,6 +50,45 @@ function labApprovePlugin(): PluginOption {
 // the editor-only brush library. Keeping them in SEPARATE files is deliberate — the two structure
 // models are not interchangeable, and brushes are authoring scratch that the sim must never see.
 const NL = String.fromCharCode(10);
+// ---- FACE-SURFACE store middleware (dev only) -----------------------------------------------
+// The lab POSTs a mesh URL and its hidden-triangle lists; the game reads the JSON through
+// src/lab/face-surfaces.ts. Keyed by MESH URL, not lab object id — hidden geometry is a property
+// of the mesh, so two catalog entries on the same GLB share the edit. Dev-only.
+//
+// Like profilesPlugin, kept apart from jsonStorePlugin: the collection is `meshes`, the key is a
+// URL, and a savedAt stamp would defeat the geometry-hash provenance the store exists to carry.
+function surfacesPlugin(): PluginOption {
+  const STORE = r('./src/game/mesh-surfaces.json');
+  const readBody = (req: import('node:http').IncomingMessage): Promise<string> =>
+    new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
+  return {
+    name: 'lab-surfaces',
+    configureServer(server) {
+      server.middlewares.use('/__lab/surfaces', (req, res, next) => {
+        const read = () => JSON.parse(readFileSync(STORE, 'utf8')) as { version: number; meshes: Record<string, unknown> };
+        res.setHeader('content-type', 'application/json');
+        if (req.method === 'GET') { res.statusCode = 200; res.end(JSON.stringify(read())); return; }
+        if (req.method !== 'POST') return next();
+        void (async () => {
+          try {
+            const { meshUrl, entry, remove } = JSON.parse(await readBody(req)) as { meshUrl: string; entry?: Record<string, unknown>; remove?: boolean };
+            if (!meshUrl) throw new Error('missing meshUrl');
+            const store = read();
+            if (remove) delete store.meshes[meshUrl];
+            else store.meshes[meshUrl] = entry ?? {};
+            store.meshes = Object.fromEntries(Object.entries(store.meshes).sort(([a], [b]) => a.localeCompare(b)));
+            writeFileSync(STORE, JSON.stringify(store, null, 2) + NL);
+            res.statusCode = 200;
+            res.end(JSON.stringify({ ok: true, count: Object.keys(store.meshes).length }));
+          } catch (e) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: String(e) }));
+          }
+        })();
+      });
+    },
+  };
+}
 // ---- MATERIAL-PROFILE store middleware (dev only) -------------------------------------------
 // Deliberately NOT jsonStorePlugin, despite the obvious family resemblance. That factory is
 // hardwired to a `structures` collection and stamps `savedAt: new Date()` on every write. A
@@ -131,6 +170,7 @@ export default defineConfig({
     jsonStorePlugin('cell-structures', './src/floor/cell-structures.json'), // 2u, the generator reads this
     jsonStorePlugin('cell-brushes', './src/lab/cell-brushes.json'),         // editor-only
     profilesPlugin(),
+    surfacesPlugin(),
   ],
   // Served from a GitHub Pages PROJECT site at vviseguy.github.io/ascent/, so all
   // asset URLs must be prefixed with the repo name. (Harmless in dev.)
