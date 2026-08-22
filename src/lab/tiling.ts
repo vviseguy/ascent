@@ -256,9 +256,23 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         'uniform float uRelief;',
         'uniform float uAOStr;',
         'const vec3 TLUMA = vec3(0.299, 0.587, 0.114);',
-        // box-planar world UV: plane picked from the dominant world-normal axis, scaled to
-        // metres/tile. KayKit faces are axis-aligned, so one plane per face is exact.
-        'vec2 planarUV(float inv){ vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; return (wn.y >= wn.x && wn.y >= wn.z) ? wp.xz : (wn.x >= wn.z ? wp.zy : wp.xy); }',
+        // Box-planar world UV + the tangent frame that UV parameterises. Plane picked from the
+        // dominant world-normal axis, scaled to metres/tile; KayKit faces are axis-aligned, so one
+        // plane per face is exact.
+        //
+        // HANDEDNESS IS NOT OPTIONAL. A tangent-space normal map assumes cross(T,B) == the OUTWARD
+        // normal. Picking the plane from abs(normal) alone ignores which WAY the face points, and
+        // then cross(T,B) equals -Y / -X / +Z for the three cases — so every up-facing surface, and
+        // every face on the negative side of its axis, gets a mirrored frame and its bumps light as
+        // dents. Flipping B fixes the frame; flipping V with it keeps the albedo sampling in the
+        // same parameterisation, so grain and relief stay registered to each other.
+        'void planarFrame(float inv, out vec2 uv, out vec3 T, out vec3 B, out vec3 Ng){',
+        '  vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; Ng = normalize(vWNor);',
+        '  if ( wn.y >= wn.x && wn.y >= wn.z ) { uv = wp.xz; T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
+        '  else if ( wn.x >= wn.z )            { uv = wp.zy; T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
+        '  else                                { uv = wp.xy; T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
+        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { B = -B; uv.y = -uv.y; }',
+        '}',
       ].join('\n'))
       // after the baked albedo: apply grain / albedo and stash surface terms for the chunks below.
       .replace('#include <map_fragment>', [
@@ -270,7 +284,8 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         '  int tslot = int( texture2D( roughnessMap, vRoughnessMapUv ).r * 255.0 + 0.5 );',
         `  vec4 sd = uSlot[ clamp( tslot, 0, ${SLOT_COUNT - 1} ) ];`,
         '  if ( sd.y > 0.0 ) {',
-        '    vec2 tuv = planarUV( sd.y );',
+        '    vec2 tuv; vec3 _T; vec3 _B; vec3 _Ng;',
+        '    planarFrame( sd.y, tuv, _T, _B, _Ng );',
         '    vec3 tcol = texture( uTexArr, vec3( tuv, sd.x ) ).rgb;',
         '    vec4 surf = texture( uSurfArr, vec3( tuv, sd.x ) );',
         // GRAIN: normalised luminance pattern around 1, modulating the baked colour.
@@ -281,14 +296,12 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         '    _texRough = surf.b * 2.0;',
         '    _texAO = mix( 1.0, surf.a, uAOStr );',
         '    if ( uRelief > 0.0 ) {',
-        // world-space tangent basis matching planarUV's plane choice (axis-aligned faces -> world axes)
-        '      vec3 awn = abs( vWNor ); vec3 Ng = normalize( vWNor ); vec3 T; vec3 B;',
-        '      if ( awn.y >= awn.x && awn.y >= awn.z ) { T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
-        '      else if ( awn.x >= awn.z ) { T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
-        '      else { T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
+        // uRelief scales the SLOPE, so clamp before reconstructing Z: past |nxy| = 1 the surface is
+        // vertical and sqrt() would clamp to 0, flattening the strongest slopes into hard facets.
         '      vec2 nxy = ( surf.rg * 2.0 - 1.0 ) * uRelief * 2.0;',
+        '      float m = length( nxy ); if ( m > 0.98 ) nxy *= 0.98 / m;',
         '      float nz = sqrt( max( 1.0 - dot( nxy, nxy ), 0.0 ) );',
-        '      _bumpWN = normalize( T * nxy.x + B * nxy.y + Ng * nz );',
+        '      _bumpWN = normalize( _T * nxy.x + _B * nxy.y + _Ng * nz );',
         '    }',
         '  }',
         '}',
