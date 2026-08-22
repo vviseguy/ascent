@@ -21,7 +21,7 @@
 // Pure + deterministic — integer node ids, ascending adjacency, BFS over dense arrays.
 
 import {
-  blocks, cornerIsOpen, stepped,
+  blocks, cornerIsOpen, floorSolid, stepped,
   type Cell, type Dir, type Seg,
 } from './cell.ts';
 import { DIRS } from './cell.ts';
@@ -98,8 +98,13 @@ export function buildCellGraph(cells: readonly (Cell | null)[], w: number, h: nu
   };
   return buildCellGraphFrom(
     w, h,
-    (x, y, d) => (cells[y * w + x] ? !blocks(wallOn(x, y, d)) : false),
-    (x, y) => openingActive(cells, w, x, y),
+    (x, y, d) => {
+      const c = cells[y * w + x], n = stepped(x, y, d);
+      const t = n.x >= 0 && n.y >= 0 && n.x < w && n.y < h ? cells[n.y * w + n.x] : null;
+      if (!c || !t || floorSolid(c.floor) || floorSolid(t.floor)) return false; // solid fill is not a place
+      return !blocks(wallOn(x, y, d));
+    },
+    (x, y) => { const c = cells[y * w + x]; return !!c && !floorSolid(c.floor) && openingActive(cells, w, x, y); },
   );
 }
 

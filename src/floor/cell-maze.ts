@@ -26,27 +26,48 @@
 // iteration on an output-affecting path.
 
 import { shuffleInPlace, nextInt, type Rng } from './rng.ts';
-import { nodeId } from './cell-graph.ts';
-import { inBounds, type CellGrid } from './cell-grid.ts';
+import { type CellGrid } from './cell-grid.ts';
 
 export const MAZE_KINDS = ['none', 'scatter', 'kruskal', 'backtracker', 'prim'] as const;
 export type MazeKind = (typeof MAZE_KINDS)[number];
 
-/** One candidate wall: the field to narrow, and the two cells it would separate. */
+/**
+ * One candidate barrier between two BLOCKS: every wall that would have to close, and the two blocks
+ * it separates.
+ *
+ * At `step` 1 a block is a cell and a barrier is one wall. At `step` 2 a block is 2x2 cells and a
+ * barrier is TWO walls, so the corridors that survive are 2 cells — 4u — across, which is the width
+ * the meshes were authored for. That is the whole reason the step exists: a maze carved cell-by-cell
+ * on a 2u grid gives 2u corridors, which are half the intended width.
+ */
 export interface MazeEdge {
-  /** The cell that OWNS this wall, and which of its two walls it is. */
-  pin: { x: number; y: number; side: 'N' | 'W' };
+  /** The cells that OWN this barrier's walls, and which wall of each. Length === step. */
+  pins: { x: number; y: number; side: 'N' | 'W' }[];
   a: number;
   b: number;
 }
 
-/** Every wall between two in-bounds cells, in a fixed order. N and W only, so each is listed once. */
-export function mazeEdges(g: CellGrid): MazeEdge[] {
+/** Every barrier between two in-bounds blocks, in a fixed order. N and W only, so each is listed once.
+ *  Cells past the last whole block (a map size that is not a multiple of `step`) are never proposed
+ *  and simply keep whatever the earlier phases decided. */
+export function mazeEdges(g: CellGrid, step = 1): MazeEdge[] {
   const out: MazeEdge[] = [];
-  for (let y = 0; y < g.h; y++) {
-    for (let x = 0; x < g.w; x++) {
-      if (y > 0) out.push({ pin: { x, y, side: 'N' }, a: nodeId(g.w, x, y), b: nodeId(g.w, x, y - 1) });
-      if (x > 0) out.push({ pin: { x, y, side: 'W' }, a: nodeId(g.w, x, y), b: nodeId(g.w, x - 1, y) });
+  const bw = Math.floor(g.w / step), bh = Math.floor(g.h / step);
+  const block = (bx: number, by: number): number => by * bw + bx;
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      if (by > 0) {
+        out.push({
+          pins: Array.from({ length: step }, (_, k) => ({ x: bx * step + k, y: by * step, side: 'N' as const })),
+          a: block(bx, by), b: block(bx, by - 1),
+        });
+      }
+      if (bx > 0) {
+        out.push({
+          pins: Array.from({ length: step }, (_, k) => ({ x: bx * step, y: by * step + k, side: 'W' as const })),
+          a: block(bx, by), b: block(bx - 1, by),
+        });
+      }
     }
   }
   return out;
@@ -110,8 +131,10 @@ function primTree(edges: readonly MazeEdge[], nodes: number, start: number, rng:
 
 export interface MazeParams {
   kind: MazeKind;
-  /** Fraction of would-be walls left open on purpose → loops. 0 = a perfect maze (a tree). */
+  /** Fraction of would-be barriers left open on purpose → loops. 0 = a perfect maze (a tree). */
   braid: number;
+  /** Cells per corridor. 1 = a 2u corridor, 2 = a 4u one (the authored mesh width). Default 2. */
+  step?: number;
 }
 
 export interface MazePlan {
@@ -124,10 +147,16 @@ export interface MazePlan {
  * Plan which walls to try. Tree strategies wall everything OUTSIDE their spanning tree, so what stays
  * open IS the tree; `scatter` and `kruskal` shuffle every wall and let the gate carve the shape.
  */
-export function planMaze(g: CellGrid, rng: Rng, p: MazeParams, start = 0): MazePlan {
+export function planMaze(g: CellGrid, rng: Rng, p: MazeParams, startCell = 0): MazePlan {
   if (p.kind === 'none') return { order: [], note: 'no maze' };
-  const edges = mazeEdges(g);
-  const nodes = g.w * g.h;
+  const step = Math.max(1, p.step ?? 2);
+  const edges = mazeEdges(g, step);
+  const bw = Math.floor(g.w / step), bh = Math.floor(g.h / step);
+  const nodes = bw * bh;
+  // the carve root is a BLOCK, so translate the caller's cell into one
+  const sx = Math.min(bw - 1, Math.floor((startCell % g.w) / step));
+  const sy = Math.min(bh - 1, Math.floor(Math.floor(startCell / g.w) / step));
+  const start = Math.max(0, sy * bw + sx);
 
   let candidates: MazeEdge[];
   let note: string;
@@ -136,17 +165,15 @@ export function planMaze(g: CellGrid, rng: Rng, p: MazeParams, start = 0): MazeP
     // unless the grid is 1x1, but the guard costs nothing and a rootless carve degrades silently to
     // "wall everything" — which is exactly the bug that hid in the 4u version.
     const adj0 = adjacency(edges, nodes);
-    const root = inBounds(g, start % g.w, Math.floor(start / g.w)) && adj0[start]!.length > 0
-      ? start
-      : adj0.findIndex((a) => a.length > 0);
+    const root = adj0[start]!.length > 0 ? start : adj0.findIndex((a) => a.length > 0);
     const tree = p.kind === 'backtracker'
       ? backtrackerTree(edges, nodes, root, rng)
       : primTree(edges, nodes, root, rng);
     candidates = edges.filter((_, i) => !tree.has(i));
-    note = `${p.kind}: ${tree.size} tree edges kept, ${candidates.length} walled`;
+    note = `${p.kind} step${step}: ${tree.size} tree edges kept, ${candidates.length} walled`;
   } else {
     candidates = [...edges];
-    note = `${p.kind}: ${candidates.length} walls considered`;
+    note = `${p.kind} step${step}: ${candidates.length} barriers considered`;
   }
 
   // shuffle INDICES then map — never shuffle the objects, so the seeded order stays pure

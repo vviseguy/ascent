@@ -10,15 +10,15 @@ import type { Cell } from './cell.ts';
 
 const W = 30, H = 24;
 const SEEDS = [3n, 23n, 101n];
-const run = (seed: bigint, maze?: { kind: MazeKind; braid: number }) =>
+const run = (seed: bigint, maze?: { kind: MazeKind; braid: number; step?: number }) =>
   generateEmergent({ width: W, height: H, seed, ...(maze ? { maze } : {}) });
 
 describe('cell-maze — the edge set is the walls themselves', () => {
   it('lists every shared wall exactly once', () => {
     const g = makeGrid(6, 5);
     // interior walls: (w-1)*h vertical + w*(h-1) horizontal
-    expect(mazeEdges(g)).toHaveLength((6 - 1) * 5 + 6 * (5 - 1));
-    const keys = mazeEdges(g).map((e) => `${e.pin.x},${e.pin.y},${e.pin.side}`);
+    expect(mazeEdges(g)).toHaveLength((6 - 1) * 5 + 6 * (5 - 1));   // step 1 = one wall each
+    const keys = mazeEdges(g).map((e) => e.pins.map((q) => `${q.x},${q.y},${q.side}`).join('|'));
     expect(new Set(keys).size).toBe(keys.length);
   });
 
@@ -148,6 +148,46 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
       refused += s.wallsRejectedUnreachable + s.wallsRejectedConflict + s.structuresRejectedOverlap;
     }
     expect(refused).toBeGreaterThan(0);
+  });
+
+  it('corridors are 2 cells — 4u — wide, the width the meshes were authored for', () => {
+    const g = makeGrid(12, 12);
+    const oneWide = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0, step: 1 });
+    const twoWide = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0, step: 2 });
+    expect(oneWide.order.every((e) => e.pins.length === 1)).toBe(true);
+    expect(twoWide.order.every((e) => e.pins.length === 2)).toBe(true);
+    // a barrier's two walls are collinear and adjacent — one continuous 4u run, never an L
+    for (const e of twoWide.order) {
+      const [a, b] = e.pins as [{ x: number; y: number; side: string }, { x: number; y: number; side: string }];
+      expect(a.side).toBe(b.side);
+      expect(Math.abs(a.x - b.x) + Math.abs(a.y - b.y)).toBe(1);
+    }
+  });
+
+  it('FILL: what the maze seals off becomes solid rock, not unreachable room', () => {
+    // the strong gate seals nothing off, so the fallback has nothing to do…
+    expect(run(23n).stats.cellsFilled).toBe(0);
+    // …and the weak one strands plenty, which is exactly what it is for
+    const weak = run(23n, { kind: 'scatter', braid: 0 });
+    expect(weak.stats.cellsFilled).toBeGreaterThan(0);
+    const cells = resolveEmergent(weak, 23n) as (Cell | null)[];
+    const seen = reachableFrom(buildCellGraph(cells, W, H), weak.entry);
+    // every filled cell is unreachable, and no reachable cell was filled
+    let rock = 0;
+    cells.forEach((c, i) => {
+      if (!c || c.floor !== 'rock') return;
+      rock++;
+      expect(seen[i]).toBe(false);
+    });
+    expect(rock).toBe(weak.stats.cellsFilled);
+  });
+
+  it('a rock cell is not a place — it contributes no edges even with no walls around it', () => {
+    const solid: Cell = { floor: 'rock', wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid' };
+    const open: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid' };
+    const cells = [open, solid, open, open, open, open, open, open, open]; // 3x3, (1,0) is rock
+    const g = buildCellGraph(cells, 3, 3);
+    expect(g.adj[nodeId(3, 1, 0)]).toHaveLength(0);
   });
 
   it('doors are DISCOVERED — some perimeter walls refuse to seal', () => {

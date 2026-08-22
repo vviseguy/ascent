@@ -68,9 +68,22 @@ export const SEGS: readonly Seg[] = ['none', 'wall', 'barrier', 'sloped'];
  *  here rather than a hunt through every passability test. */
 export const BLOCKING_SEGS: readonly Seg[] = ['wall', 'sloped'];
 
-/** Ground material for a cell. `none` is a PIT — no floor is emitted at all. */
-export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood';
-export const FLOOR_MATERIALS: readonly FloorMaterial[] = ['none', 'stone', 'dirt', 'wood'];
+/**
+ * Ground material for a cell.
+ *   none            a PIT — no floor is emitted, you fall through
+ *   stone/dirt/wood walkable ground
+ *   rock            SOLID FILL — the cell is not a place at all. This is the fallback that turns an
+ *                   unreachable pocket into filled stone, so a floor reads as carved OUT of rock
+ *                   rather than as an open field someone put walls on.
+ *
+ * APPEND-ONLY, like `SEGS` — masks are serialised by bit position.
+ */
+export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock';
+export const FLOOR_MATERIALS: readonly FloorMaterial[] = ['none', 'stone', 'dirt', 'wood', 'rock'];
+
+/** Is this cell solid fill — somewhere a body can never be? Unlike every other floor value this one
+ *  affects TRAVERSAL: a rock cell contributes no edges at all, walls notwithstanding. */
+export const floorSolid = (f: FloorMaterial): boolean => f === 'rock';
 
 /** What a 4u opening looks like. `solid` means there is no opening here. */
 export type WallType = 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate';

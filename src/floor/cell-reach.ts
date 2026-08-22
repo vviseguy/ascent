@@ -27,7 +27,7 @@
 // Pure + deterministic — integer masks, fixed enumeration order, BFS over dense arrays.
 
 import { SEGS, BLOCKING_SEGS, wallOwner, type Dir } from './cell.ts';
-import { segs, corners, wallTypes, template, type CellField, type Mask } from './cell-field.ts';
+import { segs, corners, wallTypes, floors, template, type CellField, type Mask } from './cell-field.ts';
 import {
   type CellGrid, type Tx, cellIndex, inBounds, stamp,
 } from './cell-grid.ts';
@@ -43,6 +43,10 @@ const PASSABLE: Mask = segs(...SEGS.filter((s) => !BLOCKING_SEGS.includes(s)));
 const PERIMETER: Mask = segs('wall');
 /** An opening is certain when the corner can only be `air` and the type can only be walk-through. */
 const AIR: Mask = corners('air');
+/** A cell is CERTAINLY solid fill when `rock` is the only ground it can still be. Solid fill is not a
+ *  place a body can occupy, so it contributes no edges — the one way `floor` reaches passability. */
+const ROCK_ONLY: Mask = floors('rock');
+export const isSolid = (f: CellField): boolean => f.floor !== 0 && (f.floor & ~ROCK_ONLY) === 0;
 const OPEN_TYPES: Mask = wallTypes('door', 'arch');
 
 export type Polarity =
@@ -125,11 +129,13 @@ export function edgesOf(at: FieldAt, w: number, h: number, p: Polarity): StepEdg
   const inside = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < w && y < h;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (!at(x, y)) continue;
+      const self = at(x, y);
+      if (!self || isSolid(self)) continue; // solid fill is not a place
       // N and W only: each shared wall is consulted exactly once, from its owner's side
       for (const d of ['N', 'W'] as Dir[]) {
         const nx = d === 'N' ? x : x - 1, ny = d === 'N' ? y - 1 : y;
-        if (!inside(nx, ny) || !at(nx, ny)) continue;
+        const nb = inside(nx, ny) ? at(nx, ny) : null;
+        if (!nb || isSolid(nb)) continue;
         if (!wallOpen(wallMask(at, x, y, d), p)) continue;
         out.push({ a: nodeId(w, x, y), b: nodeId(w, nx, ny), pin: wallOwner(x, y, d) });
       }

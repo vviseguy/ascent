@@ -46,6 +46,7 @@ const POROUS: Mask = segs('none', 'wall');
 const STONE: Mask = floors('stone');
 const SOLID_CORNER: Mask = corners('solid');
 const SOLID_TYPE: Mask = wallTypes('solid');
+const ROCK: Mask = floors('rock');
 
 /** Sub-stream tags — stable, so adding a phase never shifts an earlier one's output. */
 const STREAM = { structures: 1, maze: 2, pick: 3 } as const;
@@ -85,6 +86,8 @@ export interface EmergentResult {
     doorsKept: number;
     mazeNote: string;
     reachableCells: number;
+    /** Cells the maze sealed off, marked as solid rock rather than left as unreachable room. */
+    cellsFilled: number;
   };
 }
 
@@ -132,7 +135,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const stats: EmergentResult['stats'] = {
     structuresPlaced: 0, structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
-    ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0,
+    ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
   };
 
   /* ---- 1. STRUCTURES — the only rooms there are ---- */
@@ -215,19 +218,44 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     stats.mazeNote = plan.note;
     for (const e of plan.order) {
       const tx = begin(grid);
-      stamp(tx, { x: e.pin.x, y: e.pin.y, w: 1, h: 1 },
-        template(e.pin.side === 'N' ? { wallN: WALL } : { wallW: WALL }));
+      // a barrier is `step` walls wide and lands whole or not at all, so a corridor never ends up
+      // half-blocked
+      for (const pin of e.pins) {
+        stamp(tx, { x: pin.x, y: pin.y, w: 1, h: 1 },
+          template(pin.side === 'N' ? { wallN: WALL } : { wallW: WALL }));
+      }
       const at = txAt(tx);
-      if (!at(e.pin.x, e.pin.y)) { rollback(tx); stats.wallsRejectedConflict++; continue; }
+      if (e.pins.some((pin) => !at(pin.x, pin.y))) { rollback(tx); stats.wallsRejectedConflict++; continue; }
       const stillOk = targetsOnly
         ? guarded(at) && targets.every((t) => reachSet(at, w, h, 'may', entry)[t] === true)
         : guarded(at) && keepsReach(budget, reachSet(at, w, h, 'may', entry));
       if (!stillOk) { rollback(tx); stats.wallsRejectedUnreachable++; continue; }
-      if (commit(tx)) stats.wallsPlaced++; else stats.wallsRejectedConflict++;
+      if (commit(tx)) stats.wallsPlaced += e.pins.length; else stats.wallsRejectedConflict++;
     }
   }
 
-  /* ---- 5. SETTLE the WHOLE cell. Anything still wide gets decided by the collapse pick otherwise,
+  /* ---- 5. FILL. Whatever the maze sealed off is not a room nobody can enter — it is ROCK. Marking
+     it that way is what makes a floor read as carved OUT of solid stone rather than as an open field
+     someone put walls on, and it is the never-empty fallback for space no structure claimed.
+
+     Safe by construction: a rock cell contributes NO edges, so filling a cell that was already
+     unreachable cannot disconnect anything that was reachable. Cells whose floor has been pinned by a
+     structure are left alone — an author's ground is not ours to overwrite. ---- */
+  {
+    const before = reachSet(gridAt(grid), w, h, 'may', entry);
+    const tx = begin(grid);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (before[y * w + x]) continue;                       // reachable — leave it
+        if ((grid.cells[y * w + x]!.floor & ROCK) === 0) continue; // an author pinned this ground
+        stamp(tx, { x, y, w: 1, h: 1 }, template({ floor: ROCK }));
+        stats.cellsFilled++;
+      }
+    }
+    if (!commit(tx)) throw new Error('emergent: fill emptied a domain — impossible, rock was checked to be available');
+  }
+
+  /* ---- 6. SETTLE the WHOLE cell. Anything still wide gets decided by the collapse pick otherwise,
      which shows up as speckled floors and walls nobody asked for. Defaults: walls open, ground stone,
      junction solid, no opening. Opening can only ADD reachability, so this needs no gate.
 
