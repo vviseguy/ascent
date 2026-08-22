@@ -40,9 +40,22 @@ export interface TextureOption {
   group: 'stone' | 'floor' | 'wood' | 'metal' | 'cloth' | 'neutral';
   /** File in public/textures/ (albedo). Omitted = flat (no tiling). */
   diff?: string;
-  /** Normal map file (for the future relief pass). */
+  /** Normal map file (relief). */
   nor?: string;
-  /** World tile size (metres per repeat). */
+  /** Greyscale roughness map (ambientCG-era separate file). Ignored when `arm` is present. */
+  rough?: string;
+  /** Greyscale ambient-occlusion map. Ignored when `arm` is present. */
+  ao?: string;
+  /** Poly Haven's PACKED map — R = AO, G = roughness, B = metalness. One file, two channels we
+   *  want, so it supersedes `rough`/`ao`. */
+  arm?: string;
+  /** How the texture contributes to colour:
+   *    'grain'  (default) — LUMINANCE only; the swatch tint keeps the colour, so any texture sits
+   *                         on any type predictably. Right for masonry, concrete, brushed metal.
+   *    'albedo'           — the texture's OWN colour, re-shaded by the baked KayKit gradient. Right
+   *                         for scanned materials whose colour variation IS the asset (real wood). */
+  color?: 'grain' | 'albedo';
+  /** World tile size (metres per repeat). Poly Haven publishes this: its `dimensions` in mm. */
   scale: number;
 }
 
@@ -50,17 +63,23 @@ export interface TextureOption {
 export const TEXTURES: readonly TextureOption[] = [
   { id: 'none', label: '— flat (no texture) —', group: 'neutral', scale: 1 },
   // stone family
-  { id: 'masonry', label: 'Masonry', group: 'stone', diff: 'stone_diff.jpg', nor: 'stone_nor.jpg', scale: 3.0 },
+  { id: 'masonry', label: 'Masonry', group: 'stone', diff: 'stone_diff.jpg', nor: 'stone_nor.jpg', rough: 'stone_rough.jpg', scale: 3.0 },
   { id: 'brick', label: 'Brick', group: 'stone', diff: 'brick_diff.jpg', nor: 'brick_nor.jpg', scale: 2.2 },
   { id: 'concrete', label: 'Concrete (smooth)', group: 'stone', diff: 'concrete_diff.jpg', nor: 'concrete_nor.jpg', scale: 3.0 },
   { id: 'marble', label: 'Marble (smooth)', group: 'stone', diff: 'marble_diff.jpg', nor: 'marble_nor.jpg', scale: 3.2 },
-  { id: 'cobble', label: 'Cobblestone', group: 'floor', diff: 'floor_diff.jpg', nor: 'floor_nor.jpg', scale: 2.6 },
-  // wood
-  { id: 'planks', label: 'Planks', group: 'wood', diff: 'wood_diff.jpg', nor: 'wood_nor.jpg', scale: 1.4 },
+  { id: 'cobble', label: 'Cobblestone', group: 'floor', diff: 'floor_diff.jpg', nor: 'floor_nor.jpg', rough: 'floor_rough.jpg', scale: 2.6 },
+  // wood — the three Poly Haven scans are 'albedo' mode: their colour variation is the whole point,
+  // and a luminance-only read throws it away. `scale` is Poly Haven's published real-world size.
+  { id: 'medieval-wood', label: 'Medieval wood', group: 'wood', diff: 'wood-medieval_diff.jpg', nor: 'wood-medieval_nor.jpg', arm: 'wood-medieval_arm.jpg', color: 'albedo', scale: 2.0 },
+  { id: 'rough-planks', label: 'Rough planks', group: 'wood', diff: 'wood-rough_diff.jpg', nor: 'wood-rough_nor.jpg', arm: 'wood-rough_arm.jpg', color: 'albedo', scale: 2.0 },
+  { id: 'old-planks', label: 'Old planks', group: 'wood', diff: 'wood-old_diff.jpg', nor: 'wood-old_nor.jpg', arm: 'wood-old_arm.jpg', color: 'albedo', scale: 2.0 },
+  // NOT TILEABLE — `wood_diff.jpg` has a hard seam every repeat (wrap delta 9.8x the image's own
+  // interior gradient; `npm run tex:seams`). Kept only so old `?tex=` URLs still resolve.
+  { id: 'planks', label: 'Planks (seam — legacy)', group: 'wood', diff: 'wood_diff.jpg', nor: 'wood_nor.jpg', rough: 'wood_rough.jpg', scale: 1.4 },
   { id: 'wood-dark', label: 'Dark wood', group: 'wood', diff: 'wood-dark_diff.jpg', nor: 'wood-dark_nor.jpg', scale: 1.4 },
   // metal
   { id: 'steel-brushed', label: 'Brushed steel', group: 'metal', diff: 'steel-brushed_diff.jpg', nor: 'steel-brushed_nor.jpg', scale: 1.6 },
-  { id: 'iron-worn', label: 'Worn iron', group: 'metal', diff: 'metal_diff.jpg', nor: 'metal_nor.jpg', scale: 1.2 },
+  { id: 'iron-worn', label: 'Worn iron', group: 'metal', diff: 'metal_diff.jpg', nor: 'metal_nor.jpg', rough: 'metal_rough.jpg', scale: 1.2 },
   { id: 'iron-dark', label: 'Dark iron', group: 'metal', diff: 'iron-dark_diff.jpg', nor: 'iron-dark_nor.jpg', scale: 1.4 },
   // cloth
   { id: 'cloth-linen', label: 'Linen weave', group: 'cloth', diff: 'cloth-linen_diff.jpg', nor: 'cloth-linen_nor.jpg', scale: 1.0 },
@@ -82,8 +101,8 @@ export const DEFAULT_CONFIG: RecolorConfig = {
   stone: { texture: 'masonry', roughness: 0.95, metalness: 0.0 },
   smoothstone: { texture: 'concrete', roughness: 0.6, metalness: 0.0 }, // smooth cut stone (architectural trim)
   floor: { texture: 'cobble', roughness: 1.0, metalness: 0.0 },
-  wood: { texture: 'planks', roughness: 0.82, metalness: 0.0 }, // regular wood = planks
-  grained: { texture: 'wood-dark', roughness: 0.8, metalness: 0.0 }, // dark / grained wood
+  wood: { texture: 'medieval-wood', roughness: 0.82, metalness: 0.0 }, // regular wood = medieval planks
+  grained: { texture: 'old-planks', roughness: 0.8, metalness: 0.0 }, // dark / grained wood
   metal: { texture: 'steel-brushed', roughness: 0.4, metalness: 0.9 },
   irondark: { texture: 'iron-dark', roughness: 0.5, metalness: 0.85 }, // dark iron (charcoal / furniture fittings)
   gold: { texture: 'steel-brushed', roughness: 0.32, metalness: 1.0 },
@@ -115,14 +134,30 @@ export function configToParam(cfg: RecolorConfig): string {
   return parts.join(',');
 }
 
-// ---- RELIEF (global bump strength 0..1) — derivative bump from the tiling grain (recolor.ts) ----
-let _relief = 0.0; // OFF by default; the menu's Relief slider drives it
+// ---- RELIEF (global bump strength 0..1) — real normal maps in world space (tiling.ts) ----------
+// ON by default at 0.45: the surface maps are the point of the tiling layer, and a normal map costs
+// nothing extra now that every texture lives in one array (no more per-object sampler budget). 0.45
+// reads as carved stone without the grain competing with the silhouette (docs/06: bold forms over
+// photo-texture) — the ladder past ~0.6 starts looking noisy rather than deep.
+let _relief = 0.45;
 export function getRelief(): number { return _relief; }
 export function setRelief(v: number): void { _relief = Math.min(1, Math.max(0, v)); }
-export function reliefToParam(v: number): string { return v > 0 ? String(Math.round(v * 100)) : ''; }
+export function reliefToParam(v: number): string { return v !== 0.45 ? String(Math.round(v * 100)) : ''; }
 export function reliefFromParam(param: string | null): number {
   const n = Number(param);
-  return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0;
+  return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.45;
+}
+
+// ---- AMBIENT OCCLUSION (global strength 0..1) — applied to INDIRECT light only (tiling.ts) ------
+// Direct light still models the form; AO only darkens what the environment/IBL fills in, so mortar
+// joints and plank gaps read as recessed without muddying the key light.
+let _ao = 0.7;
+export function getAOStrength(): number { return _ao; }
+export function setAOStrength(v: number): void { _ao = Math.min(1, Math.max(0, v)); }
+export function aoToParam(v: number): string { return v !== 0.7 ? String(Math.round(v * 100)) : ''; }
+export function aoFromParam(param: string | null): number {
+  const n = Number(param);
+  return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.7;
 }
 
 export function configFromParam(param: string | null): RecolorConfig {

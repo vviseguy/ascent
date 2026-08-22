@@ -27,48 +27,70 @@ Result: the model keeps its exact silhouette **and** KayKit's baked light/shadow
 flat color family for a chosen tint + surface. No geometry splitting, no per-triangle matching, no
 coalescence, no tolerance tuning. **A part's look is a pure function of its own color.**
 
-### Real tiling textures + the per-type settings menu
+### Real surfaces: tiling textures, relief, roughness, AO ([tiling.ts](tiling.ts))
 
-The bake gives color + gradient, but it's on the **atlas UVs**, so it can't show repeating grain
-(masonry, planks, metal). So a **small world-space shader** (`patchTilingDetail` in
-[recolor.ts](recolor.ts)) adds the real texture on top:
+The bake gives colour + gradient, but it sits on the **atlas UVs**, so it can never show repeating
+grain (masonry courses, plank runs) or react to light like a real surface. A world-space shader
+patch in [tiling.ts](tiling.ts) adds that on top of the baked material:
 
 ```
-ORM map  = baked per-pixel:  R = tiling SLOT (per material TYPE / preset),  G = roughness,  B = metalness
-shader   = sample the slot's chosen texture in WORLD space (box-planar UV, physical scale)
-         → take its LUMINANCE × (1/mean)  (averages to 1)  → MULTIPLY onto the baked albedo
-result   = baked color × gradient × tiling PATTERN    (pattern only; the type's tint keeps the colour)
+uTexArr [layer]  = the texture ALBEDO                            (sRGB)
+uSurfArr[layer]  = PACKED  R,G = normal.xy   B = roughness RATIO/2   A = ambient occlusion
+uShade           = the baked KayKit gradient on its own (per atlas pixel, LINEAR-filtered)
+uSlot[13]        = per material TYPE: (layer, 1/scale, 1/meanLuma, colourMode)
 ```
 
-- **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
-  is the library (`TEXTURES`: masonry, brick, concrete, marble, cobble, planks, dark-wood, brushed
-  steel, worn/dark iron, linen, …) **plus** the per-type config (`DEFAULT_CONFIG`: which texture +
-  roughness + metalness each preset wears) and a compact URL codec.
-- **The in-app menu** ([texture-settings.ts](texture-settings.ts), object mode) lets you pick the
-  texture and tune roughness/metalness per type. A change re-bakes the object live and persists to
-  `?tex=stone:masonry:95:0,…` (shareable / screenshottable). `Reset` restores `DEFAULT_CONFIG`.
-- Grain is **luminance only** (a scalar pattern), so the type's tint owns the colour and ANY texture
-  can sit on ANY type predictably. It's **world-space** (not atlas UVs) so the tile size is physical
-  and never stretches — the proven `materials.ts` approach, driven by the config.
-- `PRESET_SLOT` gives each type a fixed slot baked into ORM.r; the shader only emits a branch for the
-  slots whose config texture isn't flat. The ORM map is `NearestFilter` (slot/rough/metal are
-  per-swatch **constants** — linear filtering would average a slot at a seam into a wrong texture).
-  Tiling textures load as **sRGB** (decode to linear) so the multiply is in the right space; the
-  normalising mean is **computed** from each image (no magic numbers).
-- **Metals need reflections.** [lab.ts](lab.ts) adds an IBL `RoomEnvironment` (`scene.environment`):
-  metalness is a reflection property, so without an env a metal goes dark/flat grey and reads as
-  stone. With it (+ a brushed-steel texture + high metalness) metal reads as metal.
-- **RELIEF (normal maps).** The global **Relief** slider (`getRelief`, URL `?relief=`) turns on real
-  normal-map bump: each used texture's `*_nor.jpg` is sampled in world space and applied via a planar
-  tangent basis (KayKit faces are axis-aligned, so no mesh tangents needed) → clean grooves/depth, no
-  derivative-bump noise. To keep diff+nor under the 16-sampler floor, the bake binds textures only for
-  the presets THIS object uses (`present` set → `patchTilingDetail`); past 5 distinct textures relief
-  auto-drops for that object (logged). Relief 0 (default) = albedo grain only, no extra samplers.
-- This is the **only** custom shader; color/gradient/surface stay a plain CPU bake.
+**Two `sampler2DArray`s hold the whole working set.** The shader indexes them by the SLOT already
+baked into `ORM.r`, so there is no branch chain, no per-object sampler budget, and no cap on how
+many distinct textures an object may wear. (The previous version bound one `sampler2D` per texture
+plus a second for its normal map, so relief silently switched itself OFF past 5 distinct textures
+and every object had to thread a `present` preset set through the bake just to stay under the
+16-sampler floor. Both of those are gone.) The arrays are built from the textures the CURRENT
+config references — typically ~8 layers at 1024² ≈ 86 MB — and rebuild only when that set changes.
+`?texres=512|1024|2048` overrides the layer size.
+
+**What makes light catch it:**
+
+| channel | effect | note |
+|---|---|---|
+| normal | real per-texel slopes | world-space planar tangent basis; KayKit faces are axis-aligned, so no mesh tangents needed |
+| roughness | specular breakup | stored as a RATIO around 1 (mean-normalised at bake), so the TYPE keeps its authored roughness as the average and the map only adds variation |
+| AO | crevice darkening | multiplies **indirect** light only, so the key light still models the form |
+
+The **Relief** and **AO** sliders (global, `?relief=` / `?ao=`) drive strength. Relief defaults to
+**0.45** — enough to read as carved stone, short of the noise that starts competing with silhouette
+past ~0.6 (docs/06: bold forms over photo-texture). The panel also carries **Light ∠ / Light ↑**
+(`?rake=az:el`), which move the studio key light: a normal map shows nothing under a flat frontal
+key, so being able to rake the light is what makes relief judgeable at all.
+
+**Colour mode** (per TextureOption, `color:`):
+
+- `grain` (default) — LUMINANCE only, normalised to mean 1 and multiplied onto the baked tint. The
+  texture contributes PATTERN, the swatch keeps the COLOUR, so any texture sits on any type
+  predictably. Right for masonry, concrete, brushed metal.
+- `albedo` — the texture’s OWN colour, re-shaded by `uShade` (the baked KayKit gradient, extracted
+  at bake time as `pixelL / swatchRefL`). For scanned materials where the colour variation IS the
+  asset — the Poly Haven woods — because a luminance-only read throws exactly that away.
+
+**The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
+is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;
+[texture-settings.ts](texture-settings.ts) is the in-app menu (object mode). A change re-bakes live
+and persists to `?tex=stone:masonry:95:0,…` (shareable / screenshottable). `Reset` restores defaults.
+
+**Sources.** ambientCG (CC0) for the original set, Poly Haven (CC0) for the wood scans. Poly Haven
+publishes each asset’s real-world `dimensions`, which IS our `scale` (metres per repeat) — no
+guessing. Its packed `arm` map (R=AO, G=rough, B=metal) covers two of our channels in one file.
+
+**Tileability is checked, not assumed.** `npm run tex:seams` compares the wrap-seam pixel delta to
+the image’s own interior gradient; ratio ≈1 = seamless, >2 = a visible line every repeat. This is
+how `wood_diff.jpg` (the old `planks` default) was caught at **9.8×** — it had been laying a hard
+seam across every planked object. It is kept in the library only so old `?tex=` URLs resolve;
+`wood`/`grained` now default to verified Poly Haven scans. Run it on any texture before adding it.
+`npm run tex:tile <file...>` renders a 3×3 tiling if you want to see a seam rather than score it.
 
 To add a texture: drop the files in `public/textures/`, add a `TEXTURES` entry (id + label + group +
-`diff` + `scale`), done — it shows up in every type's dropdown.
-
+`diff` + `scale`, plus `nor` / `arm` / `rough` / `ao` / `color` as available), run `npm run tex:seams`,
+done — it shows up in every type’s dropdown.
 ## Hop 1: swatch → PRESET is a 4-layer cascade (most-specific wins)
 
 A **preset** is the in-between abstraction (the "type"): a clean 1:1 to a texture + surface. To add a
@@ -154,9 +176,10 @@ auto-fit (box-fit, edge density auto-targets ≥95% fill) + recolor
 - `themes.ts` is **deleted** — the game renderer colors via `recolor.ts` too. `retexture.ts` survives
   only for the `RetextureRule` type (`MeshObjectSpec.variants`, dormant) + the `presentSwatchHexes`
   legend sampler. Don't add new coloring logic there — add it here.
-- `materials.ts` is **partly live, not legacy**: the recolor tiling layer reuses its CC0 texture files
-  (`public/textures/*_diff.jpg`) and its proven world-space box-planar projection (recolor
-  re-implements the simpler albedo-only tiling in `patchTilingDetail` rather than calling
-  `DungeonMaterials`, to stay the single source for lab coloring), and it stays the flame-glow /
-  no-atlas render fallback in `dungeon.ts`.
+- `materials.ts` is **partly live, not legacy**: the tiling layer reuses its CC0 texture files
+  (`public/textures/*`) and its proven world-space box-planar projection ([tiling.ts](tiling.ts)
+  re-implements it over texture arrays rather than calling `DungeonMaterials`, to stay the single
+  source for lab coloring), and it stays the flame-glow / no-atlas render fallback in `dungeon.ts`.
+  Its triplanar blend (3 samples, no hard switch at the dominant axis) is the one thing tiling.ts
+  does NOT yet port — box-planar is exact for axis-aligned KayKit faces and cheaper.
 ```

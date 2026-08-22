@@ -10,12 +10,16 @@
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================
 
-import { TEXTURES, CONFIGURABLE_PRESETS, getConfig, setTypeSetting, resetConfig, getRelief, setRelief, type Preset } from './texture-catalog.ts';
+import { TEXTURES, CONFIGURABLE_PRESETS, getConfig, setTypeSetting, resetConfig, getRelief, setRelief, getAOStrength, setAOStrength, type Preset } from './texture-catalog.ts';
 
 export interface TextureSettingsOpts {
   container: HTMLElement;
   /** Called (debounced) after the config mutates — the caller re-bakes the object + writes the URL. */
   onChange: () => void;
+  /** Extra global sliders the CALLER owns (the lab's studio lights). They live in this panel because
+   *  that is where you are looking while judging a surface, but they must NOT trigger a re-bake —
+   *  moving a light is a render-only change — so they bypass `onChange` entirely. */
+  extras?: readonly { label: string; get: () => number; set: (v: number) => void }[];
 }
 
 const TYPE_LABEL: Record<Preset, string> = {
@@ -29,7 +33,7 @@ const GROUP_LABEL: Record<string, string> = { neutral: 'Flat', stone: 'Stone', f
 
 /** Mount the texture-settings panel. Each row = one material type: texture <select> + R/M sliders. */
 export function buildTextureSettings(opts: TextureSettingsOpts): void {
-  const { container, onChange } = opts;
+  const { container, onChange, extras = [] } = opts;
 
   // debounce so dragging a slider doesn't re-bake on every pixel.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -74,21 +78,33 @@ export function buildTextureSettings(opts: TextureSettingsOpts): void {
   // per-row resync hooks (for Reset).
   const resync: (() => void)[] = [];
 
-  // --- RELIEF (global bump) — one slider at the top; affects every type's grain ---
-  {
+  // --- GLOBAL surface + studio controls, above the per-type rows ---
+  // Relief and AO are the two knobs that decide whether a surface reads as REAL or as a painted
+  // box; the light sliders are here so you can rake the key across the grain without leaving the
+  // panel — a normal map shows nothing under a flat frontal light, which is what made relief look
+  // broken when it was off by default.
+  const globalSlider = (label: string, get: () => number, set: (v: number) => void, rebake: boolean): void => {
     const wrap = document.createElement('label');
-    Object.assign(wrap.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 8px', paddingBottom: '8px', borderBottom: '1px solid rgba(120,130,170,.22)' } as Partial<CSSStyleDeclaration>);
-    const t = document.createElement('span'); t.textContent = 'Relief'; t.style.flex = '0 0 62px'; t.style.color = '#cfe3ff'; t.style.fontWeight = '600';
+    Object.assign(wrap.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 4px' } as Partial<CSSStyleDeclaration>);
+    const t = document.createElement('span'); t.textContent = label; t.style.flex = '0 0 62px'; t.style.color = '#cfe3ff'; t.style.fontWeight = '600';
     const s = document.createElement('input');
-    s.type = 'range'; s.min = '0'; s.max = '1'; s.step = '0.01'; s.value = String(getRelief());
-    Object.assign(s.style, { flex: '1 1 auto', accentColor: '#4ea1ff' } as Partial<CSSStyleDeclaration>);
+    s.type = 'range'; s.min = '0'; s.max = '1'; s.step = '0.01'; s.value = String(get());
+    Object.assign(s.style, { flex: '1 1 auto', accentColor: rebake ? '#4ea1ff' : '#c9a227' } as Partial<CSSStyleDeclaration>);
     const val = document.createElement('span'); val.style.flex = '0 0 24px'; val.style.textAlign = 'right'; val.style.fontSize = '10px';
     const upd = (): void => { val.textContent = Number(s.value).toFixed(2); };
     upd();
-    s.addEventListener('input', () => { setRelief(Number(s.value)); upd(); fire(); });
+    s.addEventListener('input', () => { set(Number(s.value)); upd(); if (rebake) fire(); });
     wrap.appendChild(t); wrap.appendChild(s); wrap.appendChild(val);
     panel.appendChild(wrap);
-    resync.push(() => { s.value = String(getRelief()); upd(); });
+    resync.push(() => { s.value = String(get()); upd(); });
+  };
+  globalSlider('Relief', getRelief, setRelief, true);
+  globalSlider('AO', getAOStrength, setAOStrength, true);
+  for (const e of extras) globalSlider(e.label, e.get, e.set, false);
+  {
+    const rule = document.createElement('div');
+    Object.assign(rule.style, { margin: '8px 0', borderBottom: '1px solid rgba(120,130,170,.22)' } as Partial<CSSStyleDeclaration>);
+    panel.appendChild(rule);
   }
 
   for (const p of CONFIGURABLE_PRESETS) {
