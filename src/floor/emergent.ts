@@ -39,6 +39,7 @@ import { template, segs, centres, floors, wallTypes, type Mask } from './wall-ti
 import { DIRS, FLOOR_CORNERS, type Dir, type FloorCorner, type WallTile } from './wall-tile.ts';
 import { listStructures, getStructure, type SavedStructure } from './structures.ts';
 import { crossSeam, stampSeam, cohere, allPointSeams, allCrossSeams } from './seams.ts';
+import { planMaze, type MazeParams, type MazeKind } from './maze.ts';
 import { cornerId } from './corner-graph.ts';
 import {
   type ArmEdge,
@@ -48,6 +49,7 @@ import {
   gridAt,
   pinRouteOpen,
   reachesAll,
+  reachCount,
   routeGuaranteed,
   txAt,
 } from './tile-reach.ts';
@@ -79,8 +81,10 @@ export interface EmergentConfig {
   roomAttempts?: number;
   /** How many wall-run placements to attempt (each may be rejected). */
   wallAttempts?: number;
-  /** Longest wall run a single proposal may stage. */
+  /** Longest wall run a single proposal may stage (`scatter` only). */
   maxRunLength?: number;
+  /** Which maze strategy carves the space between rooms, and how much it braids. */
+  maze?: MazeParams;
   /** Room size bounds, in tiles (inclusive). */
   roomMin?: number;
   roomMax?: number;
@@ -129,6 +133,10 @@ export interface EmergentResult {
     doorsKept: number;
     /** Split-across-tiles features pulled into agreement (cross seams + point seams). */
     seamsCohered: number;
+    /** Which strategy carved the space, and what it did. */
+    mazeNote: string;
+    /** Corners reachable from the entry when the maze phase finished (of (w+1)(h+1)). */
+    reachableCorners: number;
   };
 }
 
@@ -216,7 +224,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const stats: EmergentResult['stats'] = {
     roomsPlaced: 0, roomsRejectedConflict: 0, roomsRejectedUnreachable: 0, roomsRejectedTooBig: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
-    ringSealed: 0, doorsKept: 0, seamsCohered: 0,
+    ringSealed: 0, doorsKept: 0, seamsCohered: 0, mazeNote: '', reachableCorners: 0,
   };
 
   /** Everywhere connectivity must survive to: the exit, plus one interior corner per placed room.
@@ -268,26 +276,54 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     stats.roomsPlaced++;
   }
 
-  /* ---- phase 2: maze walls. Add walls anywhere they do not disconnect the floor. The maze is the
-     residue of this rule — nothing plans the corridors. ---- */
-  const wallRng: Rng = subStream(base, STREAM.walls);
-  const wallAttempts = cfg.wallAttempts ?? w * h * 3;
-  const maxRun = cfg.maxRunLength ?? 4;
-  for (let i = 0; i < wallAttempts; i++) {
-    const x = nextInt(wallRng, w);
-    const y = nextInt(wallRng, h);
-    const d = DIRS[nextInt(wallRng, DIRS.length)]!;
-    const len = nextRange(wallRng, 1, maxRun);
-    if (runArms(grid, x, y, d, len).length === 0) continue;
+  /* ---- phase 2: MAZE. A strategy (maze.ts) proposes which cross seams to wall; the gate below
+     decides. Two gates, and the difference is the whole dead-space story:
 
-    const tx = begin(grid);
-    stampWallRun(tx, grid, x, y, d, len);
-    const at = txAt(tx);
-    if (!at(x, y)) { rollback(tx); stats.wallsRejectedConflict++; continue; }
-    if (!stillAchievable(at)) { rollback(tx); stats.wallsRejectedUnreachable++; continue; }
-    if (!commit(tx)) { stats.wallsRejectedConflict++; continue; }
-    stats.wallsPlaced++;
+       scatter  — accept if the TARGETS stay reachable. A wall that seals a quarter of the floor
+                  passes, because nobody asked about the sealed quarter. This is what we had.
+       others   — accept only if NO CORNER IS LOST. That is Kruskal's component test with the sense
+                  inverted, and it is what makes the result a maze rather than a field of pockets.
+     ---- */
+  const wallRng: Rng = subStream(base, STREAM.walls);
+  const maze: MazeParams = cfg.maze ?? { kind: 'backtracker', braid: 0.3 };
+  const fullConnectivity = maze.kind !== 'scatter';
+
+  if (maze.kind === 'scatter') {
+    const wallAttempts = cfg.wallAttempts ?? w * h * 3;
+    const maxRun = cfg.maxRunLength ?? 4;
+    for (let i = 0; i < wallAttempts; i++) {
+      const x = nextInt(wallRng, w);
+      const y = nextInt(wallRng, h);
+      const d = DIRS[nextInt(wallRng, DIRS.length)]!;
+      const len = nextRange(wallRng, 1, maxRun);
+      if (runArms(grid, x, y, d, len).length === 0) continue;
+
+      const tx = begin(grid);
+      stampWallRun(tx, grid, x, y, d, len);
+      const at = txAt(tx);
+      if (!at(x, y)) { rollback(tx); stats.wallsRejectedConflict++; continue; }
+      if (!stillAchievable(at)) { rollback(tx); stats.wallsRejectedUnreachable++; continue; }
+      if (!commit(tx)) { stats.wallsRejectedConflict++; continue; }
+      stats.wallsPlaced++;
+    }
+  } else if (maze.kind !== 'none') {
+    // the connectivity budget: however much of the floor is reachable NOW is what must survive
+    const budget = reachCount(gridAt(grid), w, h, 'may', entryCorner);
+    const plan = planMaze(grid, wallRng, maze, entryCorner);
+    stats.mazeNote = plan.note;
+    for (const e of plan.order) {
+      const tx = begin(grid);
+      stampSeam(tx, e.seam, WALL);
+      const at = txAt(tx);
+      if (!at(e.seam[0]!.x, e.seam[0]!.y)) { rollback(tx); stats.wallsRejectedConflict++; continue; }
+      if (reachCount(at, w, h, 'may', entryCorner) !== budget) {
+        rollback(tx); stats.wallsRejectedUnreachable++; continue; // a corner would have been lost
+      }
+      if (!commit(tx)) { stats.wallsRejectedConflict++; continue; }
+      stats.wallsPlaced++;
+    }
   }
+  stats.reachableCorners = reachCount(gridAt(grid), w, h, 'may', entryCorner);
 
   /* ---- phase 3: CONNECT. Up to here every target was only ACHIEVABLE; pin a route to each so it
      becomes GUARANTEED and no later narrowing can close it. Routes cross the rooms' porous rings —
@@ -311,6 +347,10 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
      no longer contains `wall`, so the stamp empties it and the transaction rolls back), so the doors
      fall out of the same mechanism rather than being special-cased: a door is simply a ring cell that
      sealing was refused. ---- */
+  // sealing must defend the SAME thing the maze phase did: walling a ring cell may not strand a
+  // corner. Gating only on the pinned routes let seal quietly close off room interiors after the
+  // maze had carefully kept every corner reachable.
+  const sealBudget = reachCount(gridAt(grid), w, h, 'may', entryCorner);
   for (const m of rooms) {
     for (let y = m.y; y < m.y + m.h; y++) {
       for (let x = m.x; x < m.x + m.w; x++) {
@@ -327,7 +367,10 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
           const tx = begin(grid);
           stampWallArm(tx, grid, x, y, d);
           const at = txAt(tx);
-          if (!at(x, y) || !routeGuaranteed(at, route)) { rollback(tx); stats.doorsKept++; continue; }
+          if (!at(x, y) || !routeGuaranteed(at, route)
+              || reachCount(at, w, h, 'may', entryCorner) !== sealBudget) {
+            rollback(tx); stats.doorsKept++; continue;
+          }
           if (!commit(tx)) { stats.doorsKept++; continue; }
           stats.ringSealed++;
         }

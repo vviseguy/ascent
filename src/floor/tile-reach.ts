@@ -192,6 +192,16 @@ export function reaches(at: FieldAt, w: number, h: number, p: Polarity, start: n
   return reachesAll(at, w, h, p, start, [goal]);
 }
 
+/** How many corners are reachable from `start`? The full-connectivity gate a real maze algorithm
+ *  needs: walls only ever REMOVE reachability, so "the count did not change" means "no corner was
+ *  lost" — which is Kruskal's component test, done with a BFS instead of a union-find. */
+export function reachCount(at: FieldAt, w: number, h: number, p: Polarity, start: number): number {
+  const seen = reachableFromSet(domainCornerGraph(at, w, h, p), [start]);
+  let n = 0;
+  for (const v of seen) if (v) n++;
+  return n;
+}
+
 /** Are ALL `goals` reachable from `start`? One graph build and one BFS answers every goal at once —
  *  which matters, because this is the gate on the generator's inner loop (once per proposal, not once
  *  per proposal per goal). */

@@ -18,7 +18,7 @@
 // bookkeeping were wrong, the two would disagree.
 
 import { generateEmergent, resolveEmergent, type EmergentConfig } from './emergent.ts';
-import { buildCornerGraph, reachableFromSet } from './corner-graph.ts';
+import { buildCornerGraph, reachableFromSet, cornerCount } from './corner-graph.ts';
 import { gridAt, reaches, routeGuaranteed } from './tile-reach.ts';
 import { seamDisagreements } from './seams.ts';
 import { domainSize } from './wall-tile-field.ts';
@@ -118,16 +118,43 @@ controls.push({
   pass: totalDoors > 0 && totalRooms > 0,
   detail: `${totalRooms} rooms with ${totalDoors} door cells kept`,
 });
-// a deliberately over-walled run must STILL be solvable — the gate, not luck, is what keeps it open
+// The old target-only gate, run deliberately over-walled: STILL solvable (the gate, not luck), but it
+// seals off much of the floor — which is exactly why the carvers exist. Both facts asserted together.
 {
-  const stress: EmergentConfig = { width: 16, height: 14, seed: 99n, wallAttempts: 16 * 14 * 20, maxRunLength: 8 };
+  const stress: EmergentConfig = {
+    width: 16, height: 14, seed: 99n,
+    maze: { kind: 'scatter', braid: 0 }, wallAttempts: 16 * 14 * 20, maxRunLength: 8,
+  };
   const r = generateEmergent(stress);
   const tiles = resolveEmergent(r, stress.seed);
-  const seen = reachableFromSet(buildCornerGraph(tiles, stress.width, stress.height), [r.entryCorner]);
+  const g = buildCornerGraph(tiles, stress.width, stress.height);
+  const seen = reachableFromSet(g, [r.entryCorner]);
+  const pct = seen.filter(Boolean).length / cornerCount(stress.width, stress.height);
   controls.push({
-    name: 'a 20x over-walled floor is still solvable',
+    name: 'a 20x over-walled `scatter` floor is still solvable',
     pass: r.targets.every((t) => seen[t] === true),
     detail: `${r.stats.wallsPlaced} placed / ${r.stats.wallsRejectedUnreachable} refused by the gate`,
+  });
+  controls.push({
+    name: '...but a target-only gate DOES strand most of the floor (why the carvers exist)',
+    pass: pct < 0.7,
+    detail: `${Math.round(pct * 100)}% of corners reachable`,
+  });
+}
+
+// the default strategy must keep essentially the whole floor reachable
+{
+  let worst = 1;
+  for (const seed of [3n, 23n, 101n, 42n]) {
+    const r = generateEmergent({ width: 18, height: 14, seed });
+    const tiles = resolveEmergent(r, seed);
+    const seen = reachableFromSet(buildCornerGraph(tiles, 18, 14), [r.entryCorner]);
+    worst = Math.min(worst, seen.filter(Boolean).length / cornerCount(18, 14));
+  }
+  controls.push({
+    name: 'the DEFAULT carver leaves the floor essentially whole',
+    pass: worst > 0.95,
+    detail: `worst case ${Math.round(worst * 100)}% of corners reachable`,
   });
 }
 
