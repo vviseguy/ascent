@@ -10,7 +10,7 @@ file is the map + the non-obvious rules that must not be reverted. Full design c
 - [`docs/DECISIONS-LOG.md`](docs/DECISIONS-LOG.md) — how we got here + every locked decision (start here for *why*).
 - [`docs/ENGINE-ARCHITECTURE.md`](docs/ENGINE-ARCHITECTURE.md) — the custom physics engine (fixed-point; Rapier = test oracle only).
 - [`docs/GENERATION-SOLVABILITY.md`](docs/GENERATION-SOLVABILITY.md) — the solvability invariant + the independent verifier.
-- **Working on world generation / rendering?** → [`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) (the *realized* pipeline + its tracked debt), [`docs/14-terrain-puzzles-solvability.md`](docs/14-terrain-puzzles-solvability.md), [`docs/15-world-object-model.md`](docs/15-world-object-model.md). **The next-gen plan is [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md)** (constraint-collapse generator + 3D structure editor).
+- **Working on world generation / rendering?** → **[`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) first** — the AS-BUILT map: every stage's file, output, invariant, gate, and BUILT-vs-DESIGNED status, plus a "you want to change X → touch Y" table. Then [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md) for *why* the design is what it is (large parts of it are design-only — docs/13 §6 says which), and [`docs/14`](docs/14-terrain-puzzles-solvability.md) / [`docs/15`](docs/15-world-object-model.md) for puzzles + the WorldObject split.
 - **Working on assets / colors?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) (authoritative — the `recolor.ts` swatch system) + [`docs/ART-LAB.md`](docs/ART-LAB.md).
 - **What to work on next** → [`BACKLOG.md`](BACKLOG.md) (the live queue) + [`docs/GAPS.md`](docs/GAPS.md) (the intent audit it draws from).
 
@@ -27,6 +27,13 @@ npm run build          # tsc -b && vite build (also the CI/Pages build)
 npm run lab            # opens lab.html — turntable gallery + box-fit + recolor legend
 npm run lab:snap -- <element>   # headless screenshot of one element (agents can see PNGs)
 npm run probe:palette  # sample the real GLBs → which atlas swatch each triangle lands on
+
+# Worldgen authoring pages (served by `npm run dev`, all under the /ascent/ base):
+#   /ascent/tile-editor.html   paint a tile's 9 cells as DOMAINS + live corner-graph connectivity
+#   /ascent/board.html         stamp room templates; watch commit vs rollback on overlap
+#   /ascent/walltile.html      one WallTile → its tilePlacements → meshes
+# NOTE: the in-app preview pane can't screenshot these (continuous rAF on a WebGL canvas).
+# Use headless Playwright with --use-gl=swiftshader, like scripts/lab-snap.mjs does.
 
 # Standalone proofs run WITHOUT installing anything (Node 22+, type-stripping):
 npm run prove:fixed    # fixed-point math vs a BigInt-exact oracle
@@ -74,7 +81,8 @@ src/sim/        deterministic simulation (no DOM, no net) — each layer has a s
                    5 grab-pressures, scripted hazards, breakables, interaction, integrated step().
                    world exposes the only API netcode needs: step / hash / clone / restore.
 src/floor/      ✅ deterministic floor generation + INDEPENDENT solvability verifier (pure graph),
-                   PLUS the realized wall pipeline: generate → blueprint → wall-style → wall-model.
+                   PLUS the 9-cell TILE substrate: wall-tile → wall-tile-field → tile-grid
+                   (transactional) → room-templates/room-roles → floor-tiles → tile-place.
 src/game/       ✅ tower compiler (floor → terrain + the WorldPlacement IR), strata, scoring,
                    win conditions, crew identity, beacons, roles/abilities.
 src/render/     ✅ Three.js: vertical-follow camera, fog/occlusion cutaway, dungeon mesh builder
@@ -85,29 +93,44 @@ src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock 
                    to a live 2-browser match (that's BACKLOG "Pressure + the race"). Grafts Frequency.
 ```
 
-### The realized worldgen pipeline (the load-bearing seam — read docs/13 before editing it)
+### The worldgen pipeline (the load-bearing seam — read docs/13 before editing it)
 ```
-Floor graph (src/floor/generate.ts)
-  → Blueprint  (src/floor/blueprint.ts)      square lattice
-  → Style      (src/floor/wall-style.ts)     Placement[]   (DefaultStyle auto-tiles squares → pieces)
-  → IR         (src/game/tower.ts)            WorldPlacement[]  — ONE IR, native KayKit 4u / 2u modules
-  → render (src/render/dungeon.ts) + collision (src/game/tower.ts)   both off the SAME IR → match by construction
+Floor graph  (src/floor/generate.ts)   spines → openness → rooms → puzzles   → Floor
+  → verify   (src/floor/verify.ts)     INDEPENDENT solvability proof (generator-blind)
+  → tiles    (src/floor/floor-tiles.ts)  rooms stamp their ROLE's template onto a TileGrid of
+                                          domains; resolveGrid collapses + owner-resolves; then
+                                          reconcileDoors opens the ring where floor.edges connects
+  → units    (src/game/tile-units.ts)   tilePlacements × FROZEN box-fit footprints + materials
+  → IR       (src/game/tower.ts)        WorldPlacement[] — buildCellGrid is the ONE producer
+  → render (src/render/dungeon.ts) + collision (src/game/tower.ts:emitWallsFromSlots)
+                                        both branch off the SAME WorldPlacement.unit → match by construction
+  → re-prove (src/game/route-check.ts)  Anchor route entry→top on the COMPILED AABBs (prove:game [7])
 ```
+The 9-cell tile is the substrate: a wall owns its own 4u square as a "plus" of 9 cells
+(4 outer `edge` + 4 `inner` + an additive `centre`). A tile owns only its **N + W** edges; E/S are read
+from the neighbour, so adjacent tiles cannot disagree about a shared boundary. Piece names
+(straight/corner/tee/cross/cap/column) are **derived labels**, never stored.
 
-### Tracked debt — known, intentional, don't trip on it (full detail in docs/13)
-1. **Two lattices for one truth** — `wallgrid.ts` (edge/junction) and `blueprint.ts` (square) encode the
-   same topology twice; junction classification lives in both. Intentional Phase-1 reuse; fold WallGrid
-   into Blueprint before adding new wall logic, or it calcifies.
-2. **Stub "Program" layer** — rooms-as-graph / roles / themes are still tangled in `generate.ts`
-   (themes exist only render-side). Topology-roles / BSP-space / first-class dressing are aspirational.
-3. **`profile` (FULL/LOW/GAP) is a 3D hook** — only collision height varies on it today; everything
-   underneath is per-stratum 2D.
-4. **Recolor tables not yet published** — the game *already* colors via `recolor.ts` (the split is
-   closed; `themes.ts` is deleted). The only remnant: `recolor.ts`'s tables still live in `src/lab`;
-   publishing them is the remaining `TODO(publish)` (docs/16 §10 Phase 2).
+**Deleted 2026-06-30 — do not go looking for them:** `blueprint.ts`, `wall-style.ts`, `wall-model.ts`.
+The abstract-piece pipeline they formed is gone; the tile lattice replaced it wholesale. History in
+[`docs/archive/13-abstract-piece-pipeline.md`](docs/archive/13-abstract-piece-pipeline.md).
 
-Prefer reconciling (1) + the spec before piling on new features — the duplication is the main risk.
-**The next-gen plan that addresses all of this is [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md).**
+### Tracked debt — known, intentional, don't trip on it (full list in docs/13 §7)
+1. **`room-roles.ts` has no test** — sim data (seeded hash → structure *and* dressing) with no gate.
+   Highest-value next test.
+2. **Interior-wall room templates are blocked** — every role lowers to a plain ring today, so tiling
+   can never make a floor unsolvable. Aisles/cells/colonnades need `reconcileDoors` to carve a
+   guaranteed path *through* the room interior first. Deferred on purpose, not forgotten.
+3. **`wallMask` / `wallgrid.ts` still exist** — `wallgrid` is no longer a wall producer, only the
+   source of the 4-bit `wallMask` the fog BFS + decoration read. Last remnant of the two-lattice debt.
+4. **`profile` (FULL/LOW/GAP) is a 3D hook** — only collision height varies on it; everything
+   underneath is per-stratum 2D. LOW-lip gate walls don't render as tile units yet.
+5. **Frozen `unit.materials` is carried but not applied** — the renderer still recolors live by url.
+6. **Recolor tables still live in `src/lab`** — the remaining `TODO(publish)` (docs/16 §10 Phase 2).
+
+**Most of `docs/16` is DESIGN, not code** — sockets, tags, AC-3 collapse, the requirement queue, and
+the Structure/Slot model are all unbuilt. `docs/13 §6` is the authoritative BUILT-vs-DESIGNED list.
+Check it before assuming a mechanism exists.
 
 ## Conventions
 - TS strict, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`.

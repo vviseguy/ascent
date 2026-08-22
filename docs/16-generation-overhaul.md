@@ -1,11 +1,20 @@
 # 16 — Generation Overhaul: the Constraint-Collapse Generator + Structure Editor
 
-> Status: **DESIGN, agreed in principle 2026-06-27.** This is the canonical spec for the next-gen
-> world generator and its authoring editor. It supersedes the forward-looking parts of docs/13
-> (the A/B/C/D layer sketch) and folds in docs/14 (puzzles/solvability) + docs/15 (WorldObject).
-> Synthesized from four parallel design passes (model / pipeline / editor / migration). Where this
-> doc and docs/13 disagree about the *future*, this doc wins; docs/13 §"realized pipeline" still
-> describes what's *shipped today*.
+> Status: **DESIGN RATIONALE — partly built, partly not.** Agreed in principle 2026-06-27; the tile
+> substrate and the lowering path shipped 2026-06-28 → 07-01. Folds in docs/14 (puzzles/solvability)
+> + docs/15 (WorldObject). Synthesized from four parallel design passes (model / pipeline / editor /
+> migration).
+>
+> ⚠️ **This doc describes intent, not inventory.** Sockets (§3.1), tags (§3.2), the AC-3-lite collapse
+> solver (§4), the requirement queue (§6), and the `Structure`/`Slot` model (§7) are **NOT in the
+> tree**. What shipped instead of §4's solver is a *transactional stamping* model
+> (`src/floor/tile-grid.ts`: `begin`/`stamp`/`commit`/`rollback`) — simpler and weaker.
+>
+> **[`13-generation-architecture.md`](13-generation-architecture.md) is the as-built map** — stage →
+> file → invariant → gate → BUILT/DESIGNED — and its §6 is the authoritative list of what in *this*
+> doc is still only design. Read 13 to find the code; read 16 to understand why it's shaped this way.
+> The pipeline docs/13 used to describe (Blueprint → Style → `Placement[]`) was deleted 2026-06-30 and
+> now lives in [`archive/13-abstract-piece-pipeline.md`](archive/13-abstract-piece-pipeline.md).
 
 ---
 
@@ -217,6 +226,13 @@ run on the dual of the walls.
 
 ## 3. Constraints: three orthogonal axes
 
+> **⛔ NOT BUILT.** There is no `Socket` type and no tag registry in the tree. The only constraint
+> mechanism that exists is the per-cell bitmask domain (`Mask` in `wall-tile-field.ts`) intersected by
+> `andGate`. Physical mating is instead enforced *structurally*, by single edge ownership: a tile owns
+> only its N+W edge cells and reads E+S from its neighbour, so two tiles cannot disagree about a shared
+> boundary (§12 #4 — that part **is** built, in `tile-grid.ts:resolveGrid`/`tileView`). Sockets and tags
+> become necessary only when a real second unit type needs them.
+
 A slot's eligibility is decided by three things that must **never be conflated**:
 
 1. **Sockets** — a per-side *physical mating contract* in a small **closed** alphabet (owned by the
@@ -252,6 +268,13 @@ special case in the solver** — the solver only ever does "prune domain by pred
 
 ## 4. The collapse algorithm: staged narrowing, not full WFC
 
+> **⛔ NOT BUILT.** No AC-3 propagation, no domain-emptying callback, no fallback-candidate machinery
+> exists. What the tree actually has: `andGate` (bitwise domain intersection, `wall-tile-field.ts`),
+> `collapse(field, pick)` — which takes the canonical lowest surviving option unless a `pick` is
+> supplied — and the atomic stamp/commit/rollback transaction in `tile-grid.ts`. Conflicts are
+> detected (`txConflicts`) and roll the batch back; they are not repaired. Everything below is the
+> target, and the never-empty guarantee is the property it must be built to satisfy.
+
 **Decision: staged constraint propagation (AC-3-lite) with seeded tie-breaking and a guaranteed
 never-empty fallback. No backtracking, ever.**
 
@@ -266,7 +289,8 @@ Why not full Wave-Function-Collapse:
 
 **The never-empty guarantee (replaces WFC backtracking):** every slot's initial domain **must contain a
 universal fallback candidate** per role — the plain wall / the auto-classified junction / plain floor
-(exactly what `wall-style.ts` emits *today*). Fallbacks are mutually socket-compatible, so the
+(when this was written, what the since-deleted `wall-style.ts` emitted; the equivalent floor today is
+`collapse()`'s canonical-lowest option). Fallbacks are mutually socket-compatible, so the
 all-fallback assignment is always consistent → **no stage can empty a domain**; worst case is exactly
 today's dungeon. Over-constraint (a genuine authoring conflict) is a **build-time error caught by a
 property test**, never a runtime contradiction.
@@ -284,6 +308,18 @@ singleton *is* a Placement) and the downstream IR are unchanged.
 ---
 
 ## 5. The generation process: a dependency order, not rigid slices
+
+> **⛔ NOT BUILT as a dependency graph.** Today `floorTiles(floor)` is a straight-line pass:
+> `floorToTileGrid` (stamp every room's role-template + corridor floors into ONE transaction) →
+> `resolveGrid` (collapse + owner-resolve) → `reconcileDoors` (open the ring where `floor.edges`
+> connects). No per-slot pins, no work-queue, no fronts. Decoration is still a render-side pass
+> (`dungeon.ts:decorateRoomCell`), keyed off `CellTile.roomRole`.
+>
+> **The one part of this section that DID land:** the "Program layer" — a room is now placed *with a
+> role* (`src/floor/room-roles.ts`, 8 roles, seeded hash of `(runSeed, roomId)`) that drives **both**
+> its structural template and its dressing, and the role lives in **sim** data (`CellTile.roomRole`).
+> The render-side `roomId % 7` theming is retired. Interior-wall templates are still blocked — see
+> docs/13 §7.2.
 
 The work below is **not a sequence of global barriers**. It is a **dependency order over constraint
 decisions**, run by the same constraint-propagation work-queue as §4: each decision fires **as soon as
@@ -335,6 +371,10 @@ that generates the constraints + requirements; roles move into **sim data**, ret
 
 ## 6. The requirement queue (deferred, solvability-preserving placement)
 
+> **⛔ NOT BUILT.** No `Requirement`, `QueueItem`, or `FallbackPolicy` type exists. Lock-and-key is
+> still `src/floor/puzzles.ts`'s propose→certify pass, gated by `prove:floor` (including its
+> negative controls). The queue below generalizes it; nothing has been migrated yet.
+
 An obstacle is **not allowed to exist until the things that keep it solvable are placed and proven
 reachable.** This generalizes today's `placePuzzles` (propose → certify → drop) into a queue drained
 across stages.
@@ -373,6 +413,19 @@ fallback" guarantee maps onto `FALLBACK_AROUND` + the universal `DEGRADE_TO_BREA
 ---
 
 ## 7. The editor + authored data model
+
+> **⚠️ SUPERSEDED IN PRACTICE.** The editor did not land as an Asset Lab level. It shipped as **three
+> standalone Vite pages** — `/ascent/tile-editor.html` (paint a tile's 9 cells as *domains*, with a
+> live corner-graph connectivity overlay), `/ascent/board.html` (stamp room templates; commit vs
+> rollback), `/ascent/walltile.html` (one tile → its placements → meshes). See docs/13 §5.
+>
+> **⛔ The data model below is NOT BUILT.** `src/game/structures.json` stores raw grids of `TileField`
+> domains — no `Slot`, no `accepts`, no `arity`, no `provides`, no `role: cosmetic|host`. Two
+> structures are saved today (`throne_room` 6×9, `treasure room` 6×6). The room library that the
+> *generator* actually uses is a separate, code-authored one: `src/floor/room-templates.ts`
+> (basicRoom / hallway / library / throneRoom / dungeon / bedroom) selected by
+> `src/floor/room-roles.ts`. Reconciling the authored store with the code-authored templates is
+> unstarted work.
 
 **Decision: not a new app. A `structure` level on the existing Asset Lab.** Structures are authored as
 **flat declarative data** (the JSON/TS an AI emits as plain text — no Three.js, no `build()`, no
@@ -537,10 +590,23 @@ the green light for every geometry step.
   - **Principle:** minimal surface, one source per thing — `box-fit` is the only collider generator
     (props + walls), `tilePlacements` the only placement authority. No bespoke wall geometry, no
     speculative unit registry / socket-tag fields until a real second unit type needs them.
+- **Phase 4c — room ROLES / template-placement v1 ✅ (2026-07-01, `c3fab30`).** The "Program layer"
+  landed: `src/floor/room-roles.ts` assigns each room one of 8 roles (`hall`, `library`, `dining`,
+  `bedroom`, `storage`, `armory`, `treasure`, `shrine`) as a seeded hash of `(runSeed, roomId)` —
+  integer-only, so every peer derives the same role. The role picks the room's **structural template**
+  (`roomStamp` → `src/floor/room-templates.ts`) *and* rides into the IR as `CellTile.roomRole`, which
+  `dungeon.ts` reads for **matched dressing** + `placeRoleFloor` (wood for library/bedroom, dirt for
+  storage/armory/shrine). Structure and contents therefore always agree. The render-side `roomId % 7`
+  themes are retired. **Constraint that made this safe:** every role currently lowers to a *plain ring*
+  in the role's floor material, so the interior stays fully walkable and tiling cannot make a floor
+  unsolvable. **Debt:** no test file yet, and interior-wall templates (aisles, cells, colonnades) need
+  `reconcileDoors` to carve a guaranteed path *through* the room before they can land.
 - **Phase 5 — authored dressing** replaces `decorateRoomCell`; the editor's `structure` level + a small
-  tag vocabulary land alongside.
+  tag vocabulary land alongside. *(Not started. Phase 4c did the role→dressing wiring render-side; the
+  authored-data half is untouched, and the `structures.json` store is not yet consumed by the
+  generator — see §7.)*
 - **Phase 6 — retire the last projections** (`wallMask`, fold `profile` into the unit descriptor while
-  *preserving* the LOW→LIP collider semantics).
+  *preserving* the LOW→LIP collider semantics). *(Not started.)*
 
 At no point is `main` left with a dual IR producer, two lattices, or a broken renderer.
 
