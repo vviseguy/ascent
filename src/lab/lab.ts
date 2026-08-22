@@ -52,7 +52,7 @@ import { buildTextureSettings, type TextureSettingsHandle } from './texture-sett
 import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
 import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
 import { mountFaceSelect, type FaceSelectHandle } from './face-select.ts';
-import { buildSurfacePanel, syncSurfacePanel } from './surface-panel.ts';
+import { buildSurfacePanel, syncSurfacePanel, type SurfacePanelHandle } from './surface-panel.ts';
 import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
@@ -579,6 +579,9 @@ async function boot(): Promise<void> {
     const obj = objects.get(objId)!;
     const variant = params.get('variant') ?? obj.variants[0] ?? '';
     let rebuilding = false;
+    let faces: FaceSelectHandle | null = null;
+    let surfacePanel: SurfacePanelHandle | null = null;
+    let onObjectRebuilt: (() => void) | null = null;
     const rebuildObject = async (): Promise<void> => {
       if (rebuilding) return; // coalesce overlapping rebuilds (debounce already throttles)
       rebuilding = true;
@@ -590,6 +593,7 @@ async function boot(): Promise<void> {
         footprint = next.footprint;
         scene.add(built.root);
         refit(); // re-fit boxes on the new root (also renders)
+        onObjectRebuilt?.(); // the face picker holds mesh refs; the swap just invalidated them
       } finally {
         rebuilding = false;
       }
@@ -645,29 +649,36 @@ async function boot(): Promise<void> {
     // build above and the picker starts in agreement with what is on screen.
     const surfaceUrl = (built as WorldObjectBuild).meshUrl;
     if (surfaceUrl) {
-      {
-        const entry = hiddenFor(surfaceUrl);
-        const faces: FaceSelectHandle = mountFaceSelect({
+      // The picker binds to concrete meshes, and rebuildObject SWAPS the whole root on every texture
+      // change — so it has to be re-mounted, with the in-progress hidden set carried across by hand
+      // (it is not saved yet, and losing an edit because you nudged a slider would be miserable).
+      let hiddenState: Record<string, number[]> = { ...(hiddenFor(surfaceUrl)?.hidden ?? {}) };
+      const remountFaces = (): void => {
+        if (faces) { hiddenState = faces.hidden(); faces.dispose(); }
+        faces = mountFaceSelect({
           root: built.root,
           scene,
           camera: cam,
           dom: renderer.domElement,
           controls,
-          ...(entry ? { initialHidden: entry.hidden } : {}),
+          initialHidden: hiddenState,
           onChange: () => syncSurfacePanel(),
           render: renderOnce,
         });
-        buildSurfacePanel({
-          container: document.body,
-          select: faces,
-          meshUrl: surfaceUrl,
-          // hiding changes the silhouette, so the collision fit has to be redone against it
-          refit: () => refit(),
-          // sourceHash, NOT the live root: with faces already hidden the root IS the filtered mesh,
-          // and storing that hash makes the next cold load reject the edit as "geometry changed".
-          save: () => saveSurfaces(surfaceUrl, { geom: faces.sourceHash(), hidden: faces.hidden() }),
-        });
-      }
+        surfacePanel?.rebind();
+      };
+      remountFaces();
+      onObjectRebuilt = remountFaces;
+      surfacePanel = buildSurfacePanel({
+        container: document.body,
+        select: () => faces,
+        meshUrl: surfaceUrl,
+        // hiding changes the silhouette, so the collision fit has to be redone against it
+        refit: () => refit(),
+        // sourceHash, NOT the live root: with faces already hidden the root IS the filtered mesh,
+        // and storing that hash makes the next cold load reject the edit as "geometry changed".
+        save: () => saveSurfaces(surfaceUrl, { geom: faces!.sourceHash(), hidden: faces!.hidden() }),
+      });
     }
 
     // ---- APPROVE & SAVE: freeze this object's auto-fit + materials to the published store ----

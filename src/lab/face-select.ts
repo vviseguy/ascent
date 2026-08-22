@@ -28,7 +28,7 @@
 // ============================================================================
 
 import * as THREE from 'three';
-import { forEachMesh, triCount, filterGeometry, geometryHashOf } from './face-surfaces.ts';
+import { forEachMesh, triCount, filterGeometry, geometryHashOf, sourceGeometry } from './face-surfaces.ts';
 
 export interface FaceSelectOpts {
   root: THREE.Object3D;
@@ -77,7 +77,10 @@ interface MeshInfo {
 const OVERLAY_OFFSET = -2; // polygon offset units: sit the highlight just in front of the surface
 
 function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
-  const g = mesh.geometry;
+  // SOURCE, not mesh.geometry: on a cold load the build has already applied the stored hidden set,
+  // so mesh.geometry is the FILTERED mesh. Numbering topology off that while the stored indices
+  // number the original is exactly the "selection lands on the wrong faces" bug.
+  const g = sourceGeometry(mesh);
   const pos = g.getAttribute('position');
   const idx = g.index;
   const tris = triCount(g);
