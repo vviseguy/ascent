@@ -73,6 +73,27 @@ past ~0.6 (docs/06: bold forms over photo-texture). The panel also carries **Lig
 (`?rake=az:el`), which move the studio key light: a normal map shows nothing under a flat frontal
 key, so being able to rake the light is what makes relief judgeable at all.
 
+**It composes with every light in the scene, including the game’s.** The perturbed normal is
+written into three’s `normal` *before* the `lights_fragment_*` chunks, so directional, hemisphere,
+IBL and POINT lights all use it — the game’s torches (`dungeon.ts`: up to `MAX_TORCH_LIGHTS`
+orange `PointLight`s, decay 2) rake the grain for free. The lab has a **Torch** slider (`?torch=`)
+that adds the same light so dungeon materials can be judged the way they will actually be lit.
+Two caveats worth knowing: relief only reads under **grazing** light (a light hitting a face
+head-on sits at the flat top of the cosine and reveals almost nothing — which is why the torch is
+parked beside the object rather than in front of it), and a normal map does **not** self-shadow,
+so relief cannot occlude itself. That needs parallax occlusion, which is the next rung up.
+
+**Cost.** Per textured fragment: 3 texture fetches (albedo array, surface array, shade map) plus
+the slot read, no branch chain. Program count is the number worth watching, and it is now FLAT:
+every recolored material emits byte-identical source, so they share ONE compiled program.
+Measured on the contact sheet, `linkProgram` calls stay at **8 whether the page shows 1 object or
+14** — before the shared cache key it was 5 / 8 / 18, i.e. one shader compile per object, a
+load-time hitch that grew with the asset set. Array build is a one-off ~2-4 s of CPU (canvas
+decode + channel packing) for 8 layers at 1024², and only reruns when the config’s texture set
+changes. `npm run` nothing — measure with a WebGL-level probe, not `renderer.info`, if you change
+this: the headless GL here is SwiftShader, so absolute frame times are meaningless and only
+counts (programs, draws, fetches) transfer.
+
 **Colour mode** (per TextureOption, `color:`):
 
 - `grain` (default) — LUMINANCE only, normalised to mean 1 and multiplied onto the baked tint. The
