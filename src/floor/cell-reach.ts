@@ -32,7 +32,7 @@ import {
   type CellGrid, type Tx, cellIndex, inBounds, stamp,
 } from './cell-grid.ts';
 import {
-  type CellGraph, nodeId, reachableFromSet,
+  type CellGraph, nodeId, reachableFromSet, DIRS,
 } from './cell-graph.ts';
 
 /** The BLOCKING kinds as one mask, and its complement — both derived from `BLOCKING_SEGS`, so adding
@@ -168,9 +168,113 @@ export function cellGraphOf(at: FieldAt, w: number, h: number, p: Polarity): Cel
  * WHICH cells are reachable, as a boolean array. Use this, never a count, for any "nothing was lost"
  * gate: an opening can ADD edges, so one commit may lose a cell and gain another, leave the total
  * identical, and slip through a count comparison.
+ *
+ * ALLOCATION-FREE. This is the hot path — the generator runs it once per proposal, thousands of times
+ * per floor — so it walks neighbours on the fly instead of materialising a graph. Building one cost a
+ * `Set` per cell plus a sort, every single call, which is where the generation time actually went
+ * (1.4s for a 60x48 floor). It must agree with `edgesOf` exactly, so the two are pinned together by a
+ * property test rather than by hoping.
  */
-export const reachSet = (at: FieldAt, w: number, h: number, p: Polarity, start: number): boolean[] =>
-  reachableFromSet(cellGraphOf(at, w, h, p), [start]);
+export function reachSet(at: FieldAt, w: number, h: number, p: Polarity, start: number): boolean[] {
+  const n = w * h;
+  const seen = new Array<boolean>(n).fill(false);
+  if (start < 0 || start >= n) return seen;
+  const readable = (x: number, y: number): CellField | null => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return null;
+    const f = at(x, y);
+    return f && !isSolid(f) ? f : null;
+  };
+  if (!readable(start % w, Math.floor(start / w))) return seen;
+
+  seen[start] = true;
+  const queue = [start];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const cur = queue[qi]!;
+    const x = cur % w, y = Math.floor(cur / w);
+    const visit = (nx: number, ny: number): void => {
+      if (!readable(nx, ny)) return;
+      const id = ny * w + nx;
+      if (seen[id]) return;
+      seen[id] = true;
+      queue.push(id);
+    };
+    // the four wall-crossings
+    for (const d of DIRS) {
+      const nx = d === 'E' ? x + 1 : d === 'W' ? x - 1 : x;
+      const ny = d === 'S' ? y + 1 : d === 'N' ? y - 1 : y;
+      if (!readable(nx, ny)) continue;
+      if (!wallOpen(wallMask(at, x, y, d), p)) continue;
+      visit(nx, ny);
+    }
+    // openings: a cell touches FOUR lattice points, and an open one joins everything around it
+    for (const [px, py] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]] as [number, number][]) {
+      if (!openingCertain(at, px, py)) continue;
+      visit(px - 1, py - 1); visit(px, py - 1); visit(px - 1, py); visit(px, py);
+    }
+  }
+  return seen;
+}
+
+/**
+ * Do `a` and `b` still reach each other? BFS from `a` that stops the moment it finds `b`.
+ *
+ * THIS IS THE GATE. Walling removes edges and can only ever SPLIT a component, and a split happens if
+ * and only if some removed edge's endpoints stop being connected. So:
+ *
+ *     stillConnected  ⟹  no cell that was reachable became unreachable.
+ *
+ * It is STRICTER than `keepsReach`, not equal to it — deliberately. `keepsReach` only defends cells
+ * the ENTRY can reach, so it would happily let a wall sever a pocket the entry cannot get to anyway.
+ * This defends every component. The difference costs a few refused walls in regions that were going to
+ * be rock-filled regardless, and buys a gate that never has to look at the whole floor.
+ * `cell-reach.test.ts` pins the implication, and pins that the two agree wherever the entry can reach
+ * — rather than asserting an equivalence that does not hold.
+ *
+ * The difference is what it costs. A full `reachSet` explores the floor every time (2 ms on a 60x48,
+ * times ~1500 proposals — the entire generation time). This usually terminates in a handful of steps,
+ * because a barrier worth walling almost always has a loop right next to it, and only degrades to a
+ * full component walk in the rare case where the answer really is "no".
+ */
+export function stillConnected(at: FieldAt, w: number, h: number, p: Polarity, a: number, b: number): boolean {
+  if (a === b) return true;
+  const n = w * h;
+  if (a < 0 || a >= n || b < 0 || b >= n) return false;
+  const seen = new Uint8Array(n);
+  const readable = (x: number, y: number): CellField | null => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return null;
+    const f = at(x, y);
+    return f && !isSolid(f) ? f : null;
+  };
+  if (!readable(a % w, Math.floor(a / w)) || !readable(b % w, Math.floor(b / w))) return false;
+
+  seen[a] = 1;
+  const queue = [a];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const cur = queue[qi]!;
+    const x = cur % w, y = Math.floor(cur / w);
+    let found = false;
+    const visit = (nx: number, ny: number): void => {
+      if (found || !readable(nx, ny)) return;
+      const id = ny * w + nx;
+      if (seen[id]) return;
+      if (id === b) { found = true; return; }
+      seen[id] = 1;
+      queue.push(id);
+    };
+    for (const d of DIRS) {
+      const nx = d === 'E' ? x + 1 : d === 'W' ? x - 1 : x;
+      const ny = d === 'S' ? y + 1 : d === 'N' ? y - 1 : y;
+      if (!readable(nx, ny) || !wallOpen(wallMask(at, x, y, d), p)) continue;
+      visit(nx, ny);
+    }
+    for (const [px, py] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]] as [number, number][]) {
+      if (!openingCertain(at, px, py)) continue;
+      visit(px - 1, py - 1); visit(px, py - 1); visit(px - 1, py); visit(px, py);
+    }
+    if (found) return true;
+  }
+  return false;
+}
 
 /** Every cell reachable in `before` is still reachable in `after`. Growth is fine; loss is not. */
 export const keepsReach = (before: readonly boolean[], after: readonly boolean[]): boolean =>

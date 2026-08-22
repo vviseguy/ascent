@@ -32,7 +32,7 @@ import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type CellGrid, t
 import { template, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
 import {
-  gridAt, txAt, findRoute, pinRouteOpen, routeGuaranteed, reachSet, keepsReach,
+  gridAt, txAt, findRoute, pinRouteOpen, routeGuaranteed, reachSet, keepsReach, stillConnected,
   type StepEdge,
 } from './cell-reach.ts';
 import { planMaze, type MazeParams } from './cell-maze.ts';
@@ -56,7 +56,7 @@ export interface EmergentConfig {
   width: number;
   height: number;
   seed: bigint;
-  /** How many times to try placing a structure. Default scales with the map. */
+  /** How many COPIES of each structure to try placing. Default scales with the map. */
   structureAttempts?: number;
   /** Which carver shapes the space between structures. */
   maze?: MazeParams;
@@ -148,35 +148,51 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   const sRng: Rng = subStream(base, STREAM.structures);
   const placed: PlacedStructure[] = [];
   const porousWalls: { x: number; y: number; side: 'N' | 'W' }[] = [];
-  const attempts = cfg.structureAttempts ?? Math.max(8, Math.floor((w * h) / 60));
+  const copies = cfg.structureAttempts ?? Math.max(2, Math.floor((w * h) / 400));
 
-  for (let i = 0; i < attempts && names.length > 0; i++) {
-    const name = names[nextInt(sRng, names.length)]!;
-    const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;
-    const s = structureStamp(name, true, o);
-    if (!s || s.w >= w - 1 || s.h >= h - 1) continue;
-    const region: Region = {
-      x: 1 + nextInt(sRng, Math.max(1, w - s.w - 2)),
-      y: 1 + nextInt(sRng, Math.max(1, h - s.h - 2)),
-      w: s.w, h: s.h,
-    };
-    if (placed.some((p) => overlaps(p.region, region))) { stats.structuresRejectedOverlap++; continue; }
+  /* LARGEST FIRST. Bin-packing's oldest heuristic, and it matters here for the reason it always does:
+     a big piece placed late has nowhere left to go, so the floor ends up with small rooms scattered in
+     a sea of corridor. Sorting by area descending (ties broken by name, so it stays deterministic)
+     lets the big structures claim their space while the floor is still empty.
 
-    const tx = begin(grid);
-    stamp(tx, region, (lx, ly) => s.stamp(lx, ly));
-    if (!commit(tx)) { stats.structuresRejectedConflict++; continue; }
+     Positions run the FULL extent, right up to the border. Insetting by one kept the largest pieces
+     away from exactly the edges they fit best against, and left a rim of corridor all the way round. */
+  const byArea = names
+    .map((n) => ({ n, st: getStructure(n)! }))
+    .filter((e) => e.st)
+    .sort((a, b) => (b.st.w * b.st.h) - (a.st.w * a.st.h) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
 
-    placed.push({
-      name, orientation: o, region,
-      centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
-    });
-    stats.structuresPlaced++;
-    // remember the perimeter walls we loosened, so SEAL knows what to try closing
-    for (let ly = 0; ly < region.h; ly++) {
-      for (let lx = 0; lx < region.w; lx++) {
-        if (!(lx === 0 || ly === 0 || lx === region.w - 1 || ly === region.h - 1)) continue;
-        porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
-        porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
+  const POSITION_TRIES = 24;
+  for (const { n: name } of byArea) {
+    for (let copy = 0; copy < copies; copy++) {
+      for (let t = 0; t < POSITION_TRIES; t++) {
+        const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;
+        const s = structureStamp(name, true, o);
+        if (!s || s.w > w || s.h > h) break;
+        const region: Region = {
+          x: nextInt(sRng, w - s.w + 1),
+          y: nextInt(sRng, h - s.h + 1),
+          w: s.w, h: s.h,
+        };
+        if (placed.some((q) => overlaps(q.region, region))) { stats.structuresRejectedOverlap++; continue; }
+
+        const tx = begin(grid);
+        stamp(tx, region, (lx, ly) => s.stamp(lx, ly));
+        if (!commit(tx)) { stats.structuresRejectedConflict++; continue; }
+
+        placed.push({
+          name, orientation: o, region,
+          centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
+        });
+        stats.structuresPlaced++;
+        for (let ly = 0; ly < region.h; ly++) {
+          for (let lx = 0; lx < region.w; lx++) {
+            if (!(lx === 0 || ly === 0 || lx === region.w - 1 || ly === region.h - 1)) continue;
+            porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
+            porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
+          }
+        }
+        break; // placed this copy
       }
     }
   }
@@ -199,12 +215,15 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
   /* ---- 3. SEAL. Close every porous perimeter wall that CAN close. The refusals are the doors —
      discovered by what connectivity needs, never placed by a rule. ---- */
   {
-    const before = reachSet(gridAt(grid), w, h, 'may', entry);
     for (const pw of porousWalls) {
       const tx = begin(grid);
       stamp(tx, { x: pw.x, y: pw.y, w: 1, h: 1 }, template(pw.side === 'N' ? { wallN: WALL } : { wallW: WALL }));
       const at = txAt(tx);
-      if (!at(pw.x, pw.y) || !guarded(at) || !keepsReach(before, reachSet(at, w, h, 'may', entry))) {
+      // the wall separates this cell from the neighbour beyond it; if they still reach each other,
+      // no component split, so nothing became unreachable
+      const other = pw.side === 'N' ? nodeId(w, pw.x, pw.y - 1) : nodeId(w, pw.x - 1, pw.y);
+      const here = nodeId(w, pw.x, pw.y);
+      if (!at(pw.x, pw.y) || !guarded(at) || !stillConnected(at, w, h, 'may', here, other)) {
         rollback(tx); stats.doorsKept++; continue;
       }
       if (commit(tx)) stats.ringSealed++; else stats.doorsKept++;
@@ -234,7 +253,13 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
       if (e.pins.some((pin) => !at(pin.x, pin.y))) { rollback(tx); stats.wallsRejectedConflict++; continue; }
       const stillOk = targetsOnly
         ? guarded(at) && targets.every((t) => reachSet(at, w, h, 'may', entry)[t] === true)
-        : guarded(at) && keepsReach(budget, reachSet(at, w, h, 'may', entry));
+        // every wall of the barrier must leave its own two cells connected — equivalent to "no cell
+        // was lost", and it exits as soon as it finds a way round
+        : guarded(at) && e.pins.every((pin) => stillConnected(
+          at, w, h, 'may',
+          nodeId(w, pin.x, pin.y),
+          pin.side === 'N' ? nodeId(w, pin.x, pin.y - 1) : nodeId(w, pin.x - 1, pin.y),
+        ));
       if (!stillOk) { rollback(tx); stats.wallsRejectedUnreachable++; continue; }
       if (commit(tx)) stats.wallsPlaced += e.pins.length; else stats.wallsRejectedConflict++;
     }

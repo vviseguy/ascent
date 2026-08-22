@@ -160,16 +160,17 @@ export function planMaze(g: CellGrid, rng: Rng, p: MazeParams, startCell = 0): M
 
   let candidates: MazeEdge[];
   let note: string;
+  let tree: Set<number> | null = null;
   if (p.kind === 'backtracker' || p.kind === 'prim') {
     // A carve has to start somewhere the graph reaches. Every in-bounds cell has at least one wall
     // unless the grid is 1x1, but the guard costs nothing and a rootless carve degrades silently to
     // "wall everything" — which is exactly the bug that hid in the 4u version.
     const adj0 = adjacency(edges, nodes);
     const root = adj0[start]!.length > 0 ? start : adj0.findIndex((a) => a.length > 0);
-    const tree = p.kind === 'backtracker'
+    tree = p.kind === 'backtracker'
       ? backtrackerTree(edges, nodes, root, rng)
       : primTree(edges, nodes, root, rng);
-    candidates = edges.filter((_, i) => !tree.has(i));
+    candidates = edges.filter((_, i) => !tree!.has(i));
     note = `${p.kind} step${step}: ${tree.size} tree edges kept, ${candidates.length} walled`;
   } else {
     candidates = [...edges];
@@ -179,9 +180,39 @@ export function planMaze(g: CellGrid, rng: Rng, p: MazeParams, startCell = 0): M
   // shuffle INDICES then map — never shuffle the objects, so the seeded order stays pure
   const idx = candidates.map((_, i) => i);
   shuffleInPlace(rng, idx);
-  const order = idx.map((i) => candidates[i]!);
+  let order = idx.map((i) => candidates[i]!);
 
-  // BRAID: drop a fraction so loops survive. Taken off an already-shuffled list, so it is unbiased.
-  const drop = Math.min(order.length, Math.round(order.length * Math.max(0, Math.min(1, p.braid))));
-  return { order: order.slice(drop), note: `${note}, braid drops ${drop}` };
+  /* BRAID. Dropping walls AT RANDOM buys loops but also merges neighbouring corridors into open
+     halls — which is where the wide, roomlesssections came from. Dead-end removal is the classic
+     alternative and it targets what braiding is actually for: find the blocks the tree left with only
+     ONE way in, and give each a second exit. Loops appear, dead ends disappear, and no two parallel
+     corridors are ever joined along their length. */
+  const braid = Math.max(0, Math.min(1, p.braid));
+  let braidNote = 'no braid';
+  if (braid > 0 && tree) {
+    const degree = new Int32Array(nodes);
+    for (const i of tree) { degree[edges[i]!.a]!++; degree[edges[i]!.b]!++; }
+    const deadEnds: number[] = [];
+    for (let n = 0; n < nodes; n++) if (degree[n] === 1) deadEnds.push(n);
+    shuffleInPlace(rng, deadEnds);
+    const take = Math.round(deadEnds.length * braid);
+
+    // one extra exit per chosen dead end: the first walled barrier that touches it
+    const spare = new Set<MazeEdge>();
+    const byNode: number[][] = Array.from({ length: nodes }, () => []);
+    order.forEach((e, i) => { byNode[e.a]!.push(i); byNode[e.b]!.push(i); });
+    for (let k = 0; k < take; k++) {
+      const n = deadEnds[k]!;
+      const cand = byNode[n]!.find((i) => !spare.has(order[i]!));
+      if (cand !== undefined) spare.add(order[cand]!);
+    }
+    order = order.filter((e) => !spare.has(e));
+    braidNote = `${spare.size} dead ends opened of ${deadEnds.length}`;
+  } else if (braid > 0) {
+    // no tree to read dead ends from (kruskal / scatter) — fall back to an unbiased random drop
+    const drop = Math.min(order.length, Math.round(order.length * braid));
+    order = order.slice(drop);
+    braidNote = `${drop} dropped at random (no tree)`;
+  }
+  return { order, note: `${note}, ${braidNote}` };
 }

@@ -31,11 +31,19 @@ describe('cell-maze — the edge set is the walls themselves', () => {
     expect(tree).toBeGreaterThan(0); // a rootless carve would silently propose everything
   });
 
-  it('braid drops walls in proportion', () => {
-    const g = makeGrid(10, 10);
-    const none = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0 }).order.length;
-    const half = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0.5 }).order.length;
-    expect(half).toBeCloseTo(none * 0.5, -1);
+  it('braid opens DEAD ENDS rather than dropping walls at random', () => {
+    const g = makeGrid(16, 16);
+    const none = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0 });
+    const some = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 0.5 });
+    const all = planMaze(g, makeRng(1n), { kind: 'backtracker', braid: 1 });
+    // more braid ⇒ strictly fewer walls, because each opened dead end spares one
+    expect(some.order.length).toBeLessThan(none.order.length);
+    expect(all.order.length).toBeLessThan(some.order.length);
+    expect(none.note).toContain('no braid');
+    expect(all.note).toContain('dead ends opened');
+    // and it is bounded by the number of dead ends, NOT by a fraction of every wall — the whole point,
+    // since dropping walls at random is what merged parallel corridors into open halls
+    expect(none.order.length - all.order.length).toBeLessThan(none.order.length * 0.5);
   });
 
   it('every strategy is deterministic', () => {
