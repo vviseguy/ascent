@@ -53,6 +53,7 @@ import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
 import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
 import { mountFaceSelect, type FaceSelectHandle } from './face-select.ts';
 import { buildSurfacePanel, syncSurfacePanel, type SurfacePanelHandle } from './surface-panel.ts';
+import { dock, restoreDrawers, setDrawersVisible } from './drawers.ts';
 import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
@@ -660,7 +661,6 @@ async function boot(): Promise<void> {
           scene,
           camera: cam,
           dom: renderer.domElement,
-          controls,
           initialHidden: hiddenState,
           onChange: () => syncSurfacePanel(),
           render: renderOnce,
@@ -738,11 +738,30 @@ async function boot(): Promise<void> {
     }
   }
 
+  // ---- DRAWERS: fold the fixed-position panels into two edge rails ----
+  // Done here, after every panel has appended itself, so no panel module needs to know the layout
+  // system exists. Content on the left with the authoring tools; inspection on the right.
+  {
+    const plan: { id: string; label: string; side: 'left' | 'right' }[] = [
+      { id: 'object-picker', label: 'CONTENT', side: 'left' },
+      { id: 'texture-settings', label: 'TEXTURES', side: 'left' },
+      { id: 'surface-panel', label: 'SURFACES', side: 'left' },
+      { id: 'fit-controls', label: 'FIT', side: 'right' },
+      { id: 'recolor-legend', label: 'LEGEND', side: 'right' },
+    ];
+    for (const p of plan) {
+      const el = document.getElementById(p.id);
+      if (el) dock(el, p);
+    }
+    restoreDrawers({ left: 'object-picker' });
+  }
+
   // ---- HIDE-UI BUTTON (top-right corner): collapse every panel to see the bare model, and a way
   // back. State PERSISTS in the URL (?ui=0) via replaceState, so it survives a reload / the
   // coloring + boxes navigations instead of being lost. The button itself always stays visible.
   {
-    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend', 'texture-settings', 'surface-panel'];
+    // the docked panels are hidden through the drawer rails; these are what is left loose
+    const ids = ['hud', 'lab-controls'];
     const btn = document.createElement('button');
     Object.assign(btn.style, {
       position: 'fixed', right: '10px', top: '10px', zIndex: '30', cursor: 'pointer',
@@ -758,6 +777,7 @@ async function boot(): Promise<void> {
         if (hidden) { if (el.dataset['prevDisp'] === undefined) el.dataset['prevDisp'] = el.style.display; el.style.display = 'none'; }
         else { el.style.display = el.dataset['prevDisp'] ?? ''; delete el.dataset['prevDisp']; }
       }
+      setDrawersVisible(!hidden);
       btn.textContent = hidden ? '☰ show UI' : '✕ hide UI';
       const next = new URLSearchParams(location.search);
       if (hidden) next.set('ui', '0'); else next.delete('ui');

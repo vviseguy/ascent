@@ -20,6 +20,11 @@
 // Left-click adds the preview, right-click removes it, and the geometry is never touched until you
 // press Hide — selection is a view, hiding is an edit.
 //
+// A press only ARMS a click; the RELEASE decides. Move more than a few pixels in between and the
+// gesture is handed back to the camera untouched, so orbit stays on left-drag and pan on right-drag
+// exactly as they are outside edit mode. Edit mode does not take the mouse away from you — it adds
+// a meaning to tapping, and both buttons work the same way.
+//
 // ADJACENCY IS BY POSITION, not by vertex index. A GLB duplicates vertices at every UV and normal
 // seam, so two triangles that visually share an edge routinely have no index in common; keying on
 // quantised position is what lets a fill cross those seams instead of stopping dead at them.
@@ -35,10 +40,6 @@ export interface FaceSelectOpts {
   scene: THREE.Scene;
   camera: THREE.Camera;
   dom: HTMLElement;
-  /** OrbitControls — left/right drag are taken over while editing, so they get suppressed. Typed
-   *  structurally (and loosely, matching three's optional MOUSE enum) to avoid importing the
-   *  controls class into a module that only needs to mute two buttons. */
-  controls: { mouseButtons: { LEFT?: number | null | undefined; MIDDLE?: number | null | undefined; RIGHT?: number | null | undefined } };
   initialHidden?: Readonly<Record<string, number[]>>;
   /** Fired whenever counts change, so the panel can redraw its readout. */
   onChange: () => void;
@@ -134,7 +135,7 @@ function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
 }
 
 export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
-  const { root, scene, camera, dom, controls, onChange, render } = opts;
+  const { root, scene, camera, dom, onChange, render } = opts;
 
   const infos: MeshInfo[] = [];
   forEachMesh(root, (mesh, i) => infos.push(buildInfo(mesh, i)));
@@ -148,6 +149,9 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
   let hoverMesh: MeshInfo | null = null;
   let hoverTri = -1;
   let preview: number[] = [];
+  /** An armed press: where it started, and whether it has since become a drag. */
+  let down: { x: number; y: number; button: number; moved: boolean } | null = null;
+  const DRAG_PX = 5; // below this a press-release is a click, above it the camera had it
 
   // ---- highlight overlays ----------------------------------------------------------------------
   const mkOverlay = (color: number, opacity: number, depthTest: boolean): THREE.Mesh => {
@@ -295,6 +299,10 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
 
   const onMove = (ev: PointerEvent): void => {
     if (!enabled) return;
+    if (down) {
+      if (!down.moved && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > DRAG_PX) down.moved = true;
+      if (down.moved) return; // the camera is moving; re-picking every frame is noise
+    }
     const prevTri = hoverTri, prevMesh = hoverMesh;
     pick(ev);
     if (hoverTri === prevTri && hoverMesh === prevMesh) return;
@@ -314,19 +322,44 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     render();
   };
 
+  // A press only ARMS a selection; the release decides. Under DRAG_PX it was a click and commits,
+  // past it the gesture was a camera move and is left alone — so edit mode never takes the mouse
+  // away from you, it just adds a meaning to tapping. Deliberately no preventDefault/stopPropagation
+  // here: OrbitControls has to receive the same pointerdown for the fallback to exist at all.
   const onDown = (ev: PointerEvent): void => {
     if (!enabled || (ev.button !== 0 && ev.button !== 2)) return;
-    ev.preventDefault();
-    ev.stopPropagation();
+    down = { x: ev.clientX, y: ev.clientY, button: ev.button, moved: false };
+  };
+
+  const onUp = (ev: PointerEvent): void => {
+    const d = down;
+    down = null;
+    if (!enabled || !d || ev.button !== d.button) return;
+    const moved = d.moved || Math.hypot(ev.clientX - d.x, ev.clientY - d.y) > DRAG_PX;
     pick(ev);
     refreshPreview();
-    commit(ev.button === 0);
+    repaintSelection();
+    if (moved) { onChange(); render(); return; } // it was an orbit/pan — just refresh the hover
+    commit(d.button === 0);
   };
   const onContext = (ev: Event): void => { if (enabled) ev.preventDefault(); };
   const onLeave = (): void => { if (!enabled) return; hoverMesh = null; hoverTri = -1; refreshPreview(); render(); };
 
+  // Moving onto a PANEL stops the canvas receiving pointermove, and pointerleave is not reliable
+  // across a synthetic jump — so the last highlight would sit there looking live while the cursor is
+  // somewhere else entirely. Watch the window and clear whenever the pointer is off the canvas.
+  const onWindowMove = (ev: PointerEvent): void => {
+    if (!enabled || ev.target === dom || hoverTri < 0) return;
+    hoverMesh = null; hoverTri = -1;
+    refreshPreview();
+    onChange();
+    render();
+  };
+  window.addEventListener('pointermove', onWindowMove, true);
   dom.addEventListener('pointermove', onMove);
   dom.addEventListener('pointerdown', onDown, true);
+  // on WINDOW: a drag that ends off the canvas must still clear the armed press
+  window.addEventListener('pointerup', onUp, true);
   dom.addEventListener('contextmenu', onContext);
   dom.addEventListener('pointerleave', onLeave);
 
@@ -344,14 +377,12 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     render();
   };
 
-  const savedButtons = { ...controls.mouseButtons };
-
   return {
     setEnabled: (on) => {
       enabled = on;
-      // left = select, right = deselect; orbit moves to the middle button while editing
-      if (on) { controls.mouseButtons.LEFT = null; controls.mouseButtons.RIGHT = null; }
-      else { controls.mouseButtons.LEFT = savedButtons.LEFT; controls.mouseButtons.RIGHT = savedButtons.RIGHT; }
+      // mouseButtons are left alone: orbit stays on left-drag and pan on right-drag even while
+      // editing, because the click/drag split decides per gesture rather than per mode
+      down = null;
       if (!on) { hoverMesh = null; hoverTri = -1; }
       refreshPreview();
       repaintSelection();
@@ -379,14 +410,14 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       return out;
     },
     dispose: () => {
+      window.removeEventListener('pointermove', onWindowMove, true);
       dom.removeEventListener('pointermove', onMove);
       dom.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointerup', onUp, true);
       dom.removeEventListener('contextmenu', onContext);
       dom.removeEventListener('pointerleave', onLeave);
       for (const o of [selOverlay, prevOverlay, hoverOverlay]) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); scene.remove(o); }
       scene.remove(arrow);
-      controls.mouseButtons.LEFT = savedButtons.LEFT;
-      controls.mouseButtons.RIGHT = savedButtons.RIGHT;
     },
   };
 }
