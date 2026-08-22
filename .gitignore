@@ -7,6 +7,7 @@ dist/
 coverage/
 *.tsbuildinfo
 lab-shots/
+cell-shots/
 dist-lab-*/
 tmp/
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, stairRun, PIECE, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFlight, PIECE, wallTypeUrl } from './cell-place.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
 const W = 4, H = 4;
@@ -150,8 +150,8 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
   });
 });
 
-describe('cell-place — stair runs', () => {
-  const SW = 5, SH = 3;
+describe('cell-place — stair flights are BLOCKS, and everything about them is sensed', () => {
+  const SW = 6, SH = 6;
   const mk = (mut: (c: Cell, x: number, y: number) => void): Cell[] => {
     const out: Cell[] = [];
     for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) { const c = openCell(); mut(c, x, y); out.push(c); }
@@ -159,50 +159,129 @@ describe('cell-place — stair runs', () => {
   };
   const drew = (cs: Cell[], x: number, y: number): string[] =>
     cellPlacements(cs, SW, SH, x, y).map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+  /** Only the GROUND a cell lays — its own walls are a separate question from whose flight it is in. */
+  const ground = (cs: Cell[], x: number, y: number): string[] =>
+    drew(cs, x, y).filter((u) => u.includes('floor') || u.includes('stairs'));
 
-  /** `[open] stairs | stairs [wall]` — the flight climbs toward the closed end. */
-  const run = (wallSide: 'E' | 'W' | 'none'): Cell[] => mk((c, x, y) => {
-    if (y === 1 && (x === 1 || x === 2)) c.floor = 'stairs';
-    if (wallSide === 'E' && y === 1 && x === 3) c.wallW = 'wall';
-    if (wallSide === 'W' && y === 1 && x === 1) c.wallW = 'wall';
-  });
-
-  it('climbs toward the walled end, whichever end that is', () => {
-    expect(stairRun(run('E'), SW, SH, 1, 1)).toEqual({ axis: 'H', up: 'E' });
-    expect(stairRun(run('W'), SW, SH, 1, 1)).toEqual({ axis: 'H', up: 'W' });
-  });
-
-  it('one flight per run: the lower-coordinate cell owns it, the partner draws nothing', () => {
-    const cs = run('E');
-    expect(drew(cs, 1, 1)).toEqual(['stairs_narrow']);
-    expect(drew(cs, 2, 1)).toEqual([]);
-  });
-
-  it('uses stairs_narrow — 4×4, exactly the two-cell run (plain `stairs` is 5 wide and would overhang)', () => {
-    expect(cellPlacements(run('E'), SW, SH, 1, 1)[0]!.url).toContain('stairs_narrow');
-  });
-
-  it('AMBIGUOUS runs draw ordinary ground rather than guessing a direction', () => {
-    expect(stairRun(run('none'), SW, SH, 1, 1)).toBeNull();     // open at both ends
-    expect(drew(run('none'), 1, 1)).toEqual(['floor_tile_large']);
-    const closedBoth = mk((c, x, y) => {
-      if (y === 1 && (x === 1 || x === 2)) c.floor = 'stairs';
-      if (y === 1 && (x === 1 || x === 3)) c.wallW = 'wall';
+  /** A 2x2 block at (1,1) with the NORTH end closed, so it climbs north. */
+  const block = (opts: { flanks?: boolean; wide?: boolean; wood?: boolean } = {}): Cell[] => {
+    const bw = opts.wide ? 3 : 2;
+    return mk((c, x, y) => {
+      const inBlock = x >= 1 && x < 1 + bw && (y === 1 || y === 2);
+      if (inBlock) c.floor = 'stairs';
+      if (opts.wood && !inBlock) c.floor = 'wood';
+      if (y === 1 && x >= 1 && x < 1 + bw) c.wallN = 'wall';        // the north end is closed
+      if (opts.flanks && (y === 1 || y === 2) && (x === 1 || x === 1 + bw)) c.wallW = 'wall';
     });
-    expect(stairRun(closedBoth, SW, SH, 1, 1)).toBeNull();
+  };
+
+  it('a 2x2 block is ONE flight, owned by its lowest-coordinate cell', () => {
+    const cs = block();
+    const f = stairFlight(cs, SW, SH, 1, 1);
+    expect(f).toMatchObject({ x: 1, y: 1, bw: 2, bh: 2, up: 'N', width: 2 });
+    // the other three cells of the block own no flight and lay no GROUND of their own — though they
+    // still draw their own walls, which belong to the cell and not to the flight
+    for (const [x, y] of [[2, 1], [1, 2], [2, 2]] as [number, number][]) {
+      expect(stairFlight(cs, SW, SH, x, y)).toBeNull();
+      expect(ground(cs, x, y)).toEqual([]);
+    }
+    expect(ground(cs, 1, 1)).toEqual(['stairs_narrow']);
   });
 
-  it('a lone `stairs` cell is not a flight', () => {
-    const lone = mk((c, x, y) => { if (x === 1 && y === 1) c.floor = 'stairs'; });
-    expect(stairRun(lone, SW, SH, 1, 1)).toBeNull();
-    expect(drew(lone, 1, 1)).toEqual(['floor_tile_large']);
+  it('lands the mesh ON the block, allowing for a pivot that sits at the TOP of the flight', () => {
+    // The mesh spans local z in [0, 4] and rises toward -Z, so its origin is its top end. Placing it at
+    // the block's centre would hang it half a block downhill; it belongs half a run UP-SLOPE of centre.
+    const p = cellPlacements(block(), SW, SH, 1, 1)[0]!;
+    expect(p.turn).toBe(0);      // a north climb is the mesh's native orientation
+    expect(p.x).toBe(65536);     // (bw-1) = 1 east: centred across the 2-cell width
+    expect(p.z).toBe(-65536);    // (bh-1) - run = 1 - 2 = -1: the top end, not the middle
+    // which puts the 4u-deep mesh over exactly the two cells of the block: [-1, 3]
   });
 
-  it('runs on either axis', () => {
-    const vert = mk((c, x, y) => {
-      if (x === 2 && (y === 0 || y === 1)) c.floor = 'stairs';
-      if (x === 2 && y === 2) c.wallN = 'wall';
+  it('SENSES walls either side and switches to the walled mesh', () => {
+    expect(stairFlight(block(), SW, SH, 1, 1)!.url).toContain('stairs_narrow');
+    const walled = stairFlight(block({ flanks: true }), SW, SH, 1, 1)!;
+    expect(walled.walls).toBe(2);
+    expect(walled.url).toContain('stairs_walled');
+  });
+
+  it('a walled flight carries its own sides, so those walls are not drawn twice', () => {
+    const cs = block({ flanks: true });
+    const halves = (g: Cell[]): number => gridPlacements(g, SW, SH).flatMap((e) => e.placements)
+      .filter((p) => p.url.includes('wall_half')).length;
+    // four wall segments were added either side of the flight, and the mesh supplies all four
+    expect(halves(cs)).toBe(halves(block()));
+  });
+
+  it('SENSES a three-cell width and switches to the wide mesh', () => {
+    const f = stairFlight(block({ wide: true }), SW, SH, 1, 1)!;
+    expect(f.width).toBe(3);
+    expect(f.url).toContain('stairs_wide');
+  });
+
+  it('SENSES the surrounding ground and switches to the wooden mesh', () => {
+    // the wooden flight is 6u deep, so it only fits a block that runs THREE cells
+    const woodBlock = mk((c, x, y) => {
+      const inBlock = x >= 1 && x <= 2 && y >= 1 && y <= 3;
+      c.floor = inBlock ? 'stairs' : 'wood';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
-    expect(stairRun(vert, SW, SH, 2, 0)).toEqual({ axis: 'V', up: 'S' });
+    const f = stairFlight(woodBlock, SW, SH, 1, 1)!;
+    expect(f.run).toBe(3);
+    expect(f.url).toContain('stairs_wood');
+  });
+
+  it('will not stretch a 4u mesh over a 6u hole — an unspannable block draws ordinary ground', () => {
+    const tooLong = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs';   // 3 long, but stone around it
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    // the only 3-run mesh is the wooden one, so a stone block of that length degrades to it rather
+    // than leaving a step missing
+    expect(stairFlight(tooLong, SW, SH, 1, 1)!.url).toContain('stairs_wood');
+
+    const noMesh = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 4) c.floor = 'stairs';   // 4 long — nothing spans it
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    expect(stairFlight(noMesh, SW, SH, 1, 1)).toBeNull();
+    expect(ground(noMesh, 1, 1)).toEqual(['floor_tile_large']);
+  });
+
+  /* A SQUARE block walled on two ADJACENT sides is undecidable, and this pins that rather than
+     papering over it. Walls at N and W: read as a north climb it is left-walled; read as a west climb
+     it is right-walled. Both are legitimate, so the sensor reports nothing — the same refusal to guess
+     that the cross-junction opening makes. It is also why `stairs_wall_left`/`_right` are unreachable
+     today; see the note on STAIR_MESHES. */
+  it('a square block walled on two ADJACENT sides is undecidable, and says so', () => {
+    const corner = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && (y === 1 || y === 2)) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';        // north closed, south open
+      if ((y === 1 || y === 2) && x === 1) c.wallW = 'wall';    // west closed, east open
+    });
+    expect(stairFlight(corner, SW, SH, 1, 1)).toBeNull();
+    expect(ground(corner, 1, 1)).toEqual(['floor_tile_large']);
+  });
+
+  it('AMBIGUOUS blocks draw ordinary ground rather than guessing', () => {
+    const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
+    expect(stairFlight(openBoth, SW, SH, 1, 1)).toBeNull();
+    expect(ground(openBoth, 1, 1)).toEqual(['floor_tile_large']);
+  });
+
+  it('a RAGGED patch is not a flight', () => {
+    const ragged = mk((c, x, y) => {
+      if ((x === 1 && y === 1) || (x === 2 && y === 1) || (x === 1 && y === 2)) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    expect(stairFlight(ragged, SW, SH, 1, 1)).toBeNull();
+  });
+
+  it('climbs on either axis', () => {
+    const eastward = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs';
+      if ((y === 1 || y === 2) && x === 3) c.wallW = 'wall';   // the EAST end is closed
+    });
+    expect(stairFlight(eastward, SW, SH, 1, 1)).toMatchObject({ up: 'E', width: 2 });
   });
 });

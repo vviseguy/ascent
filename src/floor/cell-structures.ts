@@ -14,7 +14,7 @@
 // resolver (`structure-migrate.test.ts`). The `from` field records the original tile dimensions.
 
 import data from './cell-structures.json' with { type: 'json' };
-import type { CellField } from './cell-field.ts';
+import { fullField, type CellField } from './cell-field.ts';
 import { makeGrid, type CellGrid } from './cell-grid.ts';
 
 /**
@@ -45,6 +45,52 @@ export interface CellStructure {
 /** Row stride of the stored point lattice. */
 export const stride = (s: { w: number }): number => s.w + 1;
 
+/**
+ * WHAT A PADDED LATTICE ACTUALLY OWNS. The trailing row and column exist to carry the south and east
+ * borders, and nothing else — so at those points most slots describe somewhere the structure has no
+ * business describing:
+ *
+ *   wallN   the edge running EAST from the point   — owned where px < w
+ *   wallW   the edge running SOUTH from the point  — owned where py < h   (a SEPARATE test, not the same)
+ *   floor   the cell to the point's south-east     — owned where px < w AND py < h
+ *   corner, wallType — properties of the POINT itself, so they are owned everywhere
+ *
+ * The two edge tests are independent: at the south-east corner point neither holds, but along the east
+ * column `wallW` is owned (it IS the east border) while `wallN` is not.
+ */
+export const ownsWallN = (px: number, w: number): boolean => px < w;
+export const ownsWallW = (py: number, h: number): boolean => py < h;
+export const ownsFloor = (px: number, py: number, w: number, h: number): boolean => px < w && py < h;
+
+/**
+ * Make every UNOWNED slot abstain. This is the STORAGE form, and the distinction it turns on is the
+ * one this model keeps punishing people for getting backwards:
+ *
+ *   ABSTAIN (full domain) = "I have no opinion about this."   <- what a structure owes its surroundings
+ *   ASSERT  (pinned none) = "this is air."                    <- a claim, and out here a false one
+ *
+ * `structureStamp` stamps the WHOLE lattice, padding included, so a structure that stores `none` in its
+ * padding is not merely untidy — it stamps "no floor and no wall here" onto the strip of map just past
+ * its own extent, punching a void along its south and east faces and forbidding a corridor from running
+ * flush against it. Abstaining AND-gates to a no-op instead, which is the only correct answer for ground
+ * the structure does not own.
+ *
+ * The editor still PINS the same slots to `none` for its schematic, where the requirement is the exact
+ * opposite — draw nothing rather than claim nothing. Same predicate, opposite fill, different job.
+ *
+ * Idempotent.
+ */
+export function abstainUnowned(cells: readonly CellField[], w: number, h: number): CellField[] {
+  const s = w + 1;
+  const full = fullField();
+  return cells.map((f, i) => {
+    const px = i % s, py = Math.floor(i / s);
+    const n = ownsWallN(px, w), e = ownsWallW(py, h), g = ownsFloor(px, py, w, h);
+    if (n && e && g) return f;
+    return { ...f, wallN: n ? f.wallN : full.wallN, wallW: e ? f.wallW : full.wallW, floor: g ? f.floor : full.floor };
+  });
+}
+
 const store = data as unknown as {
   version: number;
   valueSets?: { seg: number; floor: number; corner: number; wallType: number };
@@ -65,7 +111,20 @@ export const STORED_VALUE_SETS = store.valueSets;
 export const STRUCTURE_VERSION = store.version;
 /** Names in a FIXED order — sorted, so any iteration over structures is deterministic. */
 export const listStructures = (): string[] => Object.keys(store.structures).sort();
-export const getStructure = (name: string): CellStructure | undefined => store.structures[name];
+/**
+ * A structure, normalised on the way OUT rather than trusted from the file. Two things happen here:
+ *
+ *   - the padding is made to ABSTAIN (see `abstainUnowned`) — an older editor saved it pinned to
+ *     `none`, and nothing downstream should have to know that;
+ *   - the result is rebuilt from the DECLARED fields only, so the dev server's `savedAt` stamp does
+ *     not ride along. An orientation of a structure has no meaningful save time, so `orientStructure`
+ *     drops it — which quietly stopped `orient(identity) === input` from holding.
+ */
+export const getStructure = (name: string): CellStructure | undefined => {
+  const s = store.structures[name];
+  if (!s) return undefined;
+  return { w: s.w, h: s.h, cells: abstainUnowned(s.cells, s.w, s.h), ...(s.from !== undefined ? { from: s.from } : {}) };
+};
 
 /** A structure as a standalone grid, ready to resolve or preview. */
 export function structureGrid(name: string): CellGrid | undefined {

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ASCENT — cell snapshot</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #15181c; color: #e8e3da;
+               font: 12px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #view { position: absolute; inset: 0; }
+  #view canvas { display: block; }
+  #cap { position: absolute; left: 12px; top: 10px; z-index: 2; letter-spacing: .06em;
+         text-transform: uppercase; color: #8a939d; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div id="view"></div>
+  <div id="cap"></div>
+  <script type="module" src="/src/lab/cell-snap.ts"></script>
+</body>
+</html>

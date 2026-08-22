@@ -21,10 +21,23 @@ export const CELL = 2;
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<THREE.Object3D>>();
 
+/**
+ * URLs that failed to load, with the reason. A missing mesh draws a red wireframe box and USED TO SAY
+ * NOTHING ELSE — you got a red box in the middle of a floor with no way to tell whether the file was
+ * absent, the path wrong, or the GLB corrupt. Every failure is recorded here instead, so the editor and
+ * the snapshot harness can both report it.
+ */
+const failures = new Map<string, string>();
+export const loadFailures = (): { url: string; why: string }[] =>
+  [...failures].sort(([a], [b]) => (a < b ? -1 : 1)).map(([url, why]) => ({ url, why }));
+
 function template(url: string): Promise<THREE.Object3D> {
   let p = cache.get(url);
   if (!p) {
-    p = loader.loadAsync(url).then((g) => g.scene);
+    p = loader.loadAsync(url).then((g) => g.scene, (e: unknown) => {
+      failures.set(url, e instanceof Error ? e.message : String(e));
+      throw e instanceof Error ? e : new Error(String(e));
+    });
     cache.set(url, p);
   }
   return p;
@@ -55,6 +68,9 @@ export async function buildGrid(cells: readonly (Cell | null)[], w: number, h: n
 
 async function instance(p: CellPlacement, cx: number, cz: number): Promise<THREE.Object3D> {
   const src = await template(p.url).catch(() => null);
+  // a GLB can also load "successfully" with no scene, which is not a rejection — record that too, or a
+  // red box appears with nothing in `loadFailures` to explain it
+  if (!src) failures.set(p.url, failures.get(p.url) ?? 'loaded but produced no scene');
   const node = src ? src.clone(true) : missing();
   // cell-local offsets are in HALF-CELL units (±1 is an edge), so they scale by CELL/2
   node.position.set(cx + toFloat(p.x) * (CELL / 2), 0, cz + toFloat(p.z) * (CELL / 2));
@@ -72,5 +88,14 @@ function missing(): THREE.Object3D {
     new THREE.MeshStandardMaterial({ color: 0xd95a5a, wireframe: true }),
   );
   m.position.y = 0.8;
+  m.name = MISSING_TAG; // so a red box in a render can be COUNTED, not squinted at
   return m;
+}
+
+/** Marks the stand-in mesh. `countMissing` is the answer to "is that red thing a missing model?". */
+export const MISSING_TAG = 'cell-preview:missing';
+export function countMissing(root: THREE.Object3D): number {
+  let n = 0;
+  root.traverse((o) => { if (o.name === MISSING_TAG) n++; });
+  return n;
 }

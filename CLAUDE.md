@@ -33,8 +33,15 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 #   /ascent/board.html         stamp room templates; watch commit vs rollback on overlap
 #   /ascent/walltile.html      one WallTile → its tilePlacements → meshes   (4u, legacy)
 #   /ascent/cell-editor.html   the 2u CELL editor: paint the point lattice + live 3D  ← author here
-# NOTE: the in-app preview pane can't screenshot these (continuous rAF on a WebGL canvas).
-# Use headless Playwright with --use-gl=swiftshader, like scripts/lab-snap.mjs does.
+#   /ascent/cell-snap.html     the 2u pipeline rendered ONCE, for screenshots (no controls, no rAF)
+# NOTE: the in-app preview pane can't screenshot the EDITOR (continuous rAF on a WebGL canvas).
+# cell-snap.html exists for exactly that reason — it renders one frame and stops:
+npm run cell:snap -- structure "walled stairs"      # one authored structure, framed on its meshes
+npm run cell:snap -- all --turns                    # every structure x all 8 orientations
+npm run cell:snap -- floor 36x28 --seed=3 --focus=30,11,7   # a generated floor, zoomed on one cell
+# --angle/--pitch/--zoom move the camera; a ground ruler shows the 2u cells so an off-by-half-a-cell
+# placement is visible. It WARNS when a mesh failed to load, so a red placeholder box is never a
+# mystery. Output: cell-shots/ (gitignored).
 
 # Standalone proofs run WITHOUT installing anything (Node 22+, type-stripping):
 npm run prove:fixed    # fixed-point math vs a BigInt-exact oracle

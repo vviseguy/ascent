@@ -19,7 +19,7 @@
 // Pure + deterministic: integer coordinate arithmetic only.
 
 import { fullField, type CellField } from './cell-field.ts';
-import { stride, type CellStructure } from './cell-structures.ts';
+import { abstainUnowned, stride, type CellStructure } from './cell-structures.ts';
 
 /** Quarter-turns clockwise. */
 export type Turn = 0 | 1 | 2 | 3;
@@ -85,7 +85,8 @@ function homeEdge(
  * The structure, turned and/or mirrored. Every edge and corner is re-homed to the point that owns it
  * after the transform, so the result is well-formed by construction rather than by bookkeeping.
  */
-export function orientStructure(st: CellStructure, o: Orientation): CellStructure {
+export function orientStructure(raw: CellStructure, o: Orientation): CellStructure {
+  const st: CellStructure = { ...raw, cells: abstainUnowned(raw.cells, raw.w, raw.h) };
   const { w: nw, h: nh } = orientedSize(st.w, st.h, o);
   const srcStride = stride(st), dstStride = nw + 1;
   const cells: CellField[] = Array.from({ length: dstStride * (nh + 1) }, fullField);
@@ -126,5 +127,8 @@ export function orientStructure(st: CellStructure, o: Orientation): CellStructur
     }
   }
 
-  return { w: nw, h: nh, cells, ...(st.from !== undefined ? { from: st.from } : {}) };
+  /* Unowned slots were never written above, so they are still `fullField` — which is exactly the
+     storage form. Normalising the INPUT too is what makes identity a strict no-op regardless of how
+     the source was saved. */
+  return { w: nw, h: nh, cells: abstainUnowned(cells, nw, nh), ...(st.from !== undefined ? { from: st.from } : {}) };
 }

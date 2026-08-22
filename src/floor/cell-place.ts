@@ -22,7 +22,8 @@
 
 import { type Fixed, fromInt, fromFloatConst, neg } from '../sim/fixed/fixed.ts';
 import {
-  blocks, isOpenType, type Axis, type Cell, type Dir, type FloorMaterial, type Seg, type WallType,
+  FLOOR_MATERIALS, blocks, isOpenType,
+  type Axis, type Cell, type Dir, type FloorMaterial, type Seg, type WallType,
 } from './cell.ts';
 
 const PACK = 'models/kaykit_dungeon_remastered';
@@ -36,7 +37,13 @@ export const PIECE = {
   barrierHalf: u('barrier_half'),
   barrierColumn: u('barrier_column'),
   arch: u('wall_arched'),
-  stairs: u('stairs_narrow'), // 4x4 footprint — exactly a two-cell run, unlike `stairs` (5 wide)
+  /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
+  stairs: u('stairs_narrow'),
+  stairsWalled: u('stairs_walled'),
+  stairsWide: u('stairs_wide'),
+  stairsWallLeft: u('stairs_wall_left'),
+  stairsWallRight: u('stairs_wall_right'),
+  stairsWood: u('stairs_wood'),
   window: u('wall_archedwindow_open'),
   gate: u('wall_gated'),
   broken: u('wall_broken'),
@@ -128,59 +135,200 @@ export function openingAxis(
 /* ----------------------------------- stairs ----------------------------------- */
 
 /**
- * A STAIR RUN is two adjacent `stairs` cells — 4u, exactly the `stairs_narrow` footprint. Which way it
- * climbs is DERIVED from the walls at its two ends and never stored:
+ * A stair FLIGHT is a rectangular block of `stairs` cells. The base flight is 2x2 — 4u x 4u, exactly
+ * `stairs_narrow`'s footprint — and everything about which mesh to use is SENSED, never stored:
  *
- *     [ open ] stairs | stairs [ wall ]        climbs toward the wall
+ *     [ open ] stairs stairs [ wall ]      the climb runs toward the closed end
+ *       walls either side?                 -> a walled flight
+ *       three cells across?                -> a wide flight
+ *       wooden ground around it?           -> a wooden flight
  *
- * You walk in at the open end and rise toward the closed one. That is the same principle as the
- * opening axis — a fact about the walls should be read from the walls, not duplicated beside them
- * where it can disagree.
+ * Nothing here is a second copy of something the walls already say, which is the same rule the
+ * opening axis follows. An AMBIGUOUS flight — no end closed, or both axes equally closed — draws
+ * ordinary ground rather than guessing, as everywhere else in this file.
  *
- * AMBIGUOUS RUNS DRAW NOTHING. Open at both ends, or closed at both, and there is no telling which way
- * it goes, so it falls back to ordinary ground rather than guessing — the same under-claiming rule the
- * cross-junction opening uses.
- *
- * The run is owned by its LOWER-coordinate cell so exactly one of the pair emits the mesh.
+ * The overhang is not an accident: `stairs_walled` is 5.00 wide against a 4u block because it carries
+ * its own side walls, and a wall is 1.00 thick centred on the cell boundary — so 4 + 0.5 + 0.5 lands
+ * exactly. That is why a walled flight also SUPPRESSES the flanking wall segments; drawing both would
+ * double them.
  */
-export interface StairRun {
-  /** The axis the flight runs along. */
-  axis: 'H' | 'V';
-  /** Which way it CLIMBS: toward the walled end. */
+export interface StairFlight {
+  /** Block origin (its lowest-coordinate cell) and size in CELLS. */
+  x: number;
+  y: number;
+  bw: number;
+  bh: number;
+  /** Which way it climbs — toward the closed end. */
   up: Dir;
+  /** Cells across, perpendicular to the climb. */
+  width: number;
+  /** Cells the flight runs FOR, along the climb. */
+  run: number;
+  /** Which flanks are walled: -1 left only, 1 right only, 2 both, 0 neither. */
+  walls: -1 | 0 | 1 | 2;
+  /** The mesh this resolves to. */
+  url: string;
 }
 
-export function stairRun(
+/**
+ * The measured stair catalog. Two facts here are NOT derivable from a bounding box, so they were read
+ * out of the vertex data (`tmp/glb-slope.mjs`) rather than assumed:
+ *
+ *   1. EVERY stair mesh rises toward -Z, so the whole family shares one turn table.
+ *   2. THE PIVOT IS NOT THE CENTRE. Their Z spans [0, run] rather than [-run/2, +run/2] — the origin
+ *      sits at the TOP of the flight and the body hangs downhill from it. Centring one on its block
+ *      puts it half a block out, which is exactly the bug this table exists to prevent.
+ *
+ * `run` and `across` are in CELLS, so a mesh is only offered for a block it actually spans. `across` 2
+ * is 4u, and a 5.00-wide mesh there means 4u of stair plus 0.5 of wall each side — which lands on the
+ * cell boundary exactly, because a wall is 1.00 thick and centred on it.
+ *
+ * THE HANDED VARIANTS ARE CURRENTLY UNREACHABLE, on purpose rather than by oversight. Walling exactly
+ * one flank always leaves BOTH axes with one closed end, so the climb direction stops being decidable
+ * and `stairFlight` refuses (see its test). They stay in the table so the fix is a one-line change if
+ * the encoding ever grows a tiebreak; until then a one-flank staircase draws the bare mesh and the
+ * cell's own wall beside it, which looks the same.
+ */
+const STAIR_MESHES = [
+  //  url                          run  across  walls   wood        measured w x d (world units)
+  { url: PIECE.stairsWood, run: 3, across: 2, walls: 0, wood: true },        // 3.30 x 6.00
+  { url: PIECE.stairsWide, run: 2, across: 3, walls: 0, wood: false },       // 7.00 x 4.00 = 6u + 0.5
+  { url: PIECE.stairsWalled, run: 2, across: 2, walls: 2, wood: false },     // 5.00 x 4.00 = 4u + 0.5
+  { url: PIECE.stairsWallLeft, run: 2, across: 2, walls: -1, wood: false },  // 4.00 x 5.00, wall at -X
+  { url: PIECE.stairsWallRight, run: 2, across: 2, walls: 1, wood: false },  // 4.00 x 5.00, wall at +X
+  { url: PIECE.stairs, run: 2, across: 2, walls: 0, wood: false },           // 4.00 x 4.00, bare
+] as const;
+
+/** Stairs rise toward -Z natively, so N is the unturned case. NOT the table walls use — a wall runs
+ *  along X, so its unturned case is E. */
+const STAIR_TURN = { N: 0, W: 1, S: 2, E: 3 } as const;
+/** Unit step per direction, for pushing the pivot back up-slope. */
+const STEP: Record<Dir, readonly [number, number]> = { N: [0, -1], S: [0, 1], W: [-1, 0], E: [1, 0] };
+/** Standing at the foot looking up, which grid direction is on your LEFT. Verified against the meshes:
+ *  `stairs_wall_left` carries its wall at -X, which is west when the climb is north. */
+const LEFT_OF: Record<Dir, Dir> = { N: 'W', W: 'S', S: 'E', E: 'N' };
+const RIGHT_OF: Record<Dir, Dir> = { W: 'N', S: 'W', E: 'S', N: 'E' };
+
+const isStairs = (cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): boolean =>
+  cellAt(cells, w, h, x, y)?.floor === 'stairs';
+
+/** Is EVERY cell along one side of the block walled on that side? A flight's end is only "closed" if
+ *  the whole width is, otherwise you could walk around it. */
+function sideClosed(
+  cells: readonly (Cell | null)[], w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir,
+): boolean {
+  if (d === 'N' || d === 'S') {
+    const row = d === 'N' ? y : y + bh - 1;
+    for (let i = 0; i < bw; i++) if (!blocks(wallOn(cells, w, h, x + i, row, d))) return false;
+    return true;
+  }
+  const col = d === 'W' ? x : x + bw - 1;
+  for (let i = 0; i < bh; i++) if (!blocks(wallOn(cells, w, h, col, y + i, d))) return false;
+  return true;
+}
+
+/** The flight whose ORIGIN is (x,y), or null. The origin is the block's lowest-coordinate cell, so
+ *  exactly one cell of a flight ever reports it and the mesh is emitted once. */
+export function stairFlight(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
-): StairRun | null {
-  const c = cellAt(cells, w, h, x, y);
-  if (!c || c.floor !== 'stairs') return null;
+): StairFlight | null {
+  if (!isStairs(cells, w, h, x, y)) return null;
+  if (isStairs(cells, w, h, x - 1, y) || isStairs(cells, w, h, x, y - 1)) return null; // not the origin
 
-  for (const axis of ['H', 'V'] as const) {
-    const nx = axis === 'H' ? x + 1 : x, ny = axis === 'H' ? y : y + 1;
-    const partner = cellAt(cells, w, h, nx, ny);
-    if (!partner || partner.floor !== 'stairs') continue;
-    // a cell already in a run to its west/north is not the owner of this one
-    const prev = cellAt(cells, w, h, axis === 'H' ? x - 1 : x, axis === 'H' ? y : y - 1);
-    if (prev?.floor === 'stairs') continue;
+  let bw = 1; while (isStairs(cells, w, h, x + bw, y)) bw++;
+  let bh = 1; while (isStairs(cells, w, h, x, y + bh)) bh++;
+  for (let j = 0; j < bh; j++) {
+    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j)) return null; // ragged, not a flight
+  }
 
-    const lowSide: Dir = axis === 'H' ? 'W' : 'N';
-    const highSide: Dir = axis === 'H' ? 'E' : 'S';
-    const closedLow = blocks(wallOn(cells, w, h, x, y, lowSide));
-    const closedHigh = blocks(wallOn(cells, w, h, nx, ny, highSide));
-    if (closedLow === closedHigh) continue;               // ambiguous — draw nothing
-    return { axis, up: closedHigh ? highSide : lowSide };
+  const closed = {
+    N: sideClosed(cells, w, h, x, y, bw, bh, 'N'),
+    S: sideClosed(cells, w, h, x, y, bw, bh, 'S'),
+    W: sideClosed(cells, w, h, x, y, bw, bh, 'W'),
+    E: sideClosed(cells, w, h, x, y, bw, bh, 'E'),
+  };
+  const vertical = closed.N !== closed.S;
+  const horizontal = closed.W !== closed.E;
+  if (vertical === horizontal) return null; // neither axis decides, or both do — do not guess
+
+  const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
+  const width = vertical ? bw : bh;
+  const run = vertical ? bh : bw;
+
+  const left = LEFT_OF[up], right = RIGHT_OF[up];
+  const walls: -1 | 0 | 1 | 2 =
+    closed[left] && closed[right] ? 2 : closed[left] ? -1 : closed[right] ? 1 : 0;
+
+  // MATERIAL is sensed from the ground the flight connects to — a staircase in a wooden room is a
+  // wooden staircase. Nothing extra is stored for it.
+  const wood = neighbourFloor(cells, w, h, x, y, bw, bh) === 'wood';
+
+  /* The first mesh that FITS. Run length is a hard requirement — a 4u flight in a 6u hole leaves a step
+     missing — while width, walls and material are preferences, so an unusual block degrades to a plainer
+     mesh instead of vanishing. A block no mesh can span reports nothing and draws ordinary ground, the
+     same under-claiming rule the ambiguous cases use. */
+  const fits = STAIR_MESHES.filter((m) => m.run === run);
+  const best = fits.find((m) => m.wood === wood && m.across === width && m.walls === walls)
+    ?? fits.find((m) => m.wood === wood && m.across === width)
+    ?? fits.find((m) => m.across === width)
+    ?? fits.find((m) => m.wood === wood)
+    ?? fits[0];
+  if (!best) return null;
+
+  return { x, y, bw, bh, up, width, run, walls: best.walls, url: best.url };
+}
+
+/** The most common walkable material immediately around the block, for sensing the flight's material. */
+function neighbourFloor(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, bw: number, bh: number,
+): FloorMaterial | null {
+  const tally = new Map<FloorMaterial, number>();
+  const look = (cx: number, cy: number): void => {
+    const c = cellAt(cells, w, h, cx, cy);
+    if (!c || c.floor === 'stairs' || c.floor === 'none' || c.floor === 'rock') return;
+    tally.set(c.floor, (tally.get(c.floor) ?? 0) + 1);
+  };
+  for (let i = -1; i <= bw; i++) { look(x + i, y - 1); look(x + i, y + bh); }
+  for (let j = -1; j <= bh; j++) { look(x - 1, y + j); look(x + bw, y + j); }
+  let best: FloorMaterial | null = null, n = 0;
+  for (const m of FLOOR_MATERIALS) { // fixed order, so ties resolve deterministically
+    const c = tally.get(m) ?? 0;
+    if (c > n) { n = c; best = m; }
+  }
+  return best;
+}
+
+/** Is this cell inside a flight owned by another cell? Such a cell contributes no ground of its own. */
+function insideFlight(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): StairFlight | null {
+  if (!isStairs(cells, w, h, x, y)) return null;
+  for (let oy = y; oy >= 0 && isStairs(cells, w, h, x, oy); oy--) {
+    for (let ox = x; ox >= 0 && isStairs(cells, w, h, ox, oy); ox--) {
+      const f = stairFlight(cells, w, h, ox, oy);
+      if (f && x >= f.x && x < f.x + f.bw && y >= f.y && y < f.y + f.bh) return f;
+    }
   }
   return null;
 }
 
-/** Is this cell part of a run owned by a neighbour? Such a cell contributes no ground of its own. */
-function inRunOwnedElsewhere(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): boolean {
-  return stairRun(cells, w, h, x - 1, y) !== null && cellAt(cells, w, h, x - 1, y)?.floor === 'stairs'
-    ? stairRun(cells, w, h, x - 1, y)!.axis === 'H'
-    : stairRun(cells, w, h, x, y - 1) !== null && cellAt(cells, w, h, x, y - 1)?.floor === 'stairs'
-      ? stairRun(cells, w, h, x, y - 1)!.axis === 'V'
-      : false;
+/** Does a WALLED flight already draw the wall on side `d` of (x,y)? Its mesh carries its own sides, so
+ *  emitting the cell wall too would double them. */
+function flightCoversWall(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, d: 'N' | 'W'): boolean {
+  for (const [cx, cy] of [[x, y], [x - 1, y], [x, y - 1]] as [number, number][]) {
+    const f = insideFlight(cells, w, h, cx, cy);
+    if (f === null || f.walls === 0) continue;
+    // ONLY the side the chosen mesh actually carries — a one-sided variant must not silently delete
+    // the wall on the side it does not draw
+    const sides: Dir[] = f.walls === 2 ? [LEFT_OF[f.up], RIGHT_OF[f.up]]
+      : f.walls === -1 ? [LEFT_OF[f.up]] : [RIGHT_OF[f.up]];
+    for (const side of sides) {
+      if (side === 'W' && d === 'W' && x === f.x && y >= f.y && y < f.y + f.bh) return true;
+      if (side === 'E' && d === 'W' && x === f.x + f.bw && y >= f.y && y < f.y + f.bh) return true;
+      if (side === 'N' && d === 'N' && y === f.y && x >= f.x && x < f.x + f.bw) return true;
+      if (side === 'S' && d === 'N' && y === f.y + f.bh && x >= f.x && x < f.x + f.bw) return true;
+    }
+  }
+  return false;
 }
 
 /* --------------------------------- placement --------------------------------- */
@@ -209,15 +357,20 @@ export function cellPlacements(
   const fw = floorExtent?.w ?? w, fh = floorExtent?.h ?? h;
   const inFloor = x < fw && y < fh;
 
-  // STAIRS replace the ground of BOTH cells of the run with one 4u flight, placed on the midpoint
-  // between them and turned to face the climb.
-  const run = stairRun(cells, w, h, x, y);
-  if (run && inFloor) {
-    const half = run.axis === 'H' ? at(PIECE.stairs, TURN[run.up], ONE, Z) : at(PIECE.stairs, TURN[run.up], Z, ONE);
-    out.push(half);
+  /* STAIRS replace the ground of a whole BLOCK with one flight, drawn by the block's origin and
+     centred on it. A cell inside someone else's flight draws nothing; a `stairs` cell that is not part
+     of any flight (ragged, or with no end closed) falls back to ordinary ground. */
+  const flight = stairFlight(cells, w, h, x, y);
+  if (flight && inFloor) {
+    /* The block centre, relative to the origin cell centre, in cell-local (= world) units — then pushed
+       UP-SLOPE by half the run, because the mesh pivots on its top end rather than its middle. */
+    const [sx, sz] = STEP[flight.up];
+    out.push(at(
+      flight.url, STAIR_TURN[flight.up],
+      fromInt(flight.bw - 1 + sx * flight.run), fromInt(flight.bh - 1 + sz * flight.run),
+    ));
   } else if (c.floor === 'stairs') {
-    // part of a run owned by the other cell, or a lone `stairs` cell with nowhere to climb
-    if (!inRunOwnedElsewhere(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
+    if (!insideFlight(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
   } else if (c.floor !== 'none' && inFloor) {
     out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
   }
@@ -240,11 +393,11 @@ export function cellPlacements(
      conditions are INDEPENDENT: the south border is `wallN` at py === fh, which is real. */
   const coveredH = axis === 'H' || openingAt(cells, w, h, x + 1, y, 'H');
   const coveredV = axis === 'V' || openingAt(cells, w, h, x, y + 1, 'V');
-  if (!coveredH && x < fw) {
+  if (!coveredH && x < fw && !flightCoversWall(cells, w, h, x, y, 'N')) {
     const p = wallPiece(c.wallN);
     if (p) out.push(at(p, TURN.E, CX, CZ));
   }
-  if (!coveredV && y < fh) {
+  if (!coveredV && y < fh && !flightCoversWall(cells, w, h, x, y, 'W')) {
     const p = wallPiece(c.wallW);
     if (p) out.push(at(p, TURN.S, CX, CZ));
   }

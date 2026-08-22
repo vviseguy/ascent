@@ -106,6 +106,7 @@ export default defineConfig({
         board: r('./board.html'),
         tileeditor: r('./tile-editor.html'),
         celleditor: r('./cell-editor.html'),
+        cellsnap: r('./cell-snap.html'),
       },
     },
   },

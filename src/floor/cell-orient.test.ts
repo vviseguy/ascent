@@ -29,7 +29,16 @@ const definiteWalls = (s: CellStructure): number => {
 
 /** The multiset of connected-component sizes — invariant under any rotation or mirror. */
 const componentSizes = (s: CellStructure): number[] => {
-  const cells = s.cells.map((f) => collapse(f)) as (Cell | null)[];
+  /* Over the FLOOR EXTENT — the w×h real cells. Two ways to get this wrong, and the original managed
+     the first: `cells` is the (w+1)-wide POINT LATTICE, so reading it at stride `w` walks diagonally
+     through the array and reports a connectivity no structure has. It survived on the big structures
+     by luck and fell over on the first 3×3 one.
+     Re-striding alone is not enough either. The padding row and column are BORDERS, not places, and
+     they sit at max-x/max-y no matter how the structure is turned — so a lattice-wide component count
+     is not orientation-invariant even when the orienter is perfect. The extent has to be sliced out. */
+  const lw = s.w + 1;
+  const cells: (Cell | null)[] = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) cells.push(collapse(s.cells[y * lw + x]!));
   const g = buildCellGraph(cells, s.w, s.h);
   const seen = new Array<boolean>(s.w * s.h).fill(false);
   const sizes: number[] = [];

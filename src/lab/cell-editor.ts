@@ -33,6 +33,7 @@ import {
   type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
+import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { buildGrid, CELL } from './cell-preview.ts';
@@ -104,9 +105,10 @@ const pushUndo = (): void => { undoStack.push(JSON.stringify(cells)); if (undoSt
 
 const NONE_SEG = segs('none');
 const NONE_FLOOR = floors('none');
-const hasN = (px: number): boolean => px < W;
-const hasW = (py: number): boolean => py < H;
-const hasFloor = (px: number, py: number): boolean => px < W && py < H;
+// the ONE definition of what a padded lattice owns lives with the lattice
+const hasN = (px: number): boolean => ownsWallN(px, W);
+const hasW = (py: number): boolean => ownsWallW(py, H);
+const hasFloor = (px: number, py: number): boolean => ownsFloor(px, py, W, H);
 
 /**
  * A copy with every field that does not geometrically exist pinned to `none`, so the padding can never
@@ -118,7 +120,15 @@ const hasFloor = (px: number, py: number): boolean => px < W && py < H;
  * pits out of nowhere.) The editor keeps what you painted; the rule is applied on the way OUT, to the
  * preview and to what gets saved.
  */
-function normalised(): CellField[] {
+/**
+ * The padding, PINNED to nothing — for DISPLAY only. The schematic must not draw a phantom floor or
+ * wall out where the structure owns nothing, and an abstaining floor settles to `stone`, so it would.
+ *
+ * This is the opposite of what gets SAVED (`abstainUnowned`), and deliberately so: drawing nothing and
+ * claiming nothing are different requirements over the same slots. Saving this form would have the
+ * structure stamp a void along its own south and east faces.
+ */
+function forDisplay(): CellField[] {
   return cells.map((f, i) => {
     const px = i % stride(), py = Math.floor(i / stride());
     if (hasN(px) && hasW(py) && hasFloor(px, py)) return f;
@@ -131,12 +141,15 @@ function normalised(): CellField[] {
   });
 }
 
+/** The padding, ABSTAINING — the form that goes to the store. See `abstainUnowned`. */
+const forStore = (): CellField[] => abstainUnowned(cells, W, H);
+
 /* --------------------------------- resolving -------------------------------- */
 
 /** Resolve for the PREVIEW under the chosen ambiguity rule. `generator` is the real one — literally
  *  the `settleField` the generator applies — and the rest are for seeing what else it could become. */
 function resolved(): (Cell | null)[] {
-  return normalised().map((f, i) => {
+  return forDisplay().map((f, i) => {
     if (ambiguity === 'generator') return collapse(settleField(f));
     if (ambiguity === 'none' || ambiguity === 'wall') {
       const want = ambiguity === 'none' ? segs('none') : segs('wall');
@@ -581,7 +594,7 @@ async function saveStructure(): Promise<void> {
   });
   if (!name) return;
   // the padding rule is applied on the way OUT, so the store never carries phantom geometry
-  if (await post('cell-structures', name, { structure: { w: W, h: H, cells: normalised() } })) {
+  if (await post('cell-structures', name, { structure: { w: W, h: H, cells: forStore() } })) {
     await refresh();
     status(`saved structure “${name}”`);
   }
@@ -598,7 +611,7 @@ async function saveBrush(): Promise<void> {
   });
   if (!name) return;
   // a brush is a structure too: its own point lattice, one larger than its floor extent
-  const norm = normalised();
+  const norm = forDisplay();
   const out: CellField[] = [];
   for (let y = y0; y <= y1 + 1; y++) {
     for (let x = x0; x <= x1 + 1; x++) {
