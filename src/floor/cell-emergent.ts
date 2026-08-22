@@ -37,6 +37,7 @@ import {
 } from './cell-reach.ts';
 import { planMaze, type MazeParams } from './cell-maze.ts';
 import { getStructure, listStructures } from './cell-structures.ts';
+import { orientStructure, ORIENTATIONS, type Orientation } from './cell-orient.ts';
 import { makeRng, subStream, nextInt, mixSeeds, type Rng } from './rng.ts';
 import type { Cell } from './cell.ts';
 
@@ -63,6 +64,8 @@ export interface EmergentConfig {
 
 export interface PlacedStructure {
   name: string;
+  /** Which of the eight orientations it was placed in. */
+  orientation: Orientation;
   region: Region;
   /** The cell at its middle — the target the router must reach, so the room is enterable. */
   centre: number;
@@ -107,20 +110,22 @@ const overlaps = (a: Region, b: Region): boolean =>
  * wall proposed in there meets {none} ∩ {wall} = ∅, the transaction conflicts, and the AND-gate
  * rejects it with no policing code involved. Anything the author DID paint is left exactly as painted.
  */
-function structureStamp(name: string, porousPerimeter: boolean): { stamp: (lx: number, ly: number) => CellField; w: number; h: number } | null {
-  const st = getStructure(name);
-  if (!st) return null;
+function structureStamp(name: string, porousPerimeter: boolean, o: Orientation): { stamp: (lx: number, ly: number) => CellField; w: number; h: number } | null {
+  const base = getStructure(name);
+  if (!base) return null;
+  const st = orientStructure(base, o); // 4 turns x mirrored = 8 placements per authored piece
   const loosen = (m: Mask): Mask => (m === WALL && porousPerimeter ? POROUS : m);
   // "still allows `none`" is the robust test for "the author did not put a wall here". Comparing
   // against `fullField()` does NOT work: a migrated structure's domains were converted from the old
   // four-value model, so an unpainted wall carries {none,wall,barrier} and never the new full set.
   const assertAir = (m: Mask): Mask => ((m & NONE) !== 0 ? NONE : m);
+  const sw = st.w + 1; // the stored grid is the POINT lattice, one larger than the floor extent
   return {
-    w: st.w,
-    h: st.h,
+    w: sw,
+    h: st.h + 1,
     stamp: (lx, ly) => {
-      const f = st.cells[ly * st.w + lx]!;
-      const onEdge = lx === 0 || ly === 0 || lx === st.w - 1 || ly === st.h - 1;
+      const f = st.cells[ly * sw + lx]!;
+      const onEdge = lx === 0 || ly === 0 || lx === st.w || ly === st.h;
       return onEdge
         ? { ...f, wallN: loosen(f.wallN), wallW: loosen(f.wallW) }
         : { ...f, wallN: assertAir(f.wallN), wallW: assertAir(f.wallW) };
@@ -147,7 +152,8 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
 
   for (let i = 0; i < attempts && names.length > 0; i++) {
     const name = names[nextInt(sRng, names.length)]!;
-    const s = structureStamp(name, true);
+    const o = ORIENTATIONS[nextInt(sRng, ORIENTATIONS.length)]!;
+    const s = structureStamp(name, true, o);
     if (!s || s.w >= w - 1 || s.h >= h - 1) continue;
     const region: Region = {
       x: 1 + nextInt(sRng, Math.max(1, w - s.w - 2)),
@@ -161,7 +167,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     if (!commit(tx)) { stats.structuresRejectedConflict++; continue; }
 
     placed.push({
-      name, region,
+      name, orientation: o, region,
       centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
     });
     stats.structuresPlaced++;

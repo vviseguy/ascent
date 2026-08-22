@@ -153,7 +153,12 @@ const FULL_SEG: Mask = segs('none', 'wall', 'barrier');
  * every domain, which is exactly what the migration test caught.
  */
 export function migrateStructure(s: OldStructure, border: BorderPolicy = 'abstain'): CellGrid {
-  const g = makeGrid(s.w * 2, s.h * 2);
+  // PADDED BY ONE. The stored grid is the lattice of POINTS, not the grid of cells: a w×h structure
+  // stores (w+1)×(h+1) fields, so it owns all FOUR of its border walls rather than only N and W.
+  // Without that, rotating a structure pushes its north and west walls onto sides no cell can own and
+  // they vanish — four quarter-turns stopped being the identity. The extra row and column carry walls
+  // and corners only; their floor is meaningless and abstains.
+  const g = makeGrid(s.w * 2 + 1, s.h * 2 + 1);
   const put = (x: number, y: number, f: CellField): void => { g.cells[y * g.w + x] = f; };
 
   for (let ty = 0; ty < s.h; ty++) {

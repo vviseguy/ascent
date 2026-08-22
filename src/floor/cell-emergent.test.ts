@@ -5,6 +5,7 @@ import { hasConflict, domainSize, FIELD_KEYS } from './cell-field.ts';
 import { listStructures, getStructure } from './cell-structures.ts';
 import { planMaze, mazeEdges, MAZE_KINDS, type MazeKind } from './cell-maze.ts';
 import { makeGrid } from './cell-grid.ts';
+import { orientedSize, ORIENTATIONS } from './cell-orient.ts';
 import { makeRng } from './rng.ts';
 import type { Cell } from './cell.ts';
 
@@ -99,11 +100,24 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
       expect(r.stats.structuresPlaced).toBeGreaterThan(0);
       for (const p of r.placed) {
         expect(known.has(p.name)).toBe(true);
+        // stamped WHOLE, never cropped: the region is the stored POINT lattice (floor extent + 1),
+        // with the axes swapped by an odd quarter-turn
         const st = getStructure(p.name)!;
-        expect(p.region.w).toBe(st.w); // stamped whole, never cropped
-        expect(p.region.h).toBe(st.h);
+        const { w: ow, h: oh } = orientedSize(st.w, st.h, p.orientation);
+        expect(p.region.w).toBe(ow + 1);
+        expect(p.region.h).toBe(oh + 1);
       }
     }
+  });
+
+  it('all eight orientations really get used', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      for (const p of run(BigInt(i * 13 + 1)).placed) {
+        seen.add(`${p.orientation.turn}${p.orientation.flip ? 'F' : ''}`);
+      }
+    }
+    expect(seen.size).toBe(ORIENTATIONS.length); // a catalog of N places as 8N
   });
 
   it('placed structures never overlap', () => {

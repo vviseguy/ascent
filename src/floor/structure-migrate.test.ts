@@ -94,8 +94,8 @@ describe('structure-migrate — every AUTHORED structure converts faithfully', (
     const grid = migrateStructure(s, 'wall');
     const cells = resolveGrid(grid);
     const tiles = oldTiles(name);
-    expect(grid.w).toBe(s.w * 2);
-    expect(grid.h).toBe(s.h * 2);
+    expect(grid.w).toBe(s.w * 2 + 1); // padded: the stored grid is the POINT lattice
+    expect(grid.h).toBe(s.h * 2 + 1);
 
     for (let ty = 0; ty < s.h; ty++) {
       for (let tx = 0; tx < s.w; tx++) {
@@ -115,7 +115,7 @@ describe('structure-migrate — every AUTHORED structure converts faithfully', (
     const s = oldOf(name);
     const cells = resolveGrid(migrateStructure(s, 'wall'));
     const tiles = oldTiles(name);
-    const W = s.w * 2;
+    const W = s.w * 2 + 1;
     for (let ty = 0; ty < s.h; ty++) {
       for (let tx = 0; tx < s.w; tx++) {
         const tile = tiles[ty * s.w + tx];
@@ -131,7 +131,7 @@ describe('structure-migrate — every AUTHORED structure converts faithfully', (
   it.each(NAMES)('%s — tile-boundary walls are none (the 4u model could not put one there)', (name) => {
     const s = oldOf(name);
     const cells = resolveGrid(migrateStructure(s, 'wall'));
-    const W = s.w * 2;
+    const W = s.w * 2 + 1;
     for (let ty = 0; ty < s.h; ty++) {
       for (let tx = 0; tx < s.w; tx++) {
         const A = cells[(ty * 2) * W + tx * 2]!;          // NW quadrant
@@ -160,14 +160,14 @@ describe('structure-migrate — every AUTHORED structure converts faithfully', (
     for (let ty = 0; ty < s.h - 1; ty++) {
       for (let tx = 0; tx < s.w - 1; tx++) {
         for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
-          const i = (ty * 2 + dy) * (s.w * 2) + tx * 2 + dx;
+          const i = (ty * 2 + dy) * (s.w * 2 + 1) + tx * 2 + dx;
           expect(abstain[i]).toEqual(shell[i]);
         }
       }
     }
     // and the policy really does something: on the E/S border, abstaining leaves the arm freer
     const bx = (s.w - 1) * 2 + 1, by = (s.h - 1) * 2 + 1;
-    const i = by * (s.w * 2) + bx;
+    const i = by * (s.w * 2 + 1) + bx;
     expect(abstain[i]).not.toBeNull();
     expect(shell[i]).not.toBeNull();
   });
