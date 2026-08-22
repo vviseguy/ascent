@@ -33,6 +33,10 @@ export interface TextureSettingsOpts {
    *  that is where you are looking while judging a surface, but they must NOT trigger a re-bake —
    *  moving a light is a render-only change — so they bypass `onChange` entirely. */
   extras?: readonly { label: string; get: () => number; set: (v: number) => void }[];
+  /** Caller-owned COLOUR swatches, drawn beside the extras. Same contract: render-only, no re-bake.
+   *  The lab uses them for light tint, which is the other half of judging a material — a surface is
+   *  a response to a light, and a warm key over a cool fill reads nothing like a neutral studio. */
+  colors?: readonly { label: string; get: () => string; set: (v: string) => void }[];
 }
 
 const TYPE_LABEL: Record<Preset, string> = {
@@ -46,7 +50,7 @@ const GROUP_LABEL: Record<string, string> = { neutral: 'Flat', stone: 'Stone', f
 
 /** Mount the texture-settings panel. Each row = one material type: texture <select> + R/M sliders. */
 export function buildTextureSettings(opts: TextureSettingsOpts): TextureSettingsHandle {
-  const { container, onChange, extras = [], header, left = '236px' } = opts;
+  const { container, onChange, extras = [], colors = [], header, left = '236px' } = opts;
 
   // debounce so dragging a slider doesn't re-bake on every pixel.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -121,6 +125,23 @@ export function buildTextureSettings(opts: TextureSettingsOpts): TextureSettings
   globalSlider('Relief', getRelief, setRelief, true);
   globalSlider('AO', getAOStrength, setAOStrength, true);
   for (const e of extras) globalSlider(e.label, e.get, e.set, false);
+  if (colors.length) {
+    const row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '5px 0 0' } as Partial<CSSStyleDeclaration>);
+    for (const c of colors) {
+      const wrap = document.createElement('label');
+      Object.assign(wrap.style, { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', fontSize: '10px', opacity: '.9' } as Partial<CSSStyleDeclaration>);
+      const t = document.createElement('span'); t.textContent = c.label;
+      const inp = document.createElement('input');
+      inp.type = 'color'; inp.value = c.get();
+      Object.assign(inp.style, { width: '26px', height: '18px', padding: '0', border: '1px solid #34344e', borderRadius: '4px', background: 'none', cursor: 'pointer' } as Partial<CSSStyleDeclaration>);
+      inp.addEventListener('input', () => c.set(inp.value));
+      wrap.append(t, inp);
+      row.appendChild(wrap);
+      resync.push(() => { inp.value = c.get(); });
+    }
+    panel.appendChild(row);
+  }
   {
     const rule = document.createElement('div');
     Object.assign(rule.style, { margin: '8px 0', borderBottom: '1px solid rgba(120,130,170,.22)' } as Partial<CSSStyleDeclaration>);
