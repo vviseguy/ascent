@@ -189,8 +189,17 @@ export function findRoute(at: FieldAt, w: number, h: number, p: Polarity, start:
 
 /** Is `goal` reachable from `start` under this polarity? */
 export function reaches(at: FieldAt, w: number, h: number, p: Polarity, start: number, goal: number): boolean {
+  return reachesAll(at, w, h, p, start, [goal]);
+}
+
+/** Are ALL `goals` reachable from `start`? One graph build and one BFS answers every goal at once —
+ *  which matters, because this is the gate on the generator's inner loop (once per proposal, not once
+ *  per proposal per goal). */
+export function reachesAll(at: FieldAt, w: number, h: number, p: Polarity, start: number, goals: readonly number[]): boolean {
+  if (goals.length === 0) return true;
   const g = domainCornerGraph(at, w, h, p);
-  return reachableFromSet(g, [start])[goal] === true;
+  const seen = reachableFromSet(g, [start]);
+  return goals.every((t) => seen[t] === true);
 }
 
 /* ------------------------------- pinning ------------------------------- */

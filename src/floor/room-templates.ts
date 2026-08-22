@@ -32,6 +32,16 @@ interface CellSpec {
   arms?: Partial<Record<Dir, Seg>>;
   centre?: Centre;
   wallType?: WallType;
+  /**
+   * POROUS: state each wall arm as "wall OR nothing" instead of pinning it to wall.
+   *
+   * A domain, once narrowed, can never widen (`andGate` only removes options) — so a room stamped
+   * with hard walls can never grow a door afterwards. A porous room defers that choice: the ring is
+   * `{none, wall}`, a later phase pins the cells a route needs to `none` (the doors) and the rest to
+   * `wall` (the finished ring). This is what lets an incremental generator decide connectivity while
+   * the choice still exists. Consumers that want a finished room ignore it (default = hard walls).
+   */
+  porous?: boolean;
 }
 function cell(s: CellSpec): TileField {
   const out = s.outside ?? [];
@@ -49,11 +59,12 @@ function cell(s: CellSpec): TileField {
   // here — the matching edge is the neighbour's W/N, which the resolver fills (perimeter at the border).
   const edge: Partial<Record<OwnedEdge, Mask>> = {};
   const inner: Partial<Record<Dir, Mask>> = {};
+  const armMask = (a: Seg): Mask => (s.porous ? segs('none', a) : segs(a));
   for (const d of DIRS) {
     const a = s.arms?.[d];
     if (a && a !== 'none') {
-      inner[d] = segs(a);
-      if (d === 'N' || d === 'W') edge[d] = segs(a);
+      inner[d] = armMask(a);
+      if (d === 'N' || d === 'W') edge[d] = armMask(a);
     }
   }
   return template({
@@ -94,6 +105,12 @@ const isEntry = (lx: number, ly: number, w: number, h: number): boolean => ly ==
 /** A plain room: floor + a wall ring + a south doorway. */
 export const basicRoom = (w: number, h: number, floor: FloorMaterial = 'stone'): Stamp =>
   (lx, ly) => cell({ floor, outside: edgeDirs(lx, ly, w, h), arms: ring(lx, ly, w, h), ...(isEntry(lx, ly, w, h) ? { wallType: 'door' } : {}) });
+
+/** `basicRoom` with a POROUS ring — every wall arm is `{none, wall}` rather than pinned to wall, so a
+ *  later phase can still decide where the doors go (see `CellSpec.porous`). No fixed south doorway:
+ *  an incremental generator places the openings connectivity actually needs. */
+export const porousRoom = (w: number, h: number, floor: FloorMaterial = 'stone'): Stamp =>
+  (lx, ly) => cell({ floor, outside: edgeDirs(lx, ly, w, h), arms: ring(lx, ly, w, h), porous: true });
 
 /** A corridor: continuous walls along the two LONG sides, open ends, floor passage. */
 export const hallway = (w: number, h: number): Stamp => (lx, ly) => {

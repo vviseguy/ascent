@@ -76,6 +76,42 @@ geometry actually collided against, not the graph that planned it.
 | 14 | Render | `src/render/dungeon.ts` | Three.js meshes | Reads the sim; never writes back. Cosmetic picks are view-seeded and never reach the verifier | `prove:game` [7] negative control | **BUILT** |
 | 15 | Geometry re-prove | `src/game/route-check.ts` | Anchor route entry→top | Runs on the COMPILED AABBs, not the graph | `prove:game` [7] | **BUILT** |
 
+### The EMERGENT generator (a second, parallel path — not yet wired to the tower)
+
+`src/floor/emergent.ts` builds a floor with **no coarse map at all**: the layout is whatever survives
+a sequence of narrowings on the tile field. It does not replace stages 1–3 above yet; it is a
+complete alternative front-end that produces the same `TileGrid` stage 9 hands to `tileUnits`.
+
+| # | Stage | File | Produces | Invariant | Gate | Status |
+|---|---|---|---|---|---|---|
+| E1 | Domain reachability | `src/floor/tile-reach.ts` | `may` / `must` arm predicates, domain corner-graph, `pinRouteOpen` | `MUST ⇒ MAY` for every representable domain pair; pinning touches only tile-private inner cells | `tile-reach.test.ts` (17, incl. negative controls) | **BUILT** |
+| E2 | Emergent generator | `src/floor/emergent.ts` | `EmergentResult` (settled `TileGrid` + pinned routes) | Every target reachable at every moment; field fully settled at the end | `emergent.test.ts` (10), `prove:emergent` | **BUILT** |
+
+```
+makeGrid()                     every cell fullField() — a blank field is MAXIMALLY connected
+  ├─ 1 ROOMS (porous ring)     claim the footprint; gate: no conflict + all targets still `may`-reachable
+  ├─ 2 MAZE WALLS              only on UNCLAIMED cells; gate: all targets still `may`-reachable
+  ├─ 3 CONNECT                 pin a route to each target → `may` becomes `must` (this cuts the doors)
+  ├─ 4 SEAL                    finish each porous ring cell to wall; refused where a route needs it
+  └─ 5 SETTLE                  narrow every unclaimed cell to `none` → the field is fully determined
+```
+
+**Why it is safe with nothing reserved.** `andGate` only removes options, so reachability is
+**monotone** — it can decrease, never increase. The blank field is fully connected, and every commit
+is gated on the targets still being achievable. By induction the floor is completable at every moment.
+There is no scaffold and no backtracking search; the invariant does the work a reserved corridor used
+to. **Corollary that shapes everything: a domain never widens, so a cell pinned to `{wall}` can never
+become a door.** Rooms are therefore stamped with a *porous* ring (`{none, wall}`) and their openings
+are decided later, while the choice still exists — `porousRoom` in `room-templates.ts`.
+
+**Claims (`emergent.ts`).** A template says what *values* are allowed and deliberately abstains on
+cells that aren't its business. But an abstention is a full mask, and a full mask is indistinguishable
+from "anything goes" — so without a second channel the maze phase fills the rooms. Claims are that
+channel, and they live on the **generator**, not the template: templates stay pure statements about
+values; the generator owns authority. *(This is a convention promoted to a contract at the generator
+level only. Pushing scope into `TileField` itself, so over-constraint is a build-time error, is the
+open follow-up.)*
+
 **Not in the pipeline but still live:** `src/floor/wallgrid.ts` survives *only* as the source of
 `CellTile.wallMask` (the 4-bit projection the fog BFS and decoration read). It is **not** a wall
 producer any more. Folding its last role into the tile lattice is the remaining piece of the old
@@ -155,7 +191,8 @@ the following exists:
 |---|---|---|
 | **Sockets** (closed physical mating alphabet) | §3.1 | Not in code. No `Socket` type exists. |
 | **Tags** (open semantic vocabulary, bitmask) | §3.2 | Not in code. No tag registry. |
-| **AC-3-lite constraint collapse** | §4 | Not built. `collapse()` picks the canonical lowest option unless a `pick` is supplied; `andGate` intersection is the only propagation. |
+| **AC-3-lite constraint collapse** | §4 | Not built *as AC-3*. What exists instead: `emergent.ts`'s propose → gate → commit/rollback loop over `andGate`, which is a coarser mechanism at placement granularity. The never-empty per-cell guarantee is provided by the settle phase, not by a solver. |
+| **Scaffold / fronts dependency graph** | §5 | Superseded in practice — `emergent.ts` runs fixed phases, and the §5 scaffold turned out to be unnecessary (monotonicity gives the guarantee for free). |
 | **The requirement queue** (deferred key placement, `FallbackPolicy`) | §6 | Not built. `puzzles.ts`'s propose→certify is still the mechanism. |
 | **`Structure` / `Slot` / `provides` / `arity` / `role: cosmetic\|host`** | §7 | Not built. `structures.json` stores raw tile domains — no slots, no accepts-sets. |
 | **Composites** (multi-tile set-pieces, `Placement.span`) | §2 | Not built. |

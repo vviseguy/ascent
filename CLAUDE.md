@@ -20,7 +20,7 @@ npm install
 npm run dev            # vite dev server (play the sandbox)
 npm run typecheck      # tsc -b --noEmit
 npm test               # vitest suite
-npm run prove          # run EVERY determinism proof (13 of them; zero deps, Node 22+)
+npm run prove          # run EVERY determinism proof (14 of them; zero deps, Node 22+)
 npm run build          # tsc -b && vite build (also the CI/Pages build)
 
 # Asset Lab (browse/iterate KayKit models + colors in isolation):
@@ -38,6 +38,7 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 # Standalone proofs run WITHOUT installing anything (Node 22+, type-stripping):
 npm run prove:fixed    # fixed-point math vs a BigInt-exact oracle
 npm run prove:floor    # floor generator + solvability verifier fuzz
+npm run prove:emergent # the all-emergent generator: determinism, totality, solvability, non-vacuity
 # ...one prove:<layer> per sim layer; `npm run prove` chains them all. See package.json.
 ```
 
