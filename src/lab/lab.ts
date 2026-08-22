@@ -50,7 +50,7 @@ import { kaykitObjects, objectPack, objectCategory, PACKS } from './kaykit-catal
 import { buildRecolorLegend } from './recolor-legend.ts';
 import { buildTextureSettings } from './texture-settings.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
-import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
 // canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
@@ -268,6 +268,7 @@ async function boot(): Promise<void> {
   // BEFORE the first build, so a shared/screenshotted ?tex=…&relief=… link bakes correctly on load.
   setConfig(configFromParam(params.get('tex')));
   setRelief(reliefFromParam(params.get('relief')));
+  setAOStrength(aoFromParam(params.get('ao')));
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -318,7 +319,23 @@ async function boot(): Promise<void> {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x14141e);
   const key = new THREE.DirectionalLight(0xfff2e0, 2.4);
-  key.position.set(4, 7, 3);
+  // RAKE: the key's direction is a control, not a constant. A normal map only shows itself when the
+  // light crosses the grain at a low angle — with a fixed high frontal key, relief looks broken even
+  // when it is working. Azimuth/elevation are driven from the TEXTURE SETTINGS panel (render-only,
+  // no re-bake) and persist in the URL so a screenshot reproduces its own lighting.
+  const KEY_DIST = 8.6;
+  const lightRake = { az: 0.10, el: 0.62 }; // matches the original (4, 7, 3) placement
+  {
+    const [az, el] = (params.get('rake') ?? '').split(':').map(Number);
+    if (Number.isFinite(az)) lightRake.az = Math.min(1, Math.max(0, az! / 100));
+    if (Number.isFinite(el)) lightRake.el = Math.min(1, Math.max(0, el! / 100));
+  }
+  const applyRake = (): void => {
+    const a = lightRake.az * Math.PI * 2;
+    const e = 0.06 + lightRake.el * (Math.PI / 2 - 0.12); // never exactly horizon/zenith
+    key.position.set(KEY_DIST * Math.cos(e) * Math.cos(a), KEY_DIST * Math.sin(e), KEY_DIST * Math.cos(e) * Math.sin(a));
+  };
+  applyRake();
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
   key.shadow.camera.left = key.shadow.camera.bottom = -6;
@@ -547,14 +564,29 @@ async function boot(): Promise<void> {
       } finally {
         rebuilding = false;
       }
+      writeSurfaceUrl();
+    };
+    // The surface state (textures, relief, AO, light rake) all round-trips through the URL, so a
+    // shared link or a screenshot script reproduces exactly what you were looking at.
+    function writeSurfaceUrl(): void {
       const tex = configToParam(getConfig());
       const rel = reliefToParam(getRelief());
+      const ao = aoToParam(getAOStrength());
       const u = new URLSearchParams(location.search);
       if (tex) u.set('tex', tex); else u.delete('tex');
       if (rel) u.set('relief', rel); else u.delete('relief');
+      if (ao) u.set('ao', ao); else u.delete('ao');
+      u.set('rake', `${Math.round(lightRake.az * 100)}:${Math.round(lightRake.el * 100)}`);
       history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
-    };
-    buildTextureSettings({ container: document.body, onChange: () => { void rebuildObject(); } });
+    }
+    buildTextureSettings({
+      container: document.body,
+      onChange: () => { void rebuildObject(); },
+      extras: [
+        { label: 'Light ∠', get: () => lightRake.az, set: (v) => { lightRake.az = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'Light ↑', get: () => lightRake.el, set: (v) => { lightRake.el = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
+      ],
+    });
 
     // ---- APPROVE & SAVE: freeze this object's auto-fit + materials to the published store ----
     // Reads the LIVE fit/material state on click (post-refit), POSTs to the dev middleware.
