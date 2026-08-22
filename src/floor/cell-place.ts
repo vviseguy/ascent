@@ -38,7 +38,8 @@ export const PIECE = {
   barrierColumn: u('barrier_column'),
   arch: u('wall_arched'),
   /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
-  stairs: u('stairs_narrow'),
+  stairsNarrow: u('stairs_narrow'),
+  stairsBanister: u('stairs'),
   stairsWalled: u('stairs_walled'),
   stairsWide: u('stairs_wide'),
   stairsWallLeft: u('stairs_wall_left'),
@@ -206,11 +207,23 @@ export interface StairFlight {
  * is 4u, and a 5.00-wide mesh there means 4u of stair plus 0.5 of wall each side — which lands on the
  * cell boundary exactly, because a wall is 1.00 thick and centred on it.
  *
- * THE HANDED VARIANTS ARE CURRENTLY UNREACHABLE, on purpose rather than by oversight. Walling exactly
- * one flank always leaves BOTH axes with one closed end, so the climb direction stops being decidable
- * and `stairFlight` refuses (see its test). They stay in the table so the fix is a one-line change if
- * the encoding ever grows a tiebreak; until then a one-flank staircase draws the bare mesh and the
- * cell's own wall beside it, which looks the same.
+ * Widths are measured at the TREAD, not the bounding box, because the two differ: `stairs` is 5.00
+ * across but only 3.50 of it is walkable — the rest is banister, and it lands exactly in the boundary
+ * zone where a wall would be. That is why the banistered flight is right when the flanks are OPEN and
+ * the walled one when they are not: both are 5.00 over a 4u block, and in both cases the extra half
+ * unit either side is doing a job.
+ *
+ * NOT EVERY MESH IN THE KIT IS REACHABLE, and the two reasons are worth stating rather than leaving
+ * as a puzzle:
+ *   `stairs_wall_left` / `_right` — walling exactly one flank leaves BOTH axes with one closed end, so
+ *     the climb stops being decidable and `stairFlight` refuses (see its test). They stay listed so the
+ *     fix is a one-line change if the encoding grows a tiebreak; until then a one-flank staircase draws
+ *     the bare mesh with the cell's own wall beside it, which looks the same.
+ *   `stairs_narrow` — the exact-4.00 variant, 2.50 of tread. Nothing selects it because a block with
+ *     open flanks has room for the roomier banistered flight, and one without gets the walled mesh.
+ *     Kept in PIECE for a tight placement the model cannot currently express.
+ *   `stairs_wood_decorated` — a dressing of `stairs_wood`, and cosmetic variants are a view-layer
+ *     choice (view-seeded by cell hash), not something the sim should pick.
  */
 const STAIR_MESHES = [
   //  url                      mat      run  across  walls          measured w x d (world units)
@@ -219,14 +232,9 @@ const STAIR_MESHES = [
   { url: PIECE.stairsWalled, mat: 'stairs', run: 2, across: 2, walls: 2 },      // 5.00 x 4.00 = 4u + 0.5
   { url: PIECE.stairsWallLeft, mat: 'stairs', run: 2, across: 2, walls: -1 },   // 4.00 x 5.00, wall at -X
   { url: PIECE.stairsWallRight, mat: 'stairs', run: 2, across: 2, walls: 1 },   // 4.00 x 5.00, wall at +X
-  { url: PIECE.stairs, mat: 'stairs', run: 2, across: 2, walls: 0 },            // 4.00 x 4.00, bare
+  { url: PIECE.stairsBanister, mat: 'stairs', run: 2, across: 2, walls: 0 },    // 5.00 wide, 3.50 tread
 ] as const satisfies readonly { url: string; mat: FloorMaterial; run: number; across: number; walls: number }[];
 
-/** How long a flight of each material has to be, in cells. Authored material, not sensed: a wooden
- *  flight is shallower and spans THREE cells where a stone one spans two, so the choice changes the
- *  footprint and cannot be a dressing applied afterwards. */
-export const STAIR_RUN: Partial<Record<FloorMaterial, number>> =
-  Object.fromEntries(STAIR_MESHES.map((m) => [m.mat, m.run]));
 
 /** Stairs rise toward -Z natively, so N is the unturned case. NOT the table walls use — a wall runs
  *  along X, so its unturned case is E. */
@@ -307,6 +315,56 @@ export function stairFlight(
   if (!best) return null;
 
   return { x, y, bw, bh, up, width, run, walls: best.walls, url: best.url };
+}
+
+/**
+ * Why a block of stair cells did NOT become a flight. `stairFlight` answers yes-or-no because that is
+ * all placement needs; an author needs the reason, because the failure is silent — the cells just draw
+ * as ordinary ground and nothing says the staircase you painted is not a staircase.
+ *
+ * Returns null when the block IS a flight, or when (x,y) does not own one.
+ */
+export type StairFault =
+  | { kind: 'ragged'; mat: FloorMaterial }
+  | { kind: 'undecidable'; mat: FloorMaterial; bw: number; bh: number }
+  | { kind: 'no-mesh'; mat: FloorMaterial; run: number; width: number };
+
+export function stairFault(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+): StairFault | null {
+  const mat = stairMat(cells, w, h, x, y);
+  if (mat === null) return null;
+  if (isStairs(cells, w, h, x - 1, y, mat) || isStairs(cells, w, h, x, y - 1, mat)) return null;
+
+  let bw = 1; while (isStairs(cells, w, h, x + bw, y, mat)) bw++;
+  let bh = 1; while (isStairs(cells, w, h, x, y + bh, mat)) bh++;
+  for (let j = 0; j < bh; j++) {
+    for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return { kind: 'ragged', mat };
+  }
+
+  const closed = {
+    N: sideClosed(cells, w, h, x, y, bw, bh, 'N'), S: sideClosed(cells, w, h, x, y, bw, bh, 'S'),
+    W: sideClosed(cells, w, h, x, y, bw, bh, 'W'), E: sideClosed(cells, w, h, x, y, bw, bh, 'E'),
+  };
+  const vertical = closed.N !== closed.S, horizontal = closed.W !== closed.E;
+  if (vertical === horizontal) return { kind: 'undecidable', mat, bw, bh };
+
+  const width = vertical ? bw : bh, run = vertical ? bh : bw;
+  if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run)) return { kind: 'no-mesh', mat, run, width };
+  return null;
+}
+
+/** Human-readable, for the editor's readout. */
+export function stairFaultText(f: StairFault): string {
+  if (f.kind === 'ragged') return 'not a rectangle — a flight has to be a solid block of stair cells';
+  if (f.kind === 'undecidable') {
+    return f.bw === f.bh
+      ? 'cannot tell which way it climbs — exactly one END must be walled, and with two adjacent sides '
+        + 'walled on a square block both readings are equally good'
+      : 'cannot tell which way it climbs — exactly one END must be walled and the other open';
+  }
+  const want = [...new Set(STAIR_MESHES.filter((m) => m.mat === f.mat).map((m) => m.run))].sort();
+  return `no ${f.mat} flight is ${f.run} cells long — it must be ${want.join(' or ')}`;
 }
 
 /** Is this cell inside a flight owned by another cell? Such a cell contributes no ground of its own. */

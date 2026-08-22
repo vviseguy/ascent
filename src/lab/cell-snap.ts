@@ -10,6 +10,7 @@
 // Deliberately inert: no controls, no timers, no interaction. The camera is set from the URL and the
 // page renders exactly once, so two snapshots of the same query are byte-comparable.
 //
+//   ?demo=<kind>               a synthetic subject, for checking a mesh choice in isolation
 //   ?structure=<name>          one authored structure, on its own
 //   ?floor=<w>x<h>&seed=<n>    a generated floor
 //   &turn=0..3 &flip=1         orient the structure first — the placement must survive all eight
@@ -45,7 +46,30 @@ const num = (k: string, d: number): number => { const v = Number(q.get(k)); retu
 
 interface Subject { cells: (Cell | null)[]; w: number; h: number; extent: { w: number; h: number }; label: string }
 
+/** Synthetic subjects. For checking a placement rule that no authored structure happens to exercise —
+ *  a bare flight with open flanks, say, when every structure in the store has walled ones. */
+function demo(kind: string): Subject {
+  const W = 6, H = 6;
+  const cells: (Cell | null)[] = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'air', wallType: 'solid' };
+      const inBlock = x >= 2 && x <= 3 && y >= 2 && y <= 3;
+      if (inBlock) c.floor = kind === 'stairs-wood' ? 'stairs_wood' : 'stairs';
+      if (y === 2 && x >= 2 && x <= 3) c.wallN = 'wall';             // north end closed: climbs north
+      if (kind === 'stairs-walled' && (y === 2 || y === 3) && (x === 2 || x === 4)) c.wallW = 'wall';
+      cells.push(c);
+    }
+  }
+  if (kind === 'stairs-wood') {                                       // a wooden flight needs 3 cells
+    for (const x of [2, 3]) { const c = cells[4 * W + x]!; c.floor = 'stairs_wood'; }
+  }
+  return { cells, w: W, h: H, extent: { w: W, h: H }, label: `demo: ${kind}` };
+}
+
 function subject(): Subject {
+  const kind = q.get('demo');
+  if (kind) return demo(kind);
   const floor = q.get('floor');
   if (floor) {
     const m = /^(\d+)x(\d+)$/.exec(floor);

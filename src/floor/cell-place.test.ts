@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFlight, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFault, stairFaultText, stairFlight, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
@@ -186,7 +186,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
       expect(stairFlight(cs, SW, SH, x, y)).toBeNull();
       expect(ground(cs, x, y)).toEqual([]);
     }
-    expect(ground(cs, 1, 1)).toEqual(['stairs_narrow']);
+    expect(ground(cs, 1, 1)).toEqual(['stairs']);
   });
 
   it('lands the mesh ON the block, allowing for a pivot that sits at the TOP of the flight', () => {
@@ -207,7 +207,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
   });
 
   it('SENSES walls either side and switches to the walled mesh', () => {
-    expect(stairFlight(block(), SW, SH, 1, 1)!.url).toContain('stairs_narrow');
+    expect(stairFlight(block(), SW, SH, 1, 1)!.url).toContain('/stairs.');
     const walled = stairFlight(block({ flanks: true }), SW, SH, 1, 1)!;
     expect(walled.walls).toBe(2);
     expect(walled.url).toContain('stairs_walled');
@@ -244,7 +244,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
       c.floor = inBlock ? 'stairs' : 'wood';
       if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
-    expect(stairFlight(stoneInWood, SW, SH, 1, 1)!.url).toContain('stairs_narrow');
+    expect(stairFlight(stoneInWood, SW, SH, 1, 1)!.url).toContain('/stairs.');
   });
 
   it('will not stretch a mesh to a length it does not have', () => {
@@ -274,6 +274,31 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     // the stone block is 2 long and complete; the wood below it is a separate, unspannable block
     expect(stairFlight(mixed, SW, SH, 1, 1)).toMatchObject({ run: 2, bh: 2 });
     expect(stairFlight(mixed, SW, SH, 1, 3)).toBeNull();
+  });
+
+  it('SAYS WHY a stair block is not a flight, because the failure is otherwise silent', () => {
+    const ragged = mk((c, x, y) => {
+      if ((x === 1 && y === 1) || (x === 2 && y === 1) || (x === 1 && y === 2)) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    expect(stairFault(ragged, SW, SH, 1, 1)).toMatchObject({ kind: 'ragged' });
+    expect(stairFaultText(stairFault(ragged, SW, SH, 1, 1)!)).toContain('rectangle');
+
+    const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
+    expect(stairFault(openBoth, SW, SH, 1, 1)).toMatchObject({ kind: 'undecidable' });
+    expect(stairFaultText(stairFault(openBoth, SW, SH, 1, 1)!)).toContain('which way it climbs');
+
+    const tooLong = mk((c, x, y) => {
+      if (x >= 1 && x <= 2 && y >= 1 && y <= 3) c.floor = 'stairs';
+      if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+    });
+    expect(stairFault(tooLong, SW, SH, 1, 1)).toMatchObject({ kind: 'no-mesh', run: 3 });
+    expect(stairFaultText(stairFault(tooLong, SW, SH, 1, 1)!)).toContain('3 cells long');
+
+    // a block that IS a flight has no fault to report
+    expect(stairFault(block(), SW, SH, 1, 1)).toBeNull();
+    // and a cell that owns nothing reports nothing either way
+    expect(stairFault(block(), SW, SH, 0, 0)).toBeNull();
   });
 
   /* A SQUARE block walled on two ADJACENT sides is undecidable, and this pins that rather than

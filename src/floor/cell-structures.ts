@@ -149,11 +149,18 @@ export const getStructure = (name: string): CellStructure | undefined => {
   };
 };
 
-/** A structure as a standalone grid, ready to resolve or preview. */
-export function structureGrid(name: string): CellGrid | undefined {
+/**
+ * ONE STOREY of a structure as a standalone grid, ready to resolve or preview.
+ *
+ * A grid is a single lattice, so a multi-storey structure cannot be one — asking for the whole thing
+ * would hand back a grid whose dimensions disagree with its own array length, which is what this did
+ * before levels existed.
+ */
+export function structureGrid(name: string, level = 0): CellGrid | undefined {
   const s = getStructure(name);
-  if (!s) return undefined;
+  if (!s || level < 0 || level >= levelsOf(s)) return undefined;
   const g = makeGrid(s.w + 1, s.h + 1); // the point lattice, not the floor extent
-  g.cells = s.cells.map((f) => ({ ...f }));
+  const size = levelSize(s);
+  g.cells = s.cells.slice(level * size, (level + 1) * size).map((f) => ({ ...f }));
   return g;
 }

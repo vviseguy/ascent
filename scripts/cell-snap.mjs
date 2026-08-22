@@ -31,7 +31,7 @@ for (const a of args) {
   if (a.startsWith('--')) { const [k, v] = a.slice(2).split('='); flags.set(k, v ?? '1'); } else pos.push(a);
 }
 const mode = pos[0];
-if (!mode || !['structure', 'floor', 'all'].includes(mode)) {
+if (!mode || !['structure', 'floor', 'all', 'demo'].includes(mode)) {
   console.error('usage: node scripts/cell-snap.mjs structure "<name>" | floor <w>x<h> | all  [--turns] [--seed=n] [--no-build]');
   process.exit(2);
 }
@@ -92,7 +92,10 @@ async function shot(query, name) {
 
 mkdirSync(join(root, outDir), { recursive: true });
 
-if (mode === 'floor') {
+if (mode === 'demo') {
+  const kind = pos[1] ?? 'stairs-open';
+  await shot(`demo=${encodeURIComponent(kind)}`, `demo-${kind}`);
+} else if (mode === 'floor') {
   const size = pos[1] ?? '36x28';
   const seed = flags.get('seed') ?? '1';
   await shot(`floor=${size}&seed=${seed}`, `floor-${size}-s${seed}`);

@@ -26,6 +26,7 @@
 
 import {
   SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES,
+  isStairFloor,
   type Seg, type FloorMaterial, type Corner, type WallType, type Cell,
 } from '../floor/cell.ts';
 import {
@@ -33,10 +34,12 @@ import {
   type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
+import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
 import {
-  CONFLICT, CORNER_COLOR, FLOOR_COLOR, FLOOR_HATCH, SEG_COLOR, SEG_HATCH, WALLTYPE_COLOR,
-  hatchesFor, legend, maskValues, mixMask, patternDefs,
+  CASING, channelColor, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend, maskValues,
+  openingIsPlain, openingRings, patternDefs, rgb, segInk, segValueColor,
+  CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH,
 } from './cell-visual.ts';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -45,10 +48,10 @@ import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
 
 /* --------------------------------- palette ---------------------------------- */
-// The colours, the mixing rule and the hatches live in `cell-visual.ts`, so the grid, the legend and
-// the brush indicator cannot drift apart — all three read the same tables.
+// The channel alphabet, the hatches and the legend all live in `cell-visual.ts`, so the grid, the key
+// and the brush strip cannot drift apart — all three read the same tables.
 
-const domColor = mixMask;
+const CONFLICT = '#ff2d55';
 
 /* ---------------------------------- state ----------------------------------- */
 
@@ -313,7 +316,7 @@ function render(): void {
         if (!c || c.floor === 'none') continue;
         svg.append(svgEl('rect', {
           x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
-          fill: FLOOR_COLOR[c.floor], opacity: 0.22, 'pointer-events': 'none',
+          fill: floorValueColor(c.floor), opacity: 0.2, 'pointer-events': 'none',
         }));
       }
     }
@@ -324,7 +327,7 @@ function render(): void {
         const ghost = (x2: number, y2: number, seg: Seg): void => {
           if (seg === 'none') return;
           svg.append(svgEl('line', {
-            x1: X(px), y1: Y(py), x2, y2, stroke: SEG_COLOR[seg], 'stroke-width': 6,
+            x1: X(px), y1: Y(py), x2, y2, stroke: segValueColor(seg), 'stroke-width': 9,
             opacity: 0.18, 'stroke-linecap': 'round', 'pointer-events': 'none',
           }));
         };
@@ -338,10 +341,16 @@ function render(): void {
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const f = cells[base() + y * stride() + x]!;
+      const ink = floorInk(f.floor);
+      // `none` allowed dims the ground rather than taking a colour of its own — absence is not a
+      // material, and giving it a channel would cost one of only three.
       const rect = svgEl('rect', {
         x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
-        fill: domColor(f.floor, FLOOR_MATERIALS, FLOOR_COLOR),
-        stroke: '#1b1f25', 'stroke-width': 1, cursor: 'pointer',
+        fill: ink.certainlyVoid ? '#0d1016' : ink.fill,
+        // strength = how few values are still open; void dims further on top of that
+        opacity: ink.certainlyVoid ? 1 : ink.strength * (ink.maybeVoid ? 0.6 : 1),
+        stroke: ink.conflict ? CONFLICT : '#12161c',
+        'stroke-width': ink.conflict ? 2 : 1, cursor: 'pointer',
       });
       paintable(rect, (clear) => {
         if (brush.mode === 'floor') applyAt(x, y, 'floor', clear);
@@ -349,8 +358,8 @@ function render(): void {
         else if (brush.mode === 'select') dragSelect(x, y);
       });
       svg.append(rect);
-      // HATCH — one overlay per marked value in the domain, faint while the value is only possible
-      for (const { id, opacity } of hatchesFor(f.floor, FLOOR_MATERIALS, FLOOR_HATCH)) {
+      // the two PARALLEL diagonals, riding on top of the material colour
+      for (const { id, opacity } of ink.hatches) {
         svg.append(svgEl('rect', {
           x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
           fill: `url(#${id})`, opacity, 'pointer-events': 'none',
@@ -385,27 +394,28 @@ function render(): void {
     for (let px = 0; px <= W; px++) {
       const f = cells[base() + py * stride() + px]!;
       const line = (x2: number, y2: number, m: Mask, what: 'wallN' | 'wallW'): void => {
-        const decided = domainSize(m) === 1;
+        const ink = segInk(m);
         const hit = svgEl('line', {
-          x1: X(px), y1: Y(py), x2, y2, stroke: 'transparent', 'stroke-width': 18, cursor: 'pointer',
+          x1: X(px), y1: Y(py), x2, y2, stroke: 'transparent', 'stroke-width': 20, cursor: 'pointer',
         });
         paintable(hit, (clear) => { if (brush.mode === 'wall') applyAt(px, py, what, clear); });
         svg.append(hit);
-        const wide = decided ? 7 : 4;
+        if (ink.certainlyGone) return;             // nothing there, and it says so by being nothing
+        // a dark CASING first, so a wall never merges into ground of the same channel
         svg.append(svgEl('line', {
-          x1: X(px), y1: Y(py), x2, y2,
-          stroke: domColor(m, SEGS, SEG_COLOR),
-          'stroke-width': wide,
-          'stroke-dasharray': decided ? '' : '5 4',
+          x1: X(px), y1: Y(py), x2, y2, stroke: CASING, 'stroke-width': 15,
           'stroke-linecap': 'round', 'pointer-events': 'none',
         }));
-        // a hatched value paints its pattern INTO the stroke, so a sloped wall is diagonally hashed
-        for (const { id, opacity } of hatchesFor(m, SEGS, SEG_HATCH)) {
-          svg.append(svgEl('line', {
-            x1: X(px), y1: Y(py), x2, y2, stroke: `url(#${id})`, 'stroke-width': wide,
-            'stroke-linecap': 'round', opacity, 'pointer-events': 'none',
-          }));
-        }
+        // DASHED means `none` is in the domain: it might not be there. Same meaning as the dimmed
+        // floor — absence is shown by the drawing being less solid, never by a colour.
+        svg.append(svgEl('line', {
+          x1: X(px), y1: Y(py), x2, y2,
+          stroke: ink.conflict ? CONFLICT : ink.stroke,
+          'stroke-width': 11,
+          opacity: ink.strength,
+          'stroke-dasharray': ink.maybeGone ? '9 6' : '',
+          'stroke-linecap': 'round', 'pointer-events': 'none',
+        }));
       };
       if (hasN(px)) line(X(px + 1), Y(py), f.wallN, 'wallN');
       if (hasW(py)) line(X(px), Y(py + 1), f.wallW, 'wallW');
@@ -416,29 +426,30 @@ function render(): void {
   for (let py = 0; py <= H; py++) {
     for (let px = 0; px <= W; px++) {
       const f = cells[base() + py * stride() + px]!;
-      const decided = domainSize(f.corner) === 1;
+      /* OPENING RINGS, drawn tight around the corner and BEFORE it so the dot sits on top: six values
+         will not fit three channels, so they ride as two rings of three — the corner's own boundary,
+         rather than a separate mark competing for the same spot. A plain solid opening draws neither,
+         which keeps a board of ordinary corners quiet. */
+      if (!openingIsPlain(f.wallType)) {
+        openingRings(f.wallType).forEach((col, i) => {
+          if (!col) return;
+          svg.append(svgEl('circle', {
+            cx: X(px), cy: Y(py), r: 11 + i * 3.5, fill: 'none', stroke: col,
+            'stroke-width': 2.6, 'pointer-events': 'none',
+          }));
+        });
+      }
       const dot = svgEl('circle', {
-        cx: X(px), cy: Y(py), r: decided ? 6 : 4,
-        fill: domColor(f.corner, CORNERS, CORNER_COLOR), stroke: '#15181c', 'stroke-width': 1.5, cursor: 'pointer',
+        cx: X(px), cy: Y(py), r: domainSize(f.corner) === 1 ? 8 : 6,
+        fill: f.corner === 0 ? CONFLICT : cornerInk(f.corner),
+        opacity: f.corner === 0 ? 1 : cornerStrength(f.corner),
+        stroke: '#12161c', 'stroke-width': 2, cursor: 'pointer',
       });
       paintable(dot, (clear) => {
         if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
         else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
       });
       svg.append(dot);
-      // OPENING — a ring in the opening's own colour, so door/arch/window are told apart at a glance
-      // rather than all reading as "something non-solid here"
-      if (f.wallType !== wallTypes('solid')) {
-        const opts = maskValues(f.wallType, WALL_TYPES).filter((t) => t !== 'solid');
-        if (opts.length) {
-          svg.append(svgEl('circle', {
-            cx: X(px), cy: Y(py), r: 11, fill: 'none',
-            stroke: domColor(f.wallType, WALL_TYPES, WALLTYPE_COLOR),
-            'stroke-width': 2, 'stroke-dasharray': domainSize(f.wallType) === 1 ? '' : '3 3',
-            'pointer-events': 'none',
-          }));
-        }
-      }
     }
   }
 
@@ -518,19 +529,20 @@ function buildBrushBar(): void {
   const chosen = (): { vals: string[]; color: string; hatches: { id: string; opacity: number }[] } => {
     if (brush.mode === 'wall') {
       const m = brush.seg.size ? segs(...brush.seg) : 0;
-      return { vals: [...brush.seg], color: mixMask(m, SEGS, SEG_COLOR), hatches: hatchesFor(m, SEGS, SEG_HATCH) };
+      return { vals: [...brush.seg], color: segInk(m).stroke, hatches: [] };
     }
     if (brush.mode === 'floor') {
       const m = brush.floor.size ? floors(...brush.floor) : 0;
-      return { vals: [...brush.floor], color: mixMask(m, FLOOR_MATERIALS, FLOOR_COLOR), hatches: hatchesFor(m, FLOOR_MATERIALS, FLOOR_HATCH) };
+      const ink = floorInk(m);
+      return { vals: [...brush.floor], color: ink.certainlyVoid ? '#0d1016' : ink.fill, hatches: ink.hatches };
     }
     if (brush.mode === 'corner') {
       const m = brush.corner.size ? corners(...brush.corner) : 0;
-      return { vals: [...brush.corner], color: mixMask(m, CORNERS, CORNER_COLOR), hatches: [] };
+      return { vals: [...brush.corner], color: cornerInk(m), hatches: [] };
     }
     if (brush.mode === 'wallType') {
       const m = brush.wallType.size ? wallTypes(...brush.wallType) : 0;
-      return { vals: [...brush.wallType], color: mixMask(m, WALL_TYPES, WALLTYPE_COLOR), hatches: [] };
+      return { vals: [...brush.wallType], color: openingRings(m).find(Boolean) ?? '#3b6ea5', hatches: [] };
     }
     return { vals: [], color: '#3b6ea5', hatches: [] };
   };
@@ -579,13 +591,17 @@ function buildLegend(): void {
       const row = h('div', { class: 'legend-row' });
       row.append(swatch(r.color, r.hatch));
       row.append(h('span', {}, r.label));
+      if (r.note) row.append(h('span', { class: 'lg-note' }, r.note));
       rows.append(row);
     }
     box.append(rows);
+    if (group.note) box.append(h('div', { class: 'hint lg-groupnote' }, group.note));
   }
+  // the whole idea, in one line
   box.append(h('div', { class: 'hint' },
-    'Colours MIX: a field that allows several values shows all of them blended, and the number in the '
-    + 'square is how many. A hatch means that value is possible; a solid hatch means it is certain.'));
+    'CHANNELS ADD. Each value owns red, green or blue, and a field lights the channels of everything '
+    + 'it allows — so yellow means the first two, white means all three, and you can read a mixture '
+    + 'back to its members. The number in a square is how many values are still open.'));
 }
 
 function buildReadout(res: (Cell | null)[]): void {
@@ -619,7 +635,9 @@ function buildReadout(res: (Cell | null)[]): void {
   /* An upper storey with no ground is normal — that is what an open shaft over a staircase IS — so it
      is only worth warning about on the ground floor, where it means the structure has no room in it. */
   const groundFloor = L === 0;
-  const warn = conflicts > 0 || (walkable === 0 && groundFloor) || connected < walkable;
+  const stairs = stairReport();
+  const warn = conflicts > 0 || (walkable === 0 && groundFloor) || connected < walkable
+    || stairs.some((l) => l.startsWith('⚠'));
   box.textContent = [
     `${W}×${H} floor · ${W + 1}×${H + 1} stored`
       + (LEVELS > 1 ? ` · storey ${L} of ${LEVELS}` : ''),
@@ -630,8 +648,61 @@ function buildReadout(res: (Cell | null)[]): void {
         : 'walkable area is one piece',
     `${undecided} field(s) undecided — the generator will choose`,
     conflicts ? `⚠ ${conflicts} cell(s) have an EMPTY domain` : '',
+    ...stairs,
   ].filter(Boolean).join('\n');
   box.style.color = warn ? '#e0a04a' : '#7fc8a0';
+}
+
+/**
+ * WHAT THE STAIRS ON THIS STOREY ACTUALLY ARE.
+ *
+ * A stair block that is not a valid flight fails SILENTLY — the cells just draw as ordinary ground,
+ * and nothing tells you the staircase you painted is not a staircase. This says so, and says why.
+ *
+ * It also checks the thing multi-storey structures exist FOR: that the deck above a flight is open,
+ * and that no wall stands where you arrive. "Guarantee" is too strong for an editor — it warns rather
+ * than refuses — but an unchecked guarantee is just a hope.
+ */
+function stairReport(): string[] {
+  const here = resolvedLevel(L);
+  const above = L + 1 < LEVELS ? resolvedLevel(L + 1) : null;
+  const out: string[] = [];
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c = here[y * stride() + x];
+      if (!c || !isStairFloor(c.floor)) continue;
+
+      const flight = stairFlight(here, stride(), H + 1, x, y);
+      if (!flight) {
+        const fault = stairFault(here, stride(), H + 1, x, y);
+        if (fault) out.push(`⚠ stairs at (${x},${y}): ${stairFaultText(fault)}`);
+        continue;
+      }
+      const mesh = flight.url.split('/').pop()!.replace('.gltf.glb', '');
+      out.push(`stairs at (${x},${y}): ${flight.bw}×${flight.bh}, climbs ${flight.up} — ${mesh}`);
+
+      if (!above) continue;
+      // THE CEILING over the whole footprint, and the arrival cell just beyond the top
+      let sealed = 0;
+      for (let j = 0; j < flight.bh; j++) {
+        for (let i = 0; i < flight.bw; i++) {
+          const up = above[(flight.y + j) * stride() + (flight.x + i)];
+          if (up && up.floor !== 'none') sealed++;
+        }
+      }
+      if (sealed) out.push(`⚠   its ceiling is closed (${sealed} cell(s) of floor on storey ${L + 1})`);
+
+      // the cell you step onto: one past the TOP end, on the storey above
+      const ax = flight.x + (flight.up === 'E' ? flight.bw : flight.up === 'W' ? -1 : 0);
+      const ay = flight.y + (flight.up === 'S' ? flight.bh : flight.up === 'N' ? -1 : 0);
+      const arrive = ax >= 0 && ay >= 0 && ax < W && ay < H ? above[ay * stride() + ax] : undefined;
+      if (arrive && arrive.floor === 'none') {
+        out.push(`⚠   nothing to step onto at the top — (${ax},${ay}) on storey ${L + 1} has no floor`);
+      }
+    }
+  }
+  return out;
 }
 
 /* ---------------------------------- modal ----------------------------------- */
@@ -702,12 +773,12 @@ function buildPanel(): void {
   p.append(h('div', { class: 'row' }, ...modes.map(([m, label]) =>
     h('div', { class: `chip${brush.mode === m ? ' on' : ''}`, onclick: () => { brush.mode = m; buildPanel(); } }, label))));
 
-  if (brush.mode === 'wall') { p.append(h('h2', {}, 'wall — a SET')); p.append(chipRow(SEGS, brush.seg, SEG_COLOR)); }
-  else if (brush.mode === 'floor') { p.append(h('h2', {}, 'floor — a SET')); p.append(chipRow(FLOOR_MATERIALS, brush.floor, FLOOR_COLOR)); }
-  else if (brush.mode === 'corner') { p.append(h('h2', {}, 'corner — a SET')); p.append(chipRow(CORNERS, brush.corner, CORNER_COLOR)); }
+  if (brush.mode === 'wall') { p.append(h('h2', {}, 'wall — a SET')); p.append(chipRow(SEGS, brush.seg, SEG_SWATCH)); }
+  else if (brush.mode === 'floor') { p.append(h('h2', {}, 'floor — a SET')); p.append(chipRow(FLOOR_MATERIALS, brush.floor, FLOOR_SWATCH)); }
+  else if (brush.mode === 'corner') { p.append(h('h2', {}, 'corner — a SET')); p.append(chipRow(CORNERS, brush.corner, CORNER_SWATCH)); }
   else if (brush.mode === 'wallType') {
     p.append(h('h2', {}, 'opening — a SET'));
-    p.append(chipRow(WALL_TYPES, brush.wallType, null));
+    p.append(chipRow(WALL_TYPES, brush.wallType, WALLTYPE_SWATCH));
     p.append(h('div', { class: 'hint' }, 'door / arch need an `air` corner to be walkable; the rest stay solid.'));
   } else if (brush.mode === 'select') {
     p.append(h('h2', {}, 'selection'));
