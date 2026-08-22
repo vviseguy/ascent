@@ -11,7 +11,7 @@ file is the map + the non-obvious rules that must not be reverted. Full design c
 - [`docs/ENGINE-ARCHITECTURE.md`](docs/ENGINE-ARCHITECTURE.md) — the custom physics engine (fixed-point; Rapier = test oracle only).
 - [`docs/GENERATION-SOLVABILITY.md`](docs/GENERATION-SOLVABILITY.md) — the solvability invariant + the independent verifier.
 - **Working on world generation / rendering?** → **[`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) first** — the AS-BUILT map: every stage's file, output, invariant, gate, and BUILT-vs-DESIGNED status, plus a "you want to change X → touch Y" table. Then [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md) for *why* the design is what it is (large parts of it are design-only — docs/13 §6 says which), and [`docs/14`](docs/14-terrain-puzzles-solvability.md) / [`docs/15`](docs/15-world-object-model.md) for puzzles + the WorldObject split.
-- **Working on assets / colors?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) (authoritative — the `recolor.ts` swatch system) + [`docs/ART-LAB.md`](docs/ART-LAB.md).
+- **Working on assets / colors?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) (authoritative — the `recolor.ts` swatch system, the `tiling.ts` surface layer, and material PROFILES) + [`docs/ART-LAB.md`](docs/ART-LAB.md).
 - **What to work on next** → [`BACKLOG.md`](BACKLOG.md) (the live queue) + [`docs/GAPS.md`](docs/GAPS.md) (the intent audit it draws from).
 
 ## Run / prove / test
@@ -25,6 +25,8 @@ npm run build          # tsc -b && vite build (also the CI/Pages build)
 
 # Asset Lab (browse/iterate KayKit models + colors in isolation):
 npm run lab            # opens lab.html — turntable gallery + box-fit + recolor legend
+npm run sheet          # opens sheet.html — EVERY object on one grid under one material profile
+npm run tex:seams      # is a texture actually tileable? scores every public/textures/*_diff
 npm run lab:snap -- <element>   # headless screenshot of one element (agents can see PNGs)
 npm run probe:palette  # sample the real GLBs → which atlas swatch each triangle lands on
 
@@ -32,6 +34,7 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 #   /ascent/tile-editor.html   paint a tile's 9 cells as DOMAINS + live corner-graph connectivity
 #   /ascent/board.html         stamp room templates; watch commit vs rollback on overlap
 #   /ascent/walltile.html      one WallTile → its tilePlacements → meshes
+#   /ascent/sheet.html         the material CONTACT SHEET (every object, one profile, live re-bake)
 # NOTE: the in-app preview pane can't screenshot these (continuous rAF on a WebGL canvas).
 # Use headless Playwright with --use-gl=swiftshader, like scripts/lab-snap.mjs does.
 

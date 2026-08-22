@@ -43,6 +43,43 @@ function labApprovePlugin(): PluginOption {
   };
 }
 
+// ---- MATERIAL-PROFILE store middleware (dev only) -------------------------------------------
+// GET returns the whole profile store; POST upserts (or removes) one profile. The lab is the only
+// writer. Kept git-tracked and key-sorted so a look change reviews as a readable diff instead of
+// living in someone’s query string. Dev-only; no production-build effect.
+function profilesPlugin(): PluginOption {
+  const STORE = r('./src/lab/material-profiles.json');
+  const readBody = (req: import('node:http').IncomingMessage): Promise<string> =>
+    new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
+  return {
+    name: 'lab-profiles',
+    configureServer(server) {
+      server.middlewares.use('/__lab/profiles', (req, res, next) => {
+        const read = () => JSON.parse(readFileSync(STORE, 'utf8')) as { version: number; profiles: Record<string, unknown> };
+        res.setHeader('content-type', 'application/json');
+        if (req.method === 'GET') { res.statusCode = 200; res.end(JSON.stringify(read())); return; }
+        if (req.method !== 'POST') return next();
+        void (async () => {
+          try {
+            const { id, profile, remove } = JSON.parse(await readBody(req)) as { id: string; profile?: Record<string, unknown>; remove?: boolean };
+            if (!id) throw new Error('missing id');
+            const store = read();
+            if (remove) delete store.profiles[id];
+            else store.profiles[id] = profile ?? {};
+            store.profiles = Object.fromEntries(Object.entries(store.profiles).sort(([a], [b]) => a.localeCompare(b)));
+            writeFileSync(STORE, JSON.stringify(store, null, 2) + '\n');
+            res.statusCode = 200;
+            res.end(JSON.stringify({ ok: true, count: Object.keys(store.profiles).length }));
+          } catch (e) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: String(e) }));
+          }
+        })();
+      });
+    },
+  };
+}
+
 // ---- TILE-STRUCTURE store middleware (dev only) ---------------------------------------------
 // The tile editor POSTs a painted grid here and we merge it into src/game/structures.json (pretty +
 // key-sorted). GET returns the whole store so the editor can list/load. The game reads the JSON via
@@ -79,7 +116,7 @@ function structuresPlugin(): PluginOption {
 }
 
 export default defineConfig({
-  plugins: [labApprovePlugin(), structuresPlugin()],
+  plugins: [labApprovePlugin(), structuresPlugin(), profilesPlugin()],
   // Served from a GitHub Pages PROJECT site at vviseguy.github.io/ascent/, so all
   // asset URLs must be prefixed with the repo name. (Harmless in dev.)
   base: '/ascent/',
@@ -93,6 +130,7 @@ export default defineConfig({
         walltile: r('./walltile.html'),
         board: r('./board.html'),
         tileeditor: r('./tile-editor.html'),
+        sheet: r('./sheet.html'),
       },
     },
   },

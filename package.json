@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
     "lab": "vite --open /ascent/lab.html",
+    "sheet": "vite --open /ascent/sheet.html",
     "lab:snap": "node scripts/lab-snap.mjs",
     "tex:seams": "node scripts/tex-seam-check.mjs",
     "tex:tile": "node scripts/tex-tile-shot.mjs",
