@@ -126,3 +126,26 @@ describe('cell-place — a structure has no ground under its padding', () => {
     expect(plain).toBe(sw * sh);
   });
 });
+
+describe('cell-place — the padding carries borders, not a phantom extra layer', () => {
+  it('drops only the edges that point OUT of the structure, and keeps the real borders', () => {
+    const SW = 2, SH = 2;                        // floor extent
+    const sw = SW + 1, sh = SH + 1;              // stored point lattice
+    const cs: Cell[] = Array.from({ length: sw * sh }, () => {
+      const c = openCell();
+      c.wallN = 'wall';
+      c.wallW = 'wall';
+      return c;
+    });
+    const walls = (fx?: { w: number; h: number }): number =>
+      gridPlacements(cs, sw, sh, fx).flatMap((e) => e.placements)
+        .filter((p) => p.url.includes('wall_half')).length;
+
+    // every point has both walls set, so without a floor extent every one is drawn
+    expect(walls()).toBe(sw * sh * 2);
+    // with it: wallN survives where x < SW (so 2 columns x 3 rows), wallW where y < SH (3 x 2).
+    // The south border (wallN at y === SH) and east border (wallW at x === SW) are KEPT — they are
+    // real edges of the structure, which is the whole reason for the padding.
+    expect(walls({ w: SW, h: SH })).toBe(SW * sh + sw * SH);
+  });
+});

@@ -151,13 +151,18 @@ export function cellPlacements(
   // WALLS — this cell owns the edge running east (wallN) and the edge running south (wallW) from its
   // corner. Each is skipped when an opening already covers it: the one centred here, or the one
   // centred at the far end of the run.
+  /* An edge only EXISTS if it lies inside the structure. `wallN` runs east from this point, so it
+     needs a point one to the east (px < fw); `wallW` runs south, so it needs one below (py < fh).
+     The last column's `wallN` and the last row's `wallW` point out of the structure entirely and are
+     not part of it — drawing them added a phantom layer of wall around every piece. Note the two
+     conditions are INDEPENDENT: the south border is `wallN` at py === fh, which is real. */
   const coveredH = axis === 'H' || openingAt(cells, w, h, x + 1, y, 'H');
   const coveredV = axis === 'V' || openingAt(cells, w, h, x, y + 1, 'V');
-  if (!coveredH) {
+  if (!coveredH && x < fw) {
     const p = wallPiece(c.wallN);
     if (p) out.push(at(p, TURN.E, CX, CZ));
   }
-  if (!coveredV) {
+  if (!coveredV && y < fh) {
     const p = wallPiece(c.wallW);
     if (p) out.push(at(p, TURN.S, CX, CZ));
   }

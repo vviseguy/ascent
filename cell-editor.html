@@ -5,39 +5,57 @@
 <title>ASCENT — Cell Structure Editor (2u)</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; background: #15181c; color: #e8e3da; font: 13px/1.45 system-ui, sans-serif; display: flex; height: 100vh; overflow: hidden; }
-  #panel { width: 270px; flex: none; padding: 14px; overflow-y: auto; border-right: 1px solid #2b3038; }
-  #stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  #top { padding: 18px; overflow: auto; flex: none; max-height: 55%; }
-  #view3d { flex: 1; min-height: 300px; overflow: hidden; border-top: 1px solid #2b3038; position: relative; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #15181c; color: #e8e3da; font: 13px/1.45 system-ui, sans-serif;
+         display: flex; height: 100vh; overflow: hidden; }
+
+  /* three columns: controls | schematic | 3D — a VERTICAL split, so both views stay large */
+  #panel { width: 260px; flex: none; padding: 14px; overflow-y: auto; border-right: 1px solid #2b3038; }
+  #twod  { flex: 1 1 55%; min-width: 0; overflow: auto; padding: 22px; position: relative; }
+  #view3d { flex: 1 1 45%; min-width: 0; border-left: 1px solid #2b3038; position: relative; }
   #view3d canvas { display: block; }
-  #v3label { position: absolute; left: 10px; top: 8px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #7c8794; pointer-events: none; }
+  #v3label { position: absolute; left: 10px; top: 8px; font-size: 10px; letter-spacing: .08em;
+             text-transform: uppercase; color: #7c8794; pointer-events: none; z-index: 2; }
+
   h1 { font-size: 15px; margin: 0 0 12px; }
   h2 { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: #7c8794; margin: 16px 0 6px; }
   .row { display: flex; flex-wrap: wrap; gap: 5px; }
-  .chip { padding: 5px 9px; border-radius: 6px; background: #232830; cursor: pointer; user-select: none; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .chip { padding: 6px 10px; border-radius: 6px; background: #232830; cursor: pointer; user-select: none;
+          font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .chip.on { background: #3b6ea5; }
-  .chip:hover { background: #2e3540; }
-  .chip.on:hover { background: #4076b0; }
+  .chip:hover { background: #2e3540; } .chip.on:hover { background: #4076b0; }
   .sw { width: 11px; height: 11px; border-radius: 2px; display: inline-block; border: 1px solid #0004; }
-  button { font: inherit; padding: 5px 9px; border-radius: 6px; background: #232830; color: inherit; border: 0; cursor: pointer; }
+  button { font: inherit; padding: 6px 10px; border-radius: 6px; background: #232830; color: inherit;
+           border: 0; cursor: pointer; }
   button:hover { background: #2e3540; }
-  input { font: inherit; width: 48px; padding: 4px 6px; border-radius: 5px; background: #1b1f25; color: inherit; border: 1px solid #2b3038; }
-  .item { display: flex; align-items: center; gap: 6px; background: #1b1f25; border-radius: 6px; padding: 4px 8px; margin-bottom: 4px; }
-  .item .nm { flex: 1; cursor: pointer; }
-  .item .nm:hover { color: #7fc8a0; }
-  #status { margin-top: 12px; color: #8a939d; font-size: 11px; white-space: pre-line; }
-  #ready { margin-top: 8px; font-size: 11px; white-space: pre-line; }
+  button.primary { background: #3b6ea5; } button.primary:hover { background: #4076b0; }
+  button.danger { background: #7d3b3b; } button.danger:hover { background: #a04a4a; }
+  input, select { font: inherit; padding: 5px 7px; border-radius: 5px; background: #1b1f25; color: inherit;
+                  border: 1px solid #2b3038; }
+  .item { display: flex; align-items: center; gap: 6px; background: #1b1f25; border-radius: 6px;
+          padding: 5px 8px; margin-bottom: 4px; }
+  .item .nm { flex: 1; cursor: pointer; } .item .nm:hover { color: #7fc8a0; }
+  #ready { margin-top: 10px; font-size: 11px; white-space: pre-line; }
+  #status { margin-top: 8px; color: #8a939d; font-size: 11px; }
+  .hint { color: #6f7780; font-size: 11px; margin-top: 12px; max-width: 60ch; }
   svg { display: block; }
-  .hint { color: #6f7780; font-size: 11px; margin-top: 10px; }
+
+  /* modal — save and delete both confirm, rather than firing on a stray click */
+  #veil { position: fixed; inset: 0; background: #0009; display: none; align-items: center;
+          justify-content: center; z-index: 50; }
+  #veil.on { display: flex; }
+  #modal { background: #1b1f25; border: 1px solid #2b3038; border-radius: 10px; padding: 20px;
+           min-width: 340px; box-shadow: 0 20px 60px #0008; }
+  #modal h3 { margin: 0 0 10px; font-size: 14px; }
+  #modal p { margin: 0 0 14px; color: #9aa3ad; font-size: 12px; }
+  #modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 </style>
 </head>
 <body>
   <div id="panel"></div>
-  <div id="stage">
-    <div id="top"><svg id="grid"></svg><div class="hint" id="hint"></div></div>
-    <div id="view3d"><div id="v3label">3D — what the generator will build</div></div>
-  </div>
+  <div id="twod"><svg id="grid"></svg><div class="hint" id="hint"></div></div>
+  <div id="view3d"><div id="v3label">3D — what the generator will build</div></div>
+  <div id="veil"><div id="modal"></div></div>
   <script type="module" src="/src/lab/cell-editor.ts"></script>
 </body>
 </html>

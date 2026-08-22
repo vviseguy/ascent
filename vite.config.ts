@@ -43,65 +43,36 @@ function labApprovePlugin(): PluginOption {
   };
 }
 
-// ---- TILE-STRUCTURE store middleware (dev only) ---------------------------------------------
-// The tile editor POSTs a painted grid here and we merge it into src/game/structures.json (pretty +
-// key-sorted). GET returns the whole store so the editor can list/load. The game reads the JSON via
-// src/game/structures.ts. Dev-only; no production-build effect.
-function structuresPlugin(): PluginOption {
-  const STORE = r('./src/floor/structures.json');
-  const readBody = (req: import('node:http').IncomingMessage): Promise<string> =>
-    new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
-  return {
-    name: 'lab-structures',
-    configureServer(server) {
-      server.middlewares.use('/__lab/structures', (req, res, next) => {
-        const read = () => JSON.parse(readFileSync(STORE, 'utf8')) as { version: number; structures: Record<string, unknown> };
-        res.setHeader('content-type', 'application/json');
-        if (req.method === 'GET') { res.statusCode = 200; res.end(JSON.stringify(read())); return; }
-        if (req.method !== 'POST') return next();
-        void (async () => {
-          try {
-            const { name, structure, remove } = JSON.parse(await readBody(req)) as { name: string; structure?: Record<string, unknown>; remove?: boolean };
-            if (!name) throw new Error('missing name');
-            const store = read();
-            if (remove) delete store.structures[name];
-            else store.structures[name] = { ...structure, savedAt: new Date().toISOString() };
-            store.structures = Object.fromEntries(Object.entries(store.structures).sort(([a], [b]) => a.localeCompare(b)));
-            writeFileSync(STORE, JSON.stringify(store, null, 2) + '\n');
-            res.statusCode = 200; res.end(JSON.stringify({ ok: true, count: Object.keys(store.structures).length }));
-          } catch (e) {
-            res.statusCode = 400; res.end(JSON.stringify({ ok: false, error: String(e) }));
-          }
-        })();
-      });
-    },
-  };
-}
-
-// ---- CELL-STRUCTURE store middleware (dev only) --------------------------------------------
-// The 2u cell editor POSTs a painted POINT LATTICE here and we merge it into
-// src/floor/cell-structures.json. Same contract as the 4u store above; separate file because the
-// two models are not interchangeable and mixing them in one store would be a silent corruption.
+// ---- JSON store middleware (dev only) -------------------------------------------------------
+// An editor POSTs a painted grid here and it is merged into a git-tracked JSON file (pretty +
+// key-sorted, so diffs stay readable). GET returns the whole store so an editor can list and load.
+// One factory, three stores: the 4u tile structures, the 2u cell structures the generator reads, and
+// the editor-only brush library. Keeping them in SEPARATE files is deliberate — the two structure
+// models are not interchangeable, and brushes are authoring scratch that the sim must never see.
 const NL = String.fromCharCode(10);
-function cellStructuresPlugin(): PluginOption {
-  const STORE = r('./src/floor/cell-structures.json');
+function jsonStorePlugin(name: string, file: string): PluginOption {
+  const STORE = r(file);
   const readBody = (req: import('node:http').IncomingMessage): Promise<string> =>
     new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
   return {
-    name: 'lab-cell-structures',
+    name: `lab-store-${name}`,
     configureServer(server) {
-      server.middlewares.use('/__lab/cell-structures', (req, res, next) => {
-        const read = () => JSON.parse(readFileSync(STORE, 'utf8')) as { version: number; structures: Record<string, unknown> };
+      server.middlewares.use(`/__lab/${name}`, (req, res, next) => {
+        const read = (): { version: number; structures: Record<string, unknown>; [k: string]: unknown } => {
+          try { return JSON.parse(readFileSync(STORE, 'utf8')) as never; }
+          catch { return { version: 1, structures: {} }; }
+        };
         res.setHeader('content-type', 'application/json');
         if (req.method === 'GET') { res.statusCode = 200; res.end(JSON.stringify(read())); return; }
         if (req.method !== 'POST') return next();
         void (async () => {
           try {
-            const { name, structure, remove } = JSON.parse(await readBody(req)) as { name: string; structure?: Record<string, unknown>; remove?: boolean };
-            if (!name) throw new Error('missing name');
+            const { name: key, structure, remove } = JSON.parse(await readBody(req)) as
+              { name: string; structure?: Record<string, unknown>; remove?: boolean };
+            if (!key) throw new Error('missing name');
             const store = read();
-            if (remove) delete store.structures[name];
-            else store.structures[name] = { ...structure, savedAt: new Date().toISOString() };
+            if (remove) delete store.structures[key];
+            else store.structures[key] = { ...structure, savedAt: new Date().toISOString() };
             store.structures = Object.fromEntries(Object.entries(store.structures).sort(([a], [b]) => a.localeCompare(b)));
             writeFileSync(STORE, JSON.stringify(store, null, 2) + NL);
             res.statusCode = 200; res.end(JSON.stringify({ ok: true, count: Object.keys(store.structures).length }));
@@ -115,7 +86,12 @@ function cellStructuresPlugin(): PluginOption {
 }
 
 export default defineConfig({
-  plugins: [labApprovePlugin(), structuresPlugin(), cellStructuresPlugin()],
+  plugins: [
+    labApprovePlugin(),
+    jsonStorePlugin('structures', './src/floor/structures.json'),          // 4u, legacy
+    jsonStorePlugin('cell-structures', './src/floor/cell-structures.json'), // 2u, the generator reads this
+    jsonStorePlugin('cell-brushes', './src/lab/cell-brushes.json'),         // editor-only
+  ],
   // Served from a GitHub Pages PROJECT site at vviseguy.github.io/ascent/, so all
   // asset URLs must be prefixed with the repo name. (Harmless in dev.)
   base: '/ascent/',
