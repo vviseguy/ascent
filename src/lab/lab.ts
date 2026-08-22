@@ -51,6 +51,9 @@ import { buildRecolorLegend } from './recolor-legend.ts';
 import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
 import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
 import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
+import { mountFaceSelect, type FaceSelectHandle } from './face-select.ts';
+import { buildSurfacePanel, syncSurfacePanel } from './surface-panel.ts';
+import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
@@ -636,6 +639,37 @@ async function boot(): Promise<void> {
       ],
     });
 
+    // ---- SURFACES: per-triangle selection + hide, attached to the MESH ----
+    // Mesh-backed objects only: a procedural build has no GLB behind it, so there is nothing stable
+    // to key an edit to. The store loads first so an existing hidden set is already applied by the
+    // build above and the picker starts in agreement with what is on screen.
+    const surfaceUrl = (built as WorldObjectBuild).meshUrl;
+    if (surfaceUrl) {
+      {
+        const entry = hiddenFor(surfaceUrl);
+        const faces: FaceSelectHandle = mountFaceSelect({
+          root: built.root,
+          scene,
+          camera: cam,
+          dom: renderer.domElement,
+          controls,
+          ...(entry ? { initialHidden: entry.hidden } : {}),
+          onChange: () => syncSurfacePanel(),
+          render: renderOnce,
+        });
+        buildSurfacePanel({
+          container: document.body,
+          select: faces,
+          meshUrl: surfaceUrl,
+          // hiding changes the silhouette, so the collision fit has to be redone against it
+          refit: () => refit(),
+          // sourceHash, NOT the live root: with faces already hidden the root IS the filtered mesh,
+          // and storing that hash makes the next cold load reject the edit as "geometry changed".
+          save: () => saveSurfaces(surfaceUrl, { geom: faces.sourceHash(), hidden: faces.hidden() }),
+        });
+      }
+    }
+
     // ---- APPROVE & SAVE: freeze this object's auto-fit + materials to the published store ----
     // Reads the LIVE fit/material state on click (post-refit), POSTs to the dev middleware.
     buildApproveButton({
@@ -697,7 +731,7 @@ async function boot(): Promise<void> {
   // back. State PERSISTS in the URL (?ui=0) via replaceState, so it survives a reload / the
   // coloring + boxes navigations instead of being lost. The button itself always stays visible.
   {
-    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend', 'texture-settings'];
+    const ids = ['hud', 'object-picker', 'fit-controls', 'lab-controls', 'recolor-legend', 'texture-settings', 'surface-panel'];
     const btn = document.createElement('button');
     Object.assign(btn.style, {
       position: 'fixed', right: '10px', top: '10px', zIndex: '30', cursor: 'pointer',
