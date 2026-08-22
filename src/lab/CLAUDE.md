@@ -83,6 +83,13 @@ head-on sits at the flat top of the cosine and reveals almost nothing — which 
 parked beside the object rather than in front of it), and a normal map does **not** self-shadow,
 so relief cannot occlude itself. That needs parallax occlusion, which is the next rung up.
 
+Both sources carry a **tint** swatch (`?keytint=` / `?torchtint=`), because a material is a
+response to a light and judging one under a neutral studio white is judging it under conditions
+it will never ship in — the game mixes a cool key + hemisphere with warm torch points, which is
+exactly the warm/cool split docs/06 asks for ("cool desaturated neutrals, plus one warm
+resolved-and-lit accent"). The same stone reads as sandstone under a sodium key and as basalt
+under a blue one, with no change to the material at all.
+
 **Cost.** Per textured fragment: 3 texture fetches (albedo array, surface array, shade map) plus
 the slot read, no branch chain. Program count is the number worth watching, and it is now FLAT:
 every recolored material emits byte-identical source, so they share ONE compiled program.
