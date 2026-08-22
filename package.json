@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
-  "description": "ASCENT \u2014 a realtime multiplayer vertical escort brawl-race (rollback netcode, custom deterministic fixed-point physics).",
+  "description": "ASCENT — a realtime multiplayer vertical escort brawl-race (rollback netcode, custom deterministic fixed-point physics).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -28,7 +28,8 @@
     "prove:sim": "node --experimental-strip-types src/sim/prove.ts",
     "prove:game": "node --experimental-strip-types src/game/prove.ts",
     "prove:net": "node --experimental-strip-types src/net/prove.ts",
-    "prove": "npm run prove:fixed && npm run prove:floor && npm run prove:emergent && npm run prove:world && npm run prove:spatial && npm run prove:collide && npm run prove:verbs && npm run prove:abilities && npm run prove:hazards && npm run prove:breakable && npm run prove:interact && npm run prove:sim && npm run prove:game && npm run prove:net"
+    "prove": "npm run prove:fixed && npm run prove:floor && npm run prove:emergent && npm run prove:world && npm run prove:spatial && npm run prove:collide && npm run prove:verbs && npm run prove:abilities && npm run prove:hazards && npm run prove:breakable && npm run prove:interact && npm run prove:sim && npm run prove:game && npm run prove:net && npm run prove:cell",
+    "prove:cell": "node --experimental-strip-types src/floor/prove-cell.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
@@ -42,5 +43,5 @@
     "peerjs": "^1.5.5",
     "three": "^0.169.0"
   },
-  "//deps-note": "three is the renderer. PeerJS (signaling) + the Rapier oracle (@dimforge/rapier3d-compat, devDep, tests-only) get added when their layers land. The sim has NO runtime physics dependency \u2014 we ship our own fixed-point engine."
+  "//deps-note": "three is the renderer. PeerJS (signaling) + the Rapier oracle (@dimforge/rapier3d-compat, devDep, tests-only) get added when their layers land. The sim has NO runtime physics dependency — we ship our own fixed-point engine."
 }
