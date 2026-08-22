@@ -20,6 +20,9 @@ import { HazardKind, type Hazard } from '../sim/hazards/model.ts';
 import { WinCondition, type MatchConfig } from './match.ts';
 import { generateFloor } from '../floor/generate.ts';
 import { compileTower, FLOOR_HEIGHT, GAME_GRID_SIZE } from './tower.ts';
+import { compileCellTower, type CellFloor } from './cell-tower.ts';
+import { generateEmergent } from '../floor/cell-emergent.ts';
+import { resolveGrid } from '../floor/cell-grid.ts';
 
 export interface SceneHandle {
   sim: Sim;
@@ -149,22 +152,52 @@ export function buildSandbox(crewSizeOrOpts: number | SandboxOpts = 3): SceneHan
  * wires the floor generator into the playable game (the audit's `floor-module-not-
  * wired`). Win = race to the top stratum's height.
  */
-export function buildTower(opts: { crewSize?: number; numStrata?: number; seed?: bigint; gridSize?: number } = {}): SceneHandle {
+export function buildTower(opts: {
+  crewSize?: number; numStrata?: number; seed?: bigint; gridSize?: number;
+  /**
+   * WHICH SUBSTRATE THE TOWER IS BUILT ON.
+   *
+   * '2u' is the cell model: hand-authored structures, real staircases the author drew, and walls that
+   * own single edges. '4u' is the older tile lattice, kept because it still carries what the 2u path
+   * has no equivalent for yet — room roles for decoration, and the puzzle bodies (locked doors, keys,
+   * rugs). Neither is half-converted; they are two complete producers of the same IR, and the seam
+   * they meet at is `StratumCellGrid.wallPlacements`.
+   */
+  substrate?: '2u' | '4u';
+} = {}): SceneHandle {
   const crewSize = Math.max(1, opts.crewSize ?? 3);
   const numStrata = Math.max(2, opts.numStrata ?? 5);
   const seed = opts.seed ?? 0x5a17ed_1234n;
   const gridSize = Math.max(4, opts.gridSize ?? GAME_GRID_SIZE);
+  const substrate = opts.substrate ?? '4u';
 
-  // generate + compile the tower
-  const floors = [];
-  for (let s = 0; s < numStrata; s++) {
-    // openness 0.40 = "40% edges": ~40% of interior seams get an extra connection, so the
-    // now-SOLID Layer-C walls don't read as a claustrophobic maze (more doorways/openings).
-    floors.push(generateFloor({ gridSize, openness: 0.40, guaranteedRoutes: 2, seed, stratumIndex: s }));
-  }
   const groundY = fromInt(0);
   const killPlaneY = fromInt(-10);
-  const tower = compileTower(floors, 0, { groundY, killPlaneY });
+
+  let tower;
+  if (substrate === '2u') {
+    // TWICE the grid in each direction covers the same ground: a 2u cell is half a 4u tile.
+    const cw = gridSize * 2, ch = gridSize * 2;
+    const cellFloors: CellFloor[] = [];
+    for (let s = 0; s < numStrata; s++) {
+      const r = generateEmergent({ width: cw, height: ch, seed: seed + BigInt(s) });
+      cellFloors.push({ cells: resolveGrid(r.grid), width: cw, height: ch, entry: r.entry, exit: r.exit });
+    }
+    const t = compileCellTower(cellFloors, 0, { groundY, killPlaneY });
+    if (t.strataWithoutStairs.length) {
+      // said out loud rather than silently producing a tower you cannot climb
+      console.warn(`[tower] no way up from stratum ${t.strataWithoutStairs.join(', ')} — no stair flight on that floor`);
+    }
+    tower = t;
+  } else {
+    const floors = [];
+    for (let s = 0; s < numStrata; s++) {
+      // openness 0.40 = "40% edges": ~40% of interior seams get an extra connection, so the
+      // now-SOLID Layer-C walls don't read as a claustrophobic maze (more doorways/openings).
+      floors.push(generateFloor({ gridSize, openness: 0.40, guaranteedRoutes: 2, seed, stratumIndex: s }));
+    }
+    tower = compileTower(floors, 0, { groundY, killPlaneY });
+  }
 
   // Capacity headroom for crew + breakables + the floor's puzzle bodies (doors/keys/rugs
   // across all strata, plus revealed-key drops). 256 = MAX_ENTITIES; sized to never throw.
