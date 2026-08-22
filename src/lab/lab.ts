@@ -323,7 +323,15 @@ async function boot(): Promise<void> {
   // ---- studio scene: neutral dark, soft key + fill, shadowed ground disc ----
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x14141e);
-  const key = new THREE.DirectionalLight(0xfff2e0, 2.4);
+  // TINTS are authoring inputs, not constants. A material is a response to a light: the same stone
+  // reads as warm sandstone under a sodium key and as cold basalt under a blue one, and the game
+  // mixes exactly that (cool hemisphere + directional, warm torches). ?keytint= / ?torchtint=.
+  const hexParam = (k: string, d: string): string => {
+    const v = params.get(k);
+    return v && /^[0-9a-fA-F]{6}$/.test(v) ? '#' + v.toLowerCase() : d;
+  };
+  const tints = { key: hexParam('keytint', '#fff2e0'), torch: hexParam('torchtint', '#ffa64d') };
+  const key = new THREE.DirectionalLight(new THREE.Color(tints.key), 2.4);
   // RAKE: the key's direction is a control, not a constant. A normal map only shows itself when the
   // light crosses the grain at a low angle — with a fixed high frontal key, relief looks broken even
   // when it is working. Azimuth/elevation are driven from the TEXTURE SETTINGS panel (render-only,
@@ -347,7 +355,7 @@ async function boot(): Promise<void> {
   // directional light at infinity; a torch is close, decaying, and off to one side, so it rakes the
   // grain completely differently. Materials for a torch-lit dungeon should be judged under one.
   // Costs nothing at intensity 0 — three skips lights with zero intensity.
-  const torch = new THREE.PointLight(0xffa64d, 0, 7, 2);
+  const torch = new THREE.PointLight(new THREE.Color(tints.torch), 0, 7, 2);
   torch.position.set(-1.75, 0.6, 0.55); // beside the wall and low, so it RAKES the face — a light
   // hitting a surface head-on barely reveals a normal map (N.L is flat near the cosine peak).
   scene.add(torch);
@@ -598,6 +606,8 @@ async function boot(): Promise<void> {
       if (prof) u.set('profile', prof); else u.delete('profile');
       u.set('rake', `${Math.round(lightRake.az * 100)}:${Math.round(lightRake.el * 100)}`);
       if (torchLevel.v > 0) u.set('torch', String(torchLevel.v.toFixed(2))); else u.delete('torch');
+      if (tints.key !== '#fff2e0') u.set('keytint', tints.key.slice(1)); else u.delete('keytint');
+      if (tints.torch !== '#ffa64d') u.set('torchtint', tints.torch.slice(1)); else u.delete('torchtint');
       history.replaceState(null, '', `${location.pathname}?${u.toString()}`);
       profileBar?.refresh(); // the drift indicator is only true until the next edit
     }
@@ -619,6 +629,10 @@ async function boot(): Promise<void> {
         { label: 'Light ∠', get: () => lightRake.az, set: (v) => { lightRake.az = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
         { label: 'Light ↑', get: () => lightRake.el, set: (v) => { lightRake.el = v; applyRake(); writeSurfaceUrl(); renderOnce(); } },
         { label: 'Torch', get: () => torchLevel.v, set: (v) => { torchLevel.v = v; applyTorch(); writeSurfaceUrl(); renderOnce(); } },
+      ],
+      colors: [
+        { label: 'key', get: () => tints.key, set: (v) => { tints.key = v; key.color.set(v); writeSurfaceUrl(); renderOnce(); } },
+        { label: 'torch', get: () => tints.torch, set: (v) => { tints.torch = v; torch.color.set(v); writeSurfaceUrl(); renderOnce(); } },
       ],
     });
 
