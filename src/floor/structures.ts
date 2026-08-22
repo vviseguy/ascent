@@ -1,5 +1,5 @@
 // ============================================================================
-// src/game/structures.ts — SAVED tile structures (lab → game).
+// src/floor/structures.ts — SAVED tile structures (lab → generator).
 // ============================================================================
 //
 // A "structure" is a hand-authored patch of the 9-cell tile board (a room, a hallway, a junction)
@@ -15,10 +15,10 @@
 // concrete WallTiles the renderer/collision place via tilePlacements — resolved, so shared edges are
 // owned once (docs/16 §12 #4) rather than each tile describing its boundary independently.
 
-import type { TileField } from '../floor/wall-tile-field.ts';
-import { resolveGrid, type TileGrid } from '../floor/tile-grid.ts';
-import type { WallTile } from '../floor/wall-tile.ts';
-import data from './structures.json';
+import type { TileField } from './wall-tile-field.ts';
+import { resolveGrid, type TileGrid } from './tile-grid.ts';
+import type { WallTile } from './wall-tile.ts';
+import data from './structures.json' with { type: 'json' };
 
 /** One saved structure: a w×h grid of tile DOMAINS, plus the author's preview settings (metadata). */
 export interface SavedStructure {

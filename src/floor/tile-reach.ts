@@ -205,18 +205,40 @@ export function reachesAll(at: FieldAt, w: number, h: number, p: Polarity, start
 /* ------------------------------- pinning ------------------------------- */
 
 /**
- * PIN a route open: narrow each arm it crosses so `wall` can no longer survive on that arm's INNER
- * cell. That is the minimal narrowing that makes `armMustBeOpen` true — and it touches only
- * tile-PRIVATE data (the inner ring), never a shared edge cell, so it cannot surprise a neighbour.
+ * PIN a route open: narrow each arm it crosses so `wall` can no longer survive on it, turning
+ * `armMayBeOpen` into `armMustBeOpen`.
+ *
+ * WHICH of the arm's two cells to narrow is not a free choice. An arm is passable when EITHER cell can
+ * be non-wall, so a route may be using an arm whose INNER is already pinned hard to `wall` and whose
+ * EDGE is what leaves the gap. Narrowing the inner there empties the domain and takes the whole
+ * transaction down. So: narrow the inner when it still has a non-wall option (preferred — it is
+ * tile-private and cannot surprise a neighbour), otherwise narrow the edge.
+ *
+ * Edge ownership applies (docs/16 §12 #4): a tile owns its N/W edge cells, so an E/S edge is written as
+ * the NEIGHBOUR's W/N. At the map border there is no neighbour and the edge is the perimeter `wall`,
+ * which is precisely the case `armMayBeOpen` already excluded, so it cannot be reached here.
  *
  * Staged through the caller's transaction, so pinning is itself atomic and rollback-able, and it is a
  * plain `andGate` like every other stamp — no privileged write path into the grid.
  */
 export function pinRouteOpen(tx: Tx, route: readonly ArmEdge[]): void {
+  const at = txAt(tx);
+  const put = (x: number, y: number, f: Parameters<typeof template>[0]): void =>
+    stamp(tx, { x, y, w: 1, h: 1 }, template(f));
   for (const e of route) {
-    const inner: Partial<Record<Dir, Mask>> = {};
-    inner[e.dir] = NOT_WALL;
-    stamp(tx, { x: e.x, y: e.y, w: 1, h: 1 }, template({ inner }));
+    const m = armMasks(at, e.x, e.y, e.dir);
+    if (!m) continue;
+    if ((m.inner & NOT_WALL) !== 0) {
+      const inner: Partial<Record<Dir, Mask>> = {};
+      inner[e.dir] = NOT_WALL;
+      put(e.x, e.y, { inner });
+    } else if ((m.edge & NOT_WALL) !== 0) {
+      // the inner is already a hard wall — this arm is passable only through its EDGE cell
+      if (e.dir === 'N') put(e.x, e.y, { edge: { N: NOT_WALL } });
+      else if (e.dir === 'W') put(e.x, e.y, { edge: { W: NOT_WALL } });
+      else if (e.dir === 'E') put(e.x + 1, e.y, { edge: { W: NOT_WALL } });
+      else put(e.x, e.y + 1, { edge: { N: NOT_WALL } });
+    }
   }
 }
 

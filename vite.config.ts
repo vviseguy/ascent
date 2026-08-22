@@ -48,7 +48,7 @@ function labApprovePlugin(): PluginOption {
 // key-sorted). GET returns the whole store so the editor can list/load. The game reads the JSON via
 // src/game/structures.ts. Dev-only; no production-build effect.
 function structuresPlugin(): PluginOption {
-  const STORE = r('./src/game/structures.json');
+  const STORE = r('./src/floor/structures.json');
   const readBody = (req: import('node:http').IncomingMessage): Promise<string> =>
     new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
   return {

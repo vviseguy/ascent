@@ -34,11 +34,10 @@
 // output), a coordinate-hash pick at collapse, dense-array iteration, no float / no Math.random.
 
 import { makeRng, mixSeeds, nextInt, nextRange, subStream, type Rng } from './rng.ts';
-import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type TileGrid, type Region } from './tile-grid.ts';
+import { makeGrid, begin, stamp, commit, rollback, resolveGrid, type TileGrid, type Region, type Stamp } from './tile-grid.ts';
 import { template, segs, centres, floors, wallTypes, type Mask } from './wall-tile-field.ts';
 import { DIRS, FLOOR_CORNERS, type Dir, type FloorCorner, type WallTile } from './wall-tile.ts';
-import { roomRole, roleFloor, type RoomRole } from './room-roles.ts';
-import { porousRoom } from './room-templates.ts';
+import { listStructures, getStructure, type SavedStructure } from './structures.ts';
 import { cornerId } from './corner-graph.ts';
 import {
   type ArmEdge,
@@ -100,7 +99,8 @@ function runArms(g: TileGrid, x: number, y: number, d: Dir, len: number): { x: n
 }
 
 export interface PlacedRoom extends Region {
-  role: RoomRole;
+  /** Which authored structure was stamped here (a key of `structures.json`). */
+  structure: string;
 }
 
 export interface EmergentResult {
@@ -117,6 +117,8 @@ export interface EmergentResult {
     roomsPlaced: number;
     roomsRejectedConflict: number;
     roomsRejectedUnreachable: number;
+    /** Refused because the authored structure does not fit inside the floor at all. */
+    roomsRejectedTooBig: number;
     wallsPlaced: number;
     wallsRejectedConflict: number;
     wallsRejectedUnreachable: number;
@@ -153,6 +155,34 @@ function stampWallRun(tx: ReturnType<typeof begin>, g: TileGrid, x: number, y: n
   for (const a of runArms(g, x, y, d, len)) stampWallArm(tx, a.x, a.y, a.d);
 }
 
+/**
+ * Stamp an AUTHORED structure with a POROUS OUTER BOUNDARY.
+ *
+ * The structure is used exactly as painted, with ONE relaxation: on its outer ring, any arm the author
+ * pinned to `wall` is widened to `{none, wall}`. That is the difference between a room that can grow a
+ * door and one that is sealed forever — domains only ever narrow, so a boundary pinned hard to `wall`
+ * can never reopen, and the connect phase would have no way in. Widening it defers the choice; the
+ * connect phase pins the cells a route needs to `none` (those become the doors) and the seal phase
+ * puts the rest back to `wall`.
+ *
+ * The INTERIOR is untouched — pillars, alcoves, partitions, floor materials all stamp exactly as
+ * authored. Only where the room meets the outside is left undecided.
+ */
+function porousBoundary(st: SavedStructure): Stamp {
+  return (lx, ly) => {
+    const f = st.cells[ly * st.w + lx]!;
+    if (lx !== 0 && ly !== 0 && lx !== st.w - 1 && ly !== st.h - 1) return f; // interior: verbatim
+    const loosen = (m: Mask): Mask => (m === WALL ? POROUS : m);
+    return {
+      floor: { ...f.floor },
+      edge: { N: loosen(f.edge.N), W: loosen(f.edge.W) },
+      inner: { N: loosen(f.inner.N), E: loosen(f.inner.E), S: loosen(f.inner.S), W: loosen(f.inner.W) },
+      centre: f.centre,
+      wallType: f.wallType,
+    };
+  };
+}
+
 /* ------------------------------- the generator ------------------------------- */
 
 /**
@@ -175,7 +205,7 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
 
   const base = makeRng(mixSeeds(cfg.seed, BigInt(cfg.stratumIndex ?? 0)));
   const stats: EmergentResult['stats'] = {
-    roomsPlaced: 0, roomsRejectedConflict: 0, roomsRejectedUnreachable: 0,
+    roomsPlaced: 0, roomsRejectedConflict: 0, roomsRejectedUnreachable: 0, roomsRejectedTooBig: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
     ringSealed: 0, doorsKept: 0,
   };
@@ -192,23 +222,23 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     throw new Error('emergent: a blank field is not connected — the monotonicity invariant is broken');
   }
 
-  /* ---- phase 1: rooms. A room is a big narrowing, so it is proposed first, while the field is
-     still loose enough to accept one. ---- */
+  /* ---- phase 1: rooms — placed ONLY from the AUTHORED structure library (structures.ts), never
+     generated. A room is a big narrowing, so it goes first, while the field is still loose enough to
+     accept one. ---- */
   const rooms: PlacedRoom[] = [];
   const roomRng: Rng = subStream(base, STREAM.rooms);
-  const roomMin = cfg.roomMin ?? 3;
-  const roomMax = cfg.roomMax ?? 6;
+  const names = listStructures(); // Object.keys of a frozen JSON store — stable order
   const roomAttempts = cfg.roomAttempts ?? Math.max(12, Math.round((w * h) / 12));
-  for (let i = 0; i < roomAttempts; i++) {
-    const rw = nextRange(roomRng, roomMin, roomMax);
-    const rh = nextRange(roomRng, roomMin, roomMax);
-    if (rw >= w || rh >= h) continue;
+  for (let i = 0; i < roomAttempts && names.length > 0; i++) {
+    const name = names[nextInt(roomRng, names.length)]!;
+    const st = getStructure(name)!;
+    const rw = st.w, rh = st.h;
+    if (rw >= w || rh >= h) { stats.roomsRejectedTooBig++; continue; }
     const rx = nextInt(roomRng, w - rw);
     const ry = nextInt(roomRng, h - rh);
-    const role = roomRole(i, cfg.seed);
 
     // Rooms don't overlap. This is a PLACEMENT POLICY, not an authority mechanism: a room's hard
-    // walls landing in another's air already conflicts, but a POROUS ring is `{none, wall}` and
+    // walls landing in another's air already conflicts, but a POROUS boundary is `{none, wall}` and
     // `{none} ∩ {none, wall} = {none}` — permissive by design, so overlap slips through the AND-gate.
     // A rectangle test against the rooms we placed is the honest tool; nothing needs a claims table.
     if (rooms.some((m) => rx < m.x + m.w && m.x < rx + rw && ry < m.y + m.h && m.y < ry + rh)) {
@@ -217,18 +247,15 @@ export function generateEmergent(cfg: EmergentConfig): EmergentResult {
     }
 
     const tx = begin(grid);
-    // POROUS ring: the room states "wall or nothing" on its perimeter rather than pinning it, so the
-    // connect phase can still choose doors. A hard ring here would seal the room forever — domains
-    // never widen.
-    stamp(tx, { x: rx, y: ry, w: rw, h: rh }, porousRoom(rw, rh, roleFloor(role)));
+    stamp(tx, { x: rx, y: ry, w: rw, h: rh }, porousBoundary(st));
     const at = txAt(tx);
     if (!at(rx, ry)) { rollback(tx); stats.roomsRejectedConflict++; continue; } // a domain emptied
     // the room's own MIDDLE joins the targets for THIS check — a room we cannot reach is a box.
-    // (the middle, not a ring corner: a route that only touches the doorway hasn't entered the room.)
+    // (the middle, not a boundary corner: a route that only touches the doorway hasn't entered.)
     targets.push(cornerId(w, rx + Math.max(1, rw >> 1), ry + Math.max(1, rh >> 1)));
     if (!stillAchievable(at)) { targets.pop(); rollback(tx); stats.roomsRejectedUnreachable++; continue; }
     if (!commit(tx)) { targets.pop(); stats.roomsRejectedConflict++; continue; }
-    rooms.push({ x: rx, y: ry, w: rw, h: rh, role });
+    rooms.push({ x: rx, y: ry, w: rw, h: rh, structure: name });
     stats.roomsPlaced++;
   }
 
