@@ -54,8 +54,18 @@ config references — typically ~8 layers at 1024² ≈ 86 MB — and rebuild on
 | channel | effect | note |
 |---|---|---|
 | normal | real per-texel slopes | world-space planar tangent basis; KayKit faces are axis-aligned, so no mesh tangents needed |
+
 | roughness | specular breakup | stored as a RATIO around 1 (mean-normalised at bake), so the TYPE keeps its authored roughness as the average and the map only adds variation |
 | AO | crevice darkening | multiplies **indirect** light only, so the key light still models the form |
+
+**Tangent handedness is not optional.** A tangent-space normal map is defined with
+`cross(T, B) == the OUTWARD normal`. Picking the projection plane from `abs(normal)` alone ignores
+which WAY a face points, and then `cross(T,B)` comes out as `-Y` / `-X` / `+Z` for the three cases —
+so every up-facing surface, and every face on the negative side of its axis, gets a mirrored frame
+and its bumps light as DENTS. `planarFrame` flips `B` (and V with it, so grain and relief stay
+registered) whenever the frame comes out left-handed. Ground truth for eyeballing it: brick mortar
+is recessed and the KayKit mesh has its own protruding bricks — the painted courses and the real
+geometry must agree about where the light is.
 
 The **Relief** and **AO** sliders (global, `?relief=` / `?ao=`) drive strength. Relief defaults to
 **0.45** — enough to read as carved stone, short of the noise that starts competing with silhouette
