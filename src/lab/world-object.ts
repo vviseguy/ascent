@@ -27,6 +27,7 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { fitBoxesWithStats, aabbToFootprintBox, type FitStats } from './box-fit.ts';
 import { presentSwatchHexes, type RetextureRule } from './retexture.ts';
 import { applyRecolor, ensureTilingTextures, type ResolvedSwatch } from './recolor.ts';
+import { applyHiddenFaces } from './face-surfaces.ts';
 
 /** A collision box in OBJECT-LOCAL space (centre + half-extents, metres). */
 export interface FootprintBox {
@@ -93,6 +94,9 @@ export interface WorldObjectBuild {
   recolor?: ResolvedSwatch[];
   /** Atlas swatch hexes this model actually uses (for the legend's "present" markers). */
   presentSwatches?: ReadonlySet<number>;
+  /** Source GLB, for tooling that edits the MESH rather than the object (face-surfaces). Absent
+   *  on procedural builds, which have no file behind them. */
+  meshUrl?: string;
   /** Optional per-frame animation/reactivity (actors = nearby world-space player positions). */
   update?: (timeSec: number, actors: readonly THREE.Vector3[]) => void;
 }
@@ -164,6 +168,11 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       const [template] = await Promise.all([loadTemplate(spec.meshUrl), ensureTilingTextures()]);
       // own copy per build (skeleton-safe even if the GLB has none)
       const model = cloneSkeleton(template);
+      // HIDDEN FACES before anything reads the geometry: the swatch sample, the recolor and the
+      // box-fit all run on this model, and collision in particular must not keep boxing a brick the
+      // artist deleted. Clones share geometry by reference, so this swaps in a filtered clone
+      // rather than mutating the cached template.
+      applyHiddenFaces(model, spec.meshUrl);
 
       // SWATCH SAMPLE FIRST — presentSwatchHexes reads each triangle's ORIGINAL atlas colour, so it
       // MUST run on the RAW model: applyRecolor below replaces every material's map with a baked
@@ -201,7 +210,7 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       // this radius for the orbit distance.
       const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y, d = bb.max.z - bb.min.z;
       const radius = 0.5 * Math.hypot(w, h, d) || 1.5;
-      return { root, radius, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats, presentSwatches: present, ...(resolved ? { recolor: resolved } : {}) };
+      return { root, radius, meshUrl: spec.meshUrl, footprint: { boxes: boxes.map(aabbToFootprintBox) }, fitStats: stats, presentSwatches: present, ...(resolved ? { recolor: resolved } : {}) };
     },
   };
 }
