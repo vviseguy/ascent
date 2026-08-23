@@ -216,7 +216,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -225,7 +225,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -234,7 +234,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -243,7 +243,7 @@
           "wallW": 1,
           "corner": 7,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -298,7 +298,7 @@
           "corner": 1,
           "wallType": 1,
           "open": 1,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 2,
@@ -351,7 +351,7 @@
           "wallW": 1,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -360,7 +360,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -369,7 +369,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -378,7 +378,7 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -387,7 +387,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -396,7 +396,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -414,7 +414,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -432,7 +432,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -441,7 +441,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -450,7 +450,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -459,7 +459,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -468,7 +468,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -486,7 +486,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -504,7 +504,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -513,7 +513,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -522,7 +522,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -531,7 +531,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -540,7 +540,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -549,8 +549,8 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
-          "torch": 1
+          "open": 1,
+          "torch": 2
         },
         {
           "floor": 2,
@@ -567,7 +567,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -585,7 +585,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -603,7 +603,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -621,7 +621,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -639,7 +639,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -657,8 +657,8 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
-          "torch": 1
+          "open": 1,
+          "torch": 2
         },
         {
           "floor": 127,
@@ -666,7 +666,7 @@
           "wallW": 2,
           "corner": 7,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -675,7 +675,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -684,7 +684,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -693,7 +693,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -702,7 +702,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -720,7 +720,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -730,6 +730,15 @@
           "corner": 1,
           "wallType": 32,
           "open": 2,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -738,7 +747,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -747,7 +756,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -756,7 +765,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -765,16 +774,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -784,7 +784,7 @@
           "corner": 1,
           "wallType": 32,
           "open": 2,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 2,
@@ -792,7 +792,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -828,7 +828,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -837,7 +837,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -846,7 +846,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -855,7 +855,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -873,61 +873,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
           "torch": 1
         },
         {
@@ -945,7 +891,61 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -963,7 +963,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -973,7 +973,7 @@
           "corner": 1,
           "wallType": 1,
           "open": 1,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 2,
@@ -981,7 +981,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -990,7 +990,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -999,7 +999,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1008,7 +1008,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1026,7 +1026,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1044,7 +1044,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1053,7 +1053,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1062,7 +1062,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1071,7 +1071,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1080,7 +1080,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1098,7 +1098,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1116,465 +1116,6 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 32,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 32,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 32,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 32,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
           "torch": 1
         },
@@ -1593,7 +1134,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1602,7 +1143,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1611,7 +1152,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1620,7 +1161,466 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 2,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 32,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 32,
+          "open": 2,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 32,
+          "open": 2,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 32,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1638,7 +1638,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1656,7 +1656,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1665,7 +1665,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1674,7 +1674,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1683,7 +1683,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1692,7 +1692,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1710,7 +1710,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1728,7 +1728,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1746,7 +1746,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1755,7 +1755,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1764,7 +1764,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1773,7 +1773,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1791,61 +1791,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 2,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
           "torch": 1
         },
         {
@@ -1863,7 +1809,61 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 2,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1881,7 +1881,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1891,7 +1891,7 @@
           "corner": 1,
           "wallType": 1,
           "open": 1,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 2,
@@ -1899,7 +1899,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1908,7 +1908,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1917,7 +1917,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1926,7 +1926,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1944,7 +1944,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1954,6 +1954,15 @@
           "corner": 1,
           "wallType": 32,
           "open": 2,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1962,7 +1971,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1971,7 +1980,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1980,7 +1989,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -1989,16 +1998,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2008,7 +2008,7 @@
           "corner": 1,
           "wallType": 32,
           "open": 2,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 2,
@@ -2016,7 +2016,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2052,7 +2052,7 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2061,7 +2061,7 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2097,7 +2097,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2115,7 +2115,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2133,7 +2133,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2151,7 +2151,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2169,7 +2169,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2205,7 +2205,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2214,7 +2214,7 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2232,7 +2232,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2250,7 +2250,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2268,7 +2268,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2277,7 +2277,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2286,7 +2286,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2295,7 +2295,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2304,7 +2304,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2322,25 +2322,25 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 32,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
           "torch": 1
         },
         {
           "floor": 32,
           "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 32,
+          "wallN": 1,
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2358,7 +2358,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2367,7 +2367,7 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2385,79 +2385,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
           "torch": 1
         },
         {
@@ -2475,7 +2403,61 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 2,
+          "wallType": 1,
           "open": 3,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2493,41 +2475,14 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
           "open": 1,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 7,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
           "torch": 1
         },
         {
           "floor": 2,
           "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
+          "wallW": 1,
+          "corner": 2,
           "wallType": 1,
           "open": 1,
           "torch": 1
@@ -2538,115 +2493,7 @@
           "wallW": 1,
           "corner": 1,
           "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 1
-        },
-        {
-          "floor": 2,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2664,7 +2511,7 @@
           "wallW": 15,
           "corner": 7,
           "wallType": 511,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -2673,15 +2520,159 @@
           "wallW": 15,
           "corner": 1,
           "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 2
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
           "open": 3,
           "torch": 1
         },
         {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
           "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
+          "wallN": 15,
+          "wallW": 2,
           "corner": 1,
           "wallType": 1,
+          "open": 1,
+          "torch": 2
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 15,
+          "corner": 7,
+          "wallType": 511,
+          "open": 1,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 511,
           "open": 1,
           "torch": 1
         },
@@ -2729,6 +2720,15 @@
           "wallType": 1,
           "open": 1,
           "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 2
         },
         {
           "floor": 127,
@@ -2764,7 +2764,7 @@
           "corner": 1,
           "wallType": 1,
           "open": 1,
-          "torch": 1
+          "torch": 2
         },
         {
           "floor": 127,
@@ -8014,7 +8014,7 @@
           "torch": 1
         }
       ],
-      "savedAt": "2026-08-23T22:50:59.683Z"
+      "savedAt": "2026-08-23T23:18:33.716Z"
     },
     "treasure room": {
       "w": 12,

@@ -99,7 +99,10 @@ const MAX_TORCH_LIGHTS = 8;
  *  deeper flood reveals the current room AND several rooms out through doorways, so the
  *  lit dungeon — not the fog — dominates the screen. Still a graph flood (never bleeds
  *  through solid walls or into the inter-room VOID), so unexplored wings stay fog-gated. */
-const FOG_BFS_DEPTH = 30;
+const FOG_BFS_DEPTH = 6;
+/** How far line of sight reaches. Sight is stopped by walls, so this is only a cap on the cost of
+ *  the trace — a long hall reveals its whole length, a corridor reveals as far as its first turn. */
+const FOG_LOS_RANGE = 24;
 /** Occlusion cutaway: how fast a wall fades out/in when it (un)blocks the player (/s). */
 const OCCLUDE_FADE_RATE = 9;
 /** Min opacity a wall fades to while it occludes the local player. */
@@ -143,6 +146,39 @@ interface CellRec {
   reveal: number;
   /** materials in this cell whose opacity we drive for the reveal fade. */
   mats: THREE.Material[];
+}
+
+/**
+ * WALK THE STRAIGHT LINE from one grid cell to another, asking `blocked` at every step.
+ *
+ * A SUPERCOVER walk: it advances one axis at a time rather than taking a diagonal step, so the path
+ * is contiguous and sight can never slip between two walls that meet at a corner. `blocked(c, r, bit)`
+ * is asked about the cell being LEFT and the direction of travel — `wallMask` bits are
+ * 1 = +X, 2 = -X, 4 = +Z, 8 = -Z.
+ *
+ * Pure and exported so it can be tested on a grid of numbers, with no renderer and no scene.
+ */
+export function traceSight(
+  fromCol: number, fromRow: number, col: number, row: number,
+  blocked: (c: number, r: number, bit: number) => boolean,
+): boolean {
+  let c = fromCol, r = fromRow;
+  let dc = col - c, dr = row - r;
+  const sc = Math.sign(dc), sr = Math.sign(dr);
+  dc = Math.abs(dc); dr = Math.abs(dr);
+  let err = dc - dr;
+  for (let guard = 0; guard < 2 * (dc + dr) + 2; guard++) {
+    if (c === col && r === row) return true;
+    const e2 = 2 * err;
+    let stepC = 0, stepR = 0;
+    if (e2 > -dr && dc > 0) { stepC = sc; err -= dr; }
+    else if (dr > 0) { stepR = sr; err += dc; }
+    else return true;
+    const bit = stepC > 0 ? 1 : stepC < 0 ? 2 : stepR > 0 ? 4 : 8;
+    if (blocked(c, r, bit)) return false;
+    c += stepC; r += stepR;
+  }
+  return false;
 }
 
 export class Dungeon {
@@ -323,6 +359,8 @@ export class Dungeon {
    * is exactly the condition under which a silent drop stays invisible until it isn't.
    */
   private hostless = 0;
+  /** The cell the last line-of-sight trace ran from, so standing still costs nothing. */
+  private lastLosCell = -1;
   /**
    * Urls the IR asked for that no template was loaded for. A missing template used to be a bare
    * `return` and that is how fifteen percent of the world went missing without a word — the compiler
@@ -336,6 +374,7 @@ export class Dungeon {
 
   build(grids: StratumCellGrid[], stairs?: StairInfo[]): void {
     this.hostless = 0;
+    this.lastLosCell = -1;
     this.noTemplate.clear();
     this.group.clear();
     this.strata = [];
@@ -412,8 +451,12 @@ export class Dungeon {
         this.cellIndex.set(this.cellKey(grid.stratum, c.col, c.row), rec);
       }
 
-      // VOID cells (no tile, the gaps between rooms) still get a black fog cube so the
-      // unexplored footprint reads as continuous ink — covered, never a hole in the shadow.
+      /* VOID cells — the holes and the gaps between rooms. They get ink too, so an unexplored
+         region reads as one continuous mass rather than a shape with bites out of it. But a void is
+         something you can SEE ACROSS AND DOWN THROUGH, and it used to be recorded with `wallMask: 15`
+         — sealed on all four sides — so the flood could neither enter nor leave one and the ink over
+         a hole never lifted. Standing beside a shaft you got a black box where the floor below should
+         be, permanently. A void blocks nothing; it is `wallMask: 0`. */
       for (const c of grid.cells) {
         if (c.type !== 'VOID') continue;
         const cx = toFloat(fromRaw(c.cx)), cz = toFloat(fromRaw(c.cz));
@@ -422,7 +465,7 @@ export class Dungeon {
         sub.add(fog);
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
-          wallMask: 15, walkable: false, group: new THREE.Group(), fog,
+          wallMask: 0, walkable: false, group: new THREE.Group(), fog,
           explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats: [],
         };
         this.cells.push(rec);
@@ -561,7 +604,12 @@ export class Dungeon {
    * them as a solid black wall the same height as the masonry. Oversized in X/Z so neighbouring
    * slabs overlap seamlessly. Shared opaque material. */
   private makeFogCube(cx: number, sy: number, cz: number, cs: number): THREE.Mesh {
-    const height = cs; // FULL cell/wall-height ink (cs ≈ wall height) so unexplored reads as a solid black wall
+    /* WALL height, not CELL height. This was `cs` with a note that "cs is about wall height" — true
+       when a cell was 4u, and wrong ever since the 2u substrate became the default: cells are 2 and
+       walls are 4, so every block of ink stood at half the height of the walls around it and the
+       unexplored region read as a low kerb rather than a solid mass. A hair taller than the wall so
+       no lit rim shows over the top. */
+    const height = NATIVE_WALL_H * 1.02;
     const box = new THREE.Mesh(new THREE.BoxGeometry(cs * 1.04, height, cs * 1.04), this.fogMat);
     // straddle the floor plane so the ink sits just over the floor tile and a touch above.
     box.position.set(cx, sy + height / 2 - 0.1, cz);
@@ -741,10 +789,16 @@ export class Dungeon {
    * graph flood + a visibility toggle) but kept so the caller's signature is unchanged.
    */
   reveal(bodies: readonly { x: number; y: number; z: number }[], _radius: number, _dt = 0): void {
-    // 1) BFS newly-reachable cells from each body's cell (mark `explored`, persistent).
+    /* 1) REVEAL. Two mechanisms, and they answer different questions.
+       LINE OF SIGHT is what you can actually see: everything on an unobstructed straight line, however
+       far, INCLUDING voids — which is what lets a shaft beside you show the floor below instead of a
+       block of ink. The FLOOD is the short "around the corner" sense, a few cells of awareness through
+       doorways and up stairs that sight cannot reach. Sight is unbounded by design and the flood is
+       deliberately small; together they read as "I can see it, or I am nearly touching it". */
     for (const b of bodies) {
       const start = this.cellAt(b.x, b.y, b.z);
       if (!start) continue;
+      this.lineOfSightReveal(start);
       this.floodReveal(start);
     }
     // 2) drive the per-cell fade + fog cube from the `explored` flag.
@@ -827,6 +881,40 @@ export class Dungeon {
    * side facing B (wallMask bit clear) and B is a walkable cell — i.e. they are connected
    * (same room, or through a doorway), never wall-separated. Cheap (a few dozen cells).
    */
+  /**
+   * Everything the player can SEE from `start`, revealed at once.
+   *
+   * A supercover walk of the straight line to each candidate cell: step by step, and the moment a step
+   * crosses a wall the line stops. A void blocks nothing (`wallMask: 0`), so sight carries across a
+   * shaft and the ink over it lifts — the whole point of the exercise.
+   *
+   * Cost is bounded by FOG_LOS_RANGE, and the whole pass is skipped unless the player CHANGED CELL,
+   * so standing still costs nothing.
+   */
+  private lineOfSightReveal(start: CellRec): void {
+    const key = this.cellKey(start.stratum, start.col, start.row);
+    if (this.lastLosCell === key) return;     // same cell as last frame; nothing new is visible
+    this.lastLosCell = key;
+
+    const R = FOG_LOS_RANGE;
+    for (let dr = -R; dr <= R; dr++) {
+      for (let dc = -R; dc <= R; dc++) {
+        if (dc * dc + dr * dr > R * R) continue;            // a circle, not a square
+        const target = this.cellIndex.get(this.cellKey(start.stratum, start.col + dc, start.row + dr));
+        if (!target || target.explored) continue;
+        if (this.sightClear(start, start.col + dc, start.row + dr)) target.explored = true;
+      }
+    }
+  }
+
+  /** Is the straight line from `from` to (col,row) unobstructed? See `traceSight`. */
+  private sightClear(from: CellRec, col: number, row: number): boolean {
+    return traceSight(from.col, from.row, col, row, (c, r, bit) => {
+      const cell = this.cellIndex.get(this.cellKey(from.stratum, c, r));
+      return cell === undefined || (cell.wallMask & bit) !== 0;   // off the map, or a wall in the way
+    });
+  }
+
   private floodReveal(start: CellRec): void {
     // wallMask bits: 1=+X(col+1) 2=-X(col-1) 4=+Z(row+1) 8=-Z(row-1)
     const steps: ReadonlyArray<readonly [number, number, number]> = [
