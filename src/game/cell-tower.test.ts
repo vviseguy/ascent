@@ -5,6 +5,8 @@ import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.
 import { resolveGrid } from '../floor/cell-grid.ts';
 import { compileCellTower, cellCentre2u, cellWorldPlacements, wallMask2u, CELL_SIZE_2U, type CellFloor } from './cell-tower.ts';
 import { FLOOR_HEIGHT } from './tower.ts';
+import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
+import { openCell } from '../floor/cell.ts';
 import { summitRoute, CELL_PROBE } from './route-check.ts';
 import type { Cell } from '../floor/cell.ts';
 
@@ -111,15 +113,19 @@ describe('cell-tower — the geometry lines up', () => {
     const cells: (Cell | null)[] = Array.from({ length: 9 }, open);
     // a middle cell surrounded by floor with no walls faces nothing
     expect(wallMask2u(cells, 3, 3, 4)).toBe(0);
-    // put a wall on its north side
-    cells[4]!.wallN = 'wall';
-    expect(wallMask2u(cells, 3, 3, 4) & 1).toBe(1);
-    // and one on the cell to its EAST's west side — that is the middle cell's east face
-    cells[5]!.wallW = 'wall';
-    expect(wallMask2u(cells, 3, 3, 4) & 2).toBe(2);
-    // a corner cell faces the edge of the world on two sides
-    expect(wallMask2u(cells, 3, 3, 0) & 8).toBe(8);
-    expect(wallMask2u(cells, 3, 3, 0) & 1).toBe(1);
+    /* THIS TEST USED TO ENCODE THE WRONG ORDER, which is why it never caught the drift: it asserted
+       north set bit 1 and east set bit 2, but the canonical language (`wallgrid.ts`) is 1 = +X east,
+       2 = -X west, 4 = +Z south, 8 = -Z north. It agreed with the code and both disagreed with every
+       consumer. */
+    cells[4]!.wallN = 'wall';                       // the middle cell's NORTH face
+    expect(wallMask2u(cells, 3, 3, 4) & DIR_S).toBe(DIR_S);   // wallgrid names -Z "south"
+    cells[5]!.wallW = 'wall';                       // the cell to its EAST, west side = its east face
+    expect(wallMask2u(cells, 3, 3, 4) & DIR_E).toBe(DIR_E);
+    // a corner cell faces the edge of the world on two sides — west and north for cell 0
+    // cell 0 is the NW corner: the world ends to its west (-X) and to its north (-Z)
+    expect(wallMask2u(cells, 3, 3, 0) & DIR_W).toBe(DIR_W);
+    expect(wallMask2u(cells, 3, 3, 0) & DIR_S).toBe(DIR_S);   // -Z, which wallgrid calls "south"
+    expect(wallMask2u(cells, 3, 3, 0) & DIR_E).toBe(0);       // ...but not to its east
   });
 
   it('ground pieces render but do not collide — the slab under them already does', () => {
@@ -174,3 +180,32 @@ describe('cell-tower — the tower is CLIMBABLE, not merely built', () => {
 });
 
 void fromFloatConst;
+
+/** `wallgrid.ts` names +Z "north"; this file uses grid words, so alias to avoid a second mix-up. */
+const DIR_S_CANON = DIR_N, DIR_N_CANON = DIR_S;
+
+describe('wallMask2u speaks the canonical bit language', () => {
+  /* The comment on `wallMask2u` used to CLAIM it matched `wallgrid`'s order while only bit 4 did, so
+     the fog flood consulted the wrong wall on three of four directions. A claim in prose cannot fail;
+     this can. One wall at a time, each asserted against the direction it actually faces. */
+  const W = 3, H = 3;
+  const grid = (mut: (c: Cell, x: number, y: number) => void): (Cell | null)[] => {
+    const out: (Cell | null)[] = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = openCell(); mut(c, x, y); out.push(c); }
+    return out;
+  };
+  const centre = 1 * W + 1;
+
+  it.each([
+    ['east  (+X)', DIR_E, (c: Cell, x: number, y: number) => { if (x === 2 && y === 1) c.wallW = 'wall'; }],
+    ['west  (-X)', DIR_W, (c: Cell, x: number, y: number) => { if (x === 1 && y === 1) c.wallW = 'wall'; }],
+    ['south (+Z)', DIR_S_CANON, (c: Cell, x: number, y: number) => { if (x === 1 && y === 2) c.wallN = 'wall'; }],
+    ['north (-Z)', DIR_N_CANON, (c: Cell, x: number, y: number) => { if (x === 1 && y === 1) c.wallN = 'wall'; }],
+  ])('a wall on the %s side sets exactly that bit', (_label, bit, mut) => {
+    expect(wallMask2u(grid(mut), W, H, centre)).toBe(bit);
+  });
+
+  it('an open cell in open ground has no bits set at all', () => {
+    expect(wallMask2u(grid(() => {}), W, H, centre)).toBe(0);
+  });
+});

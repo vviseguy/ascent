@@ -14,8 +14,11 @@ const grid = (mut: (c: Cell, x: number, y: number) => void = () => {}): Cell[] =
  *  renderer and the collision compiler read. */
 const urls = (cs: Cell[], x: number, y: number): string[] =>
   (gridPlacements(cs, W, H).find((e) => e.x === x && e.y === y)?.placements ?? [])
-    .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''))
-    .filter((u) => u !== 'wall_endcap');   // caps are dressing on a loose end; see their own test
+    .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''));
+/* THE FILTER THAT USED TO BE HERE dropped `wall_endcap` from every assertion, on the grounds that caps
+   are dressing. It also made the suite structurally unable to see a cap planted inside a doorway — the
+   test named "draws ONE arch and suppresses BOTH wall halves" passed for weeks with a full-height stub
+   standing in the aperture. An assertion helper that hides a piece hides its bugs too. */
 /** Every piece on the whole grid — for asserting about walls, which no longer belong to one cell. */
 const allUrls = (cs: Cell[], w = W, h = H): string[] =>
   gridPlacements(cs, w, h).flatMap((e) => e.placements)
@@ -32,8 +35,10 @@ describe('cell-place — one piece per thing the cell owns', () => {
   });
 
   it('a lone wall segment is one 2u piece', () => {
+    // ...plus a cap at each of its two loose ends. The helper used to filter caps out, which is how a
+    // cap standing inside a doorway went unnoticed; these assertions now show everything emitted.
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_half']);
+      .toEqual(['floor_tile_large', 'wall_half', 'wall_endcap', 'wall_endcap']);
   });
 
   it('a run that stops in mid-air is CAPPED at each loose end', () => {
@@ -96,7 +101,7 @@ describe('cell-place — one piece per thing the cell owns', () => {
 
   it('a PIT emits no ground but keeps its walls', () => {
     const out = urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.floor = 'none'; c.wallN = 'wall'; } }), 1, 1);
-    expect(out).toEqual(['wall_half']);
+    expect(out).toEqual(['wall_half', 'wall_endcap', 'wall_endcap']);
   });
 });
 
@@ -133,7 +138,9 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
     const cs = withOpening('door');
     expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
-    expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half']);   // beyond the span, unaffected
+    // beyond the span: a half, and ONE cap at its far end. The near end is not loose — the doorway
+    // continues the wall — and a cap there is the bug `cell-module.test.ts` exists to hold shut.
+    expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half', 'wall_endcap']);
   });
 
   it('the axis is derived from which run actually exists', () => {

@@ -66,30 +66,35 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'tor
 /**
  * THE BIT LAYOUT — for a packed representation, with room left over ON PURPOSE.
  *
- * A domain is a bitmask over its values, so a field of N values needs N bits. Each field is given a
- * SLOT WIDER THAN IT USES, so adding a value costs one bit inside that field's slot and shifts
- * nothing else. Without the padding, giving `floor` a fifth material would move every field above it
- * and invalidate anything already packed.
+ * A domain is a bitmask over its values, so a field of N values needs N bits. Each field gets a SLOT
+ * WIDER THAN IT USES, so appending a value costs one bit inside that field's slot and shifts nothing
+ * else. Without the padding, giving `floor` another material would move every field above it and
+ * invalidate anything already packed.
  *
- *   bits  0–7    floor      8 slots, 7 used     (+1 material)
- *   bits  8–12   wallN      5 slots, 4 used     (+1 segment kind)
- *   bits 13–17   wallW      5 slots, 4 used
- *   bits 18–21   corner     4 slots, 3 used     (+1 junction kind)
- *   bits 22–28   wallType   7 slots, 6 used     (+1 opening kind)
- *   bits 29–30   torch      2 slots, 2 used     (a flag; it will not grow)
- *                           ─────────────────
- *                           31 bits. Bit 31 deliberately left alone.
+ * IT NO LONGER FITS IN ONE WORD, and pretending otherwise is how this table went quietly wrong:
+ * `wallType` grew from 6 values to 15 while its slot stayed at 7, so the declared layout described a
+ * packing that would have silently truncated more than half of it. Nothing reads these constants — the
+ * live `CellField` is an object of numbers — so it was inert rather than corrupting, which is exactly
+ * why nothing caught it. `cell-field.test.ts` now asserts the invariant instead of trusting the
+ * comment.
  *
- * `wallType` gave up two of its nine slots to make room for `torch`. Re-slotting like that shifts
- * every field above it and would invalidate anything already packed — which is safe here only because
- * NOTHING packs yet: this table describes an intended representation, and `CellField` is still an
- * object of numbers. Once something reads it, this becomes a migration rather than an edit.
+ *   WORD 0                                   WORD 1
+ *   bits  0–7    floor    8 slots,  7 used   bits 0–19  wallType  20 slots, 15 used
+ *   bits  8–12   wallN    5 slots,  4 used
+ *   bits 13–17   wallW    5 slots,  4 used
+ *   bits 18–21   corner   4 slots,  3 used
+ *   bits 22–23   torch    2 slots,  2 used
+ *                ─────────────────────────
+ *                24 bits used, 7 spare       20 bits used, 11 spare
+ *
+ * `wallType` gets a word to itself because it is the field that actually grows: it is the catalogue of
+ * what an author can put in a wall, and the kit has more assets in it than we have exposed.
  *
  * WHY BIT 31 IS OFF LIMITS even in a Uint32Array. The storage would hold it fine, but JavaScript's
  * bitwise operators coerce to INT32 — so `1 << 31` is negative while the same bits read back out of a
  * Uint32Array are positive, and `a === b` is then false for two values with identical bits. Signed
  * shifts sign-extend forever, too (see `domainSize`). It is usable with `>>> 0` discipline everywhere,
- * and there is no reason to pay that vigilance for one bit we do not need.
+ * and there is no reason to pay that vigilance for a bit we do not need.
  *
  * ONE representation, not two. A "resolved" cell is simply a field whose every domain is a singleton;
  * there is no separate packed array. Measured: Int32Array ties or beats Uint16Array for this access
@@ -97,9 +102,15 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'tor
  * pays a zero-extend). A second representation would buy nothing and add a second thing that can
  * disagree with the first — which is exactly the class of bug that cost us an evening.
  */
-export const BIT_OFFSETS: Record<FieldKey, number> = { floor: 0, wallN: 8, wallW: 13, corner: 18, wallType: 22, torch: 29 };
-export const BIT_SLOTS: Record<FieldKey, number> = { floor: 8, wallN: 5, wallW: 5, corner: 4, wallType: 7, torch: 2 };
-export const TOTAL_BITS = 31;
+export const BIT_WORD: Record<FieldKey, number> =
+  { floor: 0, wallN: 0, wallW: 0, corner: 0, torch: 0, wallType: 1 };
+export const BIT_OFFSETS: Record<FieldKey, number> =
+  { floor: 0, wallN: 8, wallW: 13, corner: 18, torch: 22, wallType: 0 };
+export const BIT_SLOTS: Record<FieldKey, number> =
+  { floor: 8, wallN: 5, wallW: 5, corner: 4, torch: 2, wallType: 20 };
+/** Usable bits per word — 31, not 32; see the note on bit 31 above. */
+export const BITS_PER_WORD = 31;
+export const TOTAL_WORDS = 2;
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
 /** Every field allows everything — a cell nothing has claimed. */

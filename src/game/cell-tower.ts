@@ -147,7 +147,14 @@ export function cellWorldPlacements(
 
 /**
  * The four sides of a cell that face something you cannot walk through — the renderer's fog BFS and
- * decoration read this. Bit order matches the 4u `wallMask`: 1 = N, 2 = E, 4 = S, 8 = W.
+ * decoration read this.
+ *
+ * BIT ORDER IS THE CANONICAL ONE (`floor/wallgrid.ts`): 1 = +X east, 2 = -X west, 4 = +Z south,
+ * 8 = -Z north. It did not used to be. The comment here claimed it matched and it did not — only bit 4
+ * agreed, so the fog flood was gated by the NORTH wall when moving east, the EAST wall moving west and
+ * the WEST wall moving north. It leaked through solid walls and left cells permanently unrevealed
+ * (measured: 67 cells and 9 wall pieces across 4 towers x 5 storeys). A comment asserting agreement is
+ * exactly what let it drift; `cell-tower.test.ts` asserts it now.
  *
  * Read STRAIGHT off the 2u walls rather than projected from a slot lattice, so it agrees with what is
  * actually drawn instead of approximating it.
@@ -160,10 +167,10 @@ export function wallMask2u(cells: readonly (Cell | null)[], w: number, h: number
   if (!me) return 15;
   const south = at(col, row + 1), east = at(col + 1, row);
   let m = 0;
-  if (blocks(me.wallN) || !walkable(at(col, row - 1))) m |= 1;
-  if ((east && blocks(east.wallW)) || !walkable(east)) m |= 2;
-  if ((south && blocks(south.wallN)) || !walkable(south)) m |= 4;
-  if (blocks(me.wallW) || !walkable(at(col - 1, row))) m |= 8;
+  if ((east && blocks(east.wallW)) || !walkable(east)) m |= 1;          // +X  east
+  if (blocks(me.wallW) || !walkable(at(col - 1, row))) m |= 2;          // -X  west
+  if ((south && blocks(south.wallN)) || !walkable(south)) m |= 4;       // +Z  south
+  if (blocks(me.wallN) || !walkable(at(col, row - 1))) m |= 8;          // -Z  north
   return m;
 }
 

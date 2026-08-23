@@ -160,13 +160,6 @@ export const STAIR_CLIMB: Fixed = fromInt(4);
  *  Small on purpose: any more and the gap at the top reads as a missing tread. */
 const STAIR_OUT = fromFloatConst(0.12);
 
-/** The mesh for one wall segment. `sloped` HAS NO ASSET YET — it stands in as a solid wall, which is
- *  right for collision (it blocks) and wrong for looks. Replace the moment the ramp mesh exists. */
-function wallPiece(seg: Seg): string | null {
-  if (seg === 'none') return null;
-  if (seg === 'barrier') return PIECE.barrierHalf;
-  return PIECE.half; // wall, and sloped until its own mesh lands
-}
 
 /* ------------------------------- reading the grid ------------------------------- */
 
@@ -183,22 +176,51 @@ function wallOn(cells: readonly (Cell | null)[], w: number, h: number, x: number
   return c ? c[o.side === 'N' ? 'wallN' : 'wallW'] : 'wall';
 }
 
-/** Is there a live 4u opening at point (px,py) on `axis`? An `air` corner with a walk-through type,
- *  and the two collinear segments either side really being walls for it to sit in. */
-export function openingAt(
+/**
+ * IS A 4u MODULE DRAWN AT THIS POINT? — the RENDER question.
+ *
+ * Any wall type that is not `solid` draws a module: a door, an arch, a window, a cracked panel, a
+ * shelf. It needs two collinear walls either side for it to sit in, and real ground under it.
+ *
+ * This used to BE `openingAt`, and conflating the two is what made eleven of the fifteen wall types
+ * invisible. `WALLTYPE_URL` has a row for every type, but its only caller was gated on `isOpenType` —
+ * three of them — so an author could paint `cracked` or `window_barred` and get a blank wall. The two
+ * questions are genuinely different: whether a module is DRAWN, and whether you can WALK THROUGH it.
+ */
+export function moduleAt(
   cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number, axis: Axis,
 ): boolean {
   const c = cellAt(cells, w, h, px, py);
-  // the wall TYPE decides passability now; the corner only says what is standing there
-  if (!c || !isOpenType(c.wallType)) return false;
+  // `rock` is solid fill, not a place — a doorway in it is not a doorway, and the cell draws nothing
+  // at all (see `cellPlacements`), so claiming one here deletes two wall halves and puts back nothing.
+  if (!c || c.floor === 'rock' || c.wallType === 'solid') return false;
   const spans = axis === 'H'
     ? [cellAt(cells, w, h, px - 1, py)?.wallN, c.wallN]
     : [cellAt(cells, w, h, px, py - 1)?.wallW, c.wallW];
   return spans.every((s) => s === 'wall');
 }
 
-/** The axis an opening at this point runs along, or null when it is not a live opening. Checked in a
- *  fixed order so a point that somehow satisfies both resolves deterministically. */
+/** The axis a module runs along, or null. Checked in a fixed order so a point that satisfies both
+ *  resolves deterministically — and THIS is the function the emitter and every suppression must ask,
+ *  so they cannot disagree about which axis got drawn. */
+export function moduleAxis(
+  cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number,
+): Axis | null {
+  if (moduleAt(cells, w, h, px, py, 'H')) return 'H';
+  if (moduleAt(cells, w, h, px, py, 'V')) return 'V';
+  return null;
+}
+
+/** Is that module one you can WALK THROUGH? — the GRAPH question. `cell-graph` and `cell-reach` ask
+ *  this; the renderer asks `moduleAt`. A window is a module and not an opening. */
+export function openingAt(
+  cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number, axis: Axis,
+): boolean {
+  const c = cellAt(cells, w, h, px, py);
+  return !!c && isOpenType(c.wallType) && moduleAt(cells, w, h, px, py, axis);
+}
+
+/** The axis a walk-through opening runs along, or null. */
 export function openingAxis(
   cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number,
 ): Axis | null {
@@ -619,9 +641,10 @@ export function cellPlacements(
   // the NW corner point of this cell, in cell-local coordinates
   const CX = NEG_ONE, CZ = NEG_ONE;
 
-  // OPENING — a 4u module centred on the corner, spanning the two collinear segments either side.
-  // It REPLACES both of them, including the one the neighbour owns (see the header).
-  const axis = openingAxis(cells, w, h, x, y);
+  // MODULE — a 4u piece centred on the corner, spanning the two collinear segments either side. It
+  // REPLACES both of them, including the one the neighbour owns (see the header). Any non-`solid`
+  // type draws one, not only the walk-through ones — see `moduleAt`.
+  const axis = moduleAxis(cells, w, h, x, y);
   if (axis) out.push(at(wallTypeUrl(c.wallType), axis === 'H' ? TURN.E : TURN.S, CX, CZ));
 
   // WALLS — this cell owns the edge running east (wallN) and the edge running south (wallW) from its
@@ -722,22 +745,50 @@ export function wallEdgePlacements(
     if (list) list.push(p); else out.set(k, [p]);
   };
 
-  /** The family of the edge running `dir` from lattice point (px,py), or null if nothing is drawn. */
-  const edge = (px: number, py: number, dir: 'E' | 'S'): WallFamily | null => {
+  /**
+   * WHO DRAWS THIS EDGE — and the distinction is load-bearing.
+   *
+   * This used to return `WallFamily | null`, and `null` meant three different things: there is no wall
+   * here, a module covers it, or a stair flight carries it. `armsAt` needs the FIRST of those and got
+   * all three, so a run that stopped because a doorway continued the wall read as a run stopping in
+   * mid-air — and planted an endcap inside the aperture. A full-height 1.07 stub in a 2.00 doorway,
+   * on a quarter of every floor's openings, and invisible to the tests because the assertion helper
+   * filtered `wall_endcap` out.
+   *
+   * `none` means the MODEL has no wall here. Everything else means there is one, drawn by someone.
+   */
+  type EdgeDraw =
+    | { by: 'none' }
+    | { by: 'run'; fam: WallFamily }
+    | { by: 'module' }
+    | { by: 'flight' };
+  const NO_EDGE: EdgeDraw = { by: 'none' };
+
+  const edgeDraw = (px: number, py: number, dir: 'E' | 'S'): EdgeDraw => {
     const c = cellAt(cells, w, h, px, py);
-    if (!c) return null;
+    if (!c) return NO_EDGE;
     if (dir === 'E') {
-      if (px >= fw) return null;                                     // no such edge on this lattice
-      if (openingAxis(cells, w, h, px, py) === 'H') return null;      // an opening spans it
-      if (openingAt(cells, w, h, px + 1, py, 'H')) return null;
-      if (flightCoversWall(cells, w, h, px, py, 'N')) return null;    // a walled flight draws it
-      return familyOf(c.wallN);
+      if (px >= fw) return NO_EDGE;                                   // no such edge on this lattice
+      const fam = familyOf(c.wallN);
+      if (!fam) return NO_EDGE;                                       // no wall in the model
+      if (moduleAxis(cells, w, h, px, py) === 'H') return { by: 'module' };
+      if (moduleAt(cells, w, h, px + 1, py, 'H')) return { by: 'module' };
+      if (flightCoversWall(cells, w, h, px, py, 'N')) return { by: 'flight' };
+      return { by: 'run', fam };
     }
-    if (py >= fh) return null;
-    if (openingAxis(cells, w, h, px, py) === 'V') return null;
-    if (openingAt(cells, w, h, px, py + 1, 'V')) return null;
-    if (flightCoversWall(cells, w, h, px, py, 'W')) return null;
-    return familyOf(c.wallW);
+    if (py >= fh) return NO_EDGE;
+    const fam = familyOf(c.wallW);
+    if (!fam) return NO_EDGE;
+    if (moduleAxis(cells, w, h, px, py) === 'V') return { by: 'module' };
+    if (moduleAt(cells, w, h, px, py + 1, 'V')) return { by: 'module' };
+    if (flightCoversWall(cells, w, h, px, py, 'W')) return { by: 'flight' };
+    return { by: 'run', fam };
+  };
+
+  /** The family of an edge THIS PASS lays, or null. Run-laying and corner mitering are unchanged. */
+  const edge = (px: number, py: number, dir: 'E' | 'S'): WallFamily | null => {
+    const d = edgeDraw(px, py, dir);
+    return d.by === 'run' ? d.fam : null;
   };
 
   // spent[k] marks an edge already covered by a piece; E and S are tracked separately
@@ -775,14 +826,20 @@ export function wallEdgePlacements(
   }
 
   /* ---- 2. RUNS ---- */
-  /** How many wall segments meet at a lattice point — a run that ends where nothing else does is
-   *  loose, and gets a cap rather than a sheared-off face. */
+  /**
+   * How many wall segments meet at a lattice point — a run that ends where nothing else does is loose
+   * and gets a cap rather than a sheared-off face.
+   *
+   * ASKS THE MODEL, NOT THIS PASS. A wall that continues as a doorway is still a wall meeting here;
+   * counting only what the run layer lays makes every doorway look like the end of the world and caps
+   * the run into it.
+   */
   const armsAt = (px: number, py: number): number => {
     let n = 0;
-    if (edge(px, py, 'E')) n++;
-    if (px > 0 && edge(px - 1, py, 'E')) n++;
-    if (edge(px, py, 'S')) n++;
-    if (py > 0 && edge(px, py - 1, 'S')) n++;
+    if (edgeDraw(px, py, 'E').by !== 'none') n++;
+    if (px > 0 && edgeDraw(px - 1, py, 'E').by !== 'none') n++;
+    if (edgeDraw(px, py, 'S').by !== 'none') n++;
+    if (py > 0 && edgeDraw(px, py - 1, 'S').by !== 'none') n++;
     return n;
   };
 
