@@ -36,7 +36,7 @@ import { DungeonMaterials, classifySurface } from './materials.ts';
 // dependencies (it imports only three + palette.ts). The game consumes it directly so the
 // in-game dungeon and the lab use the SAME coloring engine and can't drift apart (the old
 // per-triangle retexture/theme path is gone). See src/lab/CLAUDE.md (authoritative).
-import { applyRecolor } from '../lab/recolor.ts';
+import { applyRecolor, ensureTilingTextures, cloneMaterial } from '../lab/recolor.ts';
 // Phase-4b (docs/16 §10): the remastered tile-unit pieces are referenced BY URL from the IR's
 // `WorldPlacement.unit`. PIECE is the sim-side registry naming those urls (pure string data) — the
 // renderer preloads them as templates keyed by url and clones them through the same recolor path.
@@ -203,6 +203,17 @@ export class Dungeon {
     this.classicShell = params.get('shell') === 'classic';
     this.fogOff = params.get('fog') === 'off';
     this.bareTemplates = params.get('bare') === '1';
+
+    // THE TILING ARRAYS MUST EXIST BEFORE THE FIRST RECOLOR.
+    // applyRecolor bakes colour + the ORM slot, then hands the material to patchTilingDetail — which
+    // returns early, silently, if the texture arrays have not been built. The lab always awaited this
+    // (world-object.ts does it alongside the GLB load) and the game never did, so the tower has been
+    // rendering flat baked colour this whole time: no grain, no relief, no per-texel roughness, no AO.
+    // Nothing errored, the dungeon just quietly looked like painted blocks.
+    // One await, once, before any template is coloured. Idempotent — a no-op when the config's
+    // texture set is unchanged, so it costs nothing on later calls.
+    if (!this.rawColoring && !this.classicShell) await ensureTilingTextures();
+
     const loader = new GLTFLoader();
     const loaded = await Promise.all(Object.entries(TILES).map(async ([k, file]) => {
       const g = await loader.loadAsync(DIR + file);
@@ -461,7 +472,9 @@ export class Dungeon {
     // Clone this unit's materials so the occlusion cutaway drives THIS piece's opacity alone (the
     // recolor material is shared across every piece). Mirrors placeWall. View-only.
     const cloneMat = (m: THREE.Material): THREE.Material => {
-      const cl = m.clone();
+      // cloneMaterial, not m.clone(): a bare clone drops onBeforeCompile and the whole piece loses
+      // its tiling shader. See src/lab/tiling.ts.
+      const cl = cloneMaterial(m);
       cl.userData = { ...cl.userData, occ: true };
       cl.transparent = true;
       host.mats.push(cl);

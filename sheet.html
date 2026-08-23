@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCENT — Material Contact Sheet</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #14141e; overflow: hidden; font: 13px/1.45 system-ui, sans-serif; color: #cdd; }
+      #sheet { position: fixed; inset: 0; }
+      /* labels ride above the canvas, positioned by projecting each cell's world origin */
+      #labels { position: fixed; inset: 0; pointer-events: none; }
+      .cellLabel {
+        position: absolute; transform: translate(-50%, 0); white-space: nowrap;
+        font: 10px/1.4 system-ui; text-shadow: 0 1px 3px #000, 0 0 6px #000;
+        display: flex; align-items: center; gap: 5px;
+      }
+      .cellLabel .n { color: #cfe3ff; }
+      .cellLabel .b { padding: 0 4px; border-radius: 3px; font-size: 9px; }
+      .cellLabel .b.ok { background: rgba(111,227,208,.16); color: #6fe3d0; }
+      .cellLabel .b.stale { background: rgba(255,199,111,.18); color: #ffc76f; }
+      .cellLabel .b.unapproved { background: rgba(150,150,175,.14); color: #99a; }
+      #hud {
+        position: fixed; left: 50%; transform: translateX(-50%); top: 10px; color: #aab;
+        background: rgba(10,10,22,.72); padding: 7px 14px; border-radius: 8px; pointer-events: none;
+        font: 12px/1.4 system-ui;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sheet"></div>
+    <div id="labels"></div>
+    <div id="hud"></div>
+    <script type="module" src="/src/lab/sheet.ts"></script>
+  </body>
+</html>

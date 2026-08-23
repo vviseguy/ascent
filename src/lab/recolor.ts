@@ -38,8 +38,12 @@
 
 import * as THREE from 'three';
 import { SWATCHES, type SwatchName, type SwatchRole } from './palette.ts';
-import { type Preset, TEXTURES, TEXTURE_BY_ID, CONFIGURABLE_PRESETS, getConfig, getTypeSetting, getRelief } from './texture-catalog.ts';
+import { type Preset, getTypeSetting } from './texture-catalog.ts';
 import { dungeonCategory } from './object-category.ts';
+import { PRESET_SLOT as TILING_PRESET_SLOT, patchTilingDetail, ensureTilingTextures, cloneMaterial } from './tiling.ts';
+
+// Re-exported so world-object.ts keeps its single import from recolor.
+export { ensureTilingTextures, cloneMaterial };
 
 // The material TYPES + per-type texture/surface CONFIG live in texture-catalog.ts (shared with the
 // settings menu + URL). Re-export Preset so existing importers (recolor-legend) keep working.
@@ -318,165 +322,16 @@ function copyTexParams(src: THREE.Texture, dst: THREE.Texture): void {
   dst.generateMipmaps = false;
 }
 
-// ---- TILING DETAIL (real grain) -------------------------------------------------------------
-// The baked albedo carries colour+gradient but, being on the atlas UVs, can't show repeating grain
-// (those UVs point at one swatch). So we sample a real tiling texture in WORLD space in the shader
-// and MULTIPLY a NORMALISED LUMINANCE pattern (mean ≈ 1) onto the baked albedo — the texture adds the
-// PATTERN, the type's tint keeps the COLOUR (so any texture can sit on any type predictably). The
-// texture per pixel is chosen by a SLOT baked into the ORM's R channel (per material TYPE / preset),
-// so there's no per-pixel swatch matching in the shader (D3D-safe: fixed samplers, branch on a
-// constant-per-region int). Which texture each type wears comes from the live config (texture-catalog).
-
-/** preset → a fixed tiling SLOT (1..9). Baked into ORM.r; the shader binds each used slot's texture
- *  from the config. A slot with no configured texture simply has no branch (stays flat). */
-const PRESET_SLOT: Record<Preset, number> = { stone: 1, floor: 2, wood: 3, metal: 4, gold: 5, cloth: 6, terracotta: 7, dark: 8, plain: 9, smoothstone: 10, grained: 11, irondark: 12 };
-
-const srgbToLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-
-/** A loaded tiling texture: albedo + (optional) normal map + mean LINEAR luminance inverse. */
-interface LoadedTex { tex: THREE.Texture; nor: THREE.Texture | null; inv: number; }
-let _texLib: Map<string, LoadedTex> | null = null;
-let _texPromise: Promise<void> | null = null;
-
-/** Mean linear luminance of a texture (32×32 reduction) → 1/mean, the grain normaliser. */
-function meanInv(tex: THREE.Texture): number {
-  const img = tex.image as (CanvasImageSource & { width: number; height: number }) | undefined;
-  if (!img?.width) return 1;
-  try {
-    const c = document.createElement('canvas'); c.width = 32; c.height = 32;
-    const ctx = c.getContext('2d', { willReadFrequently: true })!;
-    ctx.drawImage(img, 0, 0, 32, 32);
-    const d = ctx.getImageData(0, 0, 32, 32).data;
-    let sum = 0; const n = 32 * 32;
-    for (let i = 0; i < n; i++) {
-      sum += 0.299 * srgbToLinear(d[i * 4]! / 255) + 0.587 * srgbToLinear(d[i * 4 + 1]! / 255) + 0.114 * srgbToLinear(d[i * 4 + 2]! / 255);
-    }
-    const mean = sum / n;
-    return mean > 0.001 ? 1 / mean : 1;
-  } catch { return 1; }
-}
-
-/** Load the WHOLE texture library once (await before building): albedo (sRGB → texture2D returns
- *  LINEAR) + the normal map (linear) for the relief pass. Each albedo's mean luminance is computed
- *  so the shader can normalise the grain. */
-export function ensureTilingTextures(): Promise<void> {
-  if (!_texPromise) {
-    _texPromise = (async () => {
-      const loader = new THREE.TextureLoader();
-      const lib = new Map<string, LoadedTex>();
-      const load = (file: string, srgb: boolean): Promise<THREE.Texture | null> => new Promise((res) => {
-        loader.load(
-          'textures/' + file,
-          (t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; t.anisotropy = 8; t.needsUpdate = true; res(t); },
-          undefined,
-          () => { console.warn(`[recolor] failed to load texture ${file}`); res(null); },
-        );
-      });
-      await Promise.all(TEXTURES.filter((o) => o.diff).map(async (o) => {
-        const [tex, nor] = await Promise.all([load(o.diff!, true), o.nor ? load(o.nor, false) : Promise.resolve(null)]);
-        if (tex) lib.set(o.id, { tex, nor, inv: meanInv(tex) });
-      }));
-      _texLib = lib;
-    })();
-  }
-  return _texPromise;
-}
-
-/** Inject the world-space tiling grain (+ optional RELIEF via real normal maps), driven by the live
- *  config. DEDUP: one sampler per DISTINCT texture. PRESENT-LIMIT: only bind textures for presets
- *  this object actually uses, so a normal-mapped object stays under the 16-sampler floor. */
-function patchTilingDetail(mat: THREE.MeshStandardMaterial, lib: Map<string, LoadedTex>, present?: ReadonlySet<Preset>): void {
-  const cfg = getConfig();
-  const relief = getRelief();
-  // distinct textures used (one sampler each) + the slot→texture map. Limited to PRESENT presets.
-  const texList: { tex: THREE.Texture; nor: THREE.Texture | null; scale: number; inv: number }[] = [];
-  const texIndex = new Map<string, number>();
-  const slotToTex: [number, number][] = []; // [preset slot, texList index]
-  for (const p of CONFIGURABLE_PRESETS) {
-    if (present && !present.has(p)) continue; // only the materials this object wears
-    const opt = TEXTURE_BY_ID.get(cfg[p].texture);
-    const entry = opt?.diff ? lib.get(opt.id) : undefined;
-    if (!opt?.diff || !entry) continue;
-    let ti = texIndex.get(opt.id);
-    if (ti === undefined) { ti = texList.length; texIndex.set(opt.id, ti); texList.push({ tex: entry.tex, nor: entry.nor, scale: opt.scale, inv: entry.inv }); }
-    slotToTex.push([PRESET_SLOT[p], ti]);
-  }
-  if (!texList.length) return; // nothing textured → plain baked material (colour+gradient only)
-
-  // RELIEF needs a second sampler (the normal map) per distinct texture. Cap so diff+nor stays under
-  // the 16-sampler floor (5 distinct × 2 = 10, + ~5 engine samplers). Past that, drop relief safely.
-  const useRelief = relief > 0 && texList.length <= 5;
-  if (relief > 0 && !useRelief) console.warn(`[recolor] relief off for this object: ${texList.length} distinct textures exceeds the safe normal-map budget (5).`);
-  const strength = (relief * 2.0).toFixed(3);
-
-  const decls = texList.map((_, i) => `uniform sampler2D uTex${i};` + (useRelief && texList[i]!.nor ? ` uniform sampler2D uNor${i};` : '')).join(' ');
-  const branches = slotToTex.map(([slot, ti], i) => {
-    const t = texList[ti]!;
-    const uv = `planarUV(${(1 / t.scale).toFixed(5)})`;
-    const grainLine = `lum = dot( texture2D( uTex${ti}, ${uv} ).rgb, LUMA ); grain = lum * ${t.inv.toFixed(4)};`;
-    const normLine = (useRelief && t.nor)
-      ? ` vec3 nT = texture2D( uNor${ti}, ${uv} ).xyz * 2.0 - 1.0; nT.xy *= ${strength}; bumpWN = normalize( _T * nT.x + _B * nT.y + _Ng * nT.z );`
-      : '';
-    return `${i ? 'else if' : 'if'} ( tslot == ${slot} ) { ${grainLine}${normLine} }`;
-  }).join('\n');
-
-  // RELIEF setup: a world-space tangent basis matching planarUV's plane choice (KayKit faces are
-  // axis-aligned, so the basis is just world axes). The normal map perturbs bumpWN; we convert it to
-  // view space (three's `normal`) after normal_fragment_begin. Real normal maps = clean slopes (no
-  // derivative-bump noise), and no mesh tangents needed.
-  const planeSetup = useRelief ? [
-    'vec3 _awn = abs( vWNor ); vec3 _Ng = normalize( vWNor ); vec3 _T; vec3 _B;',
-    'if ( _awn.y >= _awn.x && _awn.y >= _awn.z ) { _T = vec3(1.,0.,0.); _B = vec3(0.,0.,1.); }',
-    'else if ( _awn.x >= _awn.z ) { _T = vec3(0.,0.,1.); _B = vec3(0.,1.,0.); }',
-    'else { _T = vec3(1.,0.,0.); _B = vec3(0.,1.,0.); }',
-    'vec3 bumpWN = _Ng;',
-  ].join('\n') : '';
-
-  mat.onBeforeCompile = (shader) => {
-    for (let i = 0; i < texList.length; i++) {
-      shader.uniforms['uTex' + i] = { value: texList[i]!.tex };
-      if (useRelief && texList[i]!.nor) shader.uniforms['uNor' + i] = { value: texList[i]!.nor };
-    }
-    // VERTEX: carry world position + world normal (for the per-fragment planar projection).
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\n  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vWNor = normalize(mat3(modelMatrix) * objectNormal);');
-    // FRAGMENT: after the baked albedo (map_fragment), multiply in the slot's LUMINANCE grain — pattern
-    // only, so the baked tint keeps the colour. ×(1/mean) averages to 1; clamp limits the modulation.
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', [
-        '#include <common>',
-        'varying vec3 vWPos;', 'varying vec3 vWNor;',
-        decls,
-        'const vec3 LUMA = vec3(0.299, 0.587, 0.114);',
-        // box-planar world UV (pick plane from dominant world-normal axis), scaled to metres/tile.
-        'vec2 planarUV(float inv){ vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; return (wn.y >= wn.x && wn.y >= wn.z) ? wp.xz : (wn.x >= wn.z ? wp.zy : wp.xy); }',
-      ].join('\n'))
-      .replace('#include <map_fragment>', [
-        '#include <map_fragment>',
-        'int tslot = int( texture2D( roughnessMap, vRoughnessMapUv ).r * 255.0 + 0.5 );', // slot baked in ORM.r
-        'float grain = 1.0; float lum = 0.5;',
-        planeSetup,
-        branches,
-        'diffuseColor.rgb *= clamp( grain, 0.6, 1.4 );', // modulate around the baked colour (no re-shade)
-      ].join('\n'));
-    // RELIEF: replace the geometry normal (view space) with the normal-mapped one.
-    if (useRelief) {
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n  normal = normalize( ( viewMatrix * vec4( bumpWN, 0.0 ) ).xyz );');
-    }
-  };
-  // UNIQUE per material: a shared key would let three reuse one program and SKIP onBeforeCompile for
-  // later materials, leaving their custom tiling uniforms unbound. Unique → onBeforeCompile always runs.
-  const id = ++_tiledMatSeq;
-  mat.customProgramCacheKey = () => 'recolorTiled' + id;
-}
-let _tiledMatSeq = 0;
+// The world-space TILING DETAIL layer (real grain, relief, per-texel roughness, AO) lives in
+// tiling.ts — it is a self-contained shader patch over the baked material, and keeping it out of
+// here leaves this file about ONE thing: swatch -> colour + surface. PRESET_SLOT is its contract
+// with the bake below: the slot goes into ORM.r, tiling.ts's shader indexes its arrays by it.
+const PRESET_SLOT = TILING_PRESET_SLOT;
 
 /** Bake recolored albedo + ORM textures and return a MeshStandardMaterial. The recolor is HSL —
  *  each pixel keeps its own Lightness (the gradient) and takes the target swatch's Hue+Sat — and
  *  ORM.r carries the tiling SLOT so the shader multiplies in real world-space grain (patchTilingDetail). */
-function bakeMaterial(atlas: THREE.Texture, resolved: ResolvedSwatch[], method: SwatchIdMethod, presentPresets?: ReadonlySet<Preset>): THREE.MeshStandardMaterial | null {
+function bakeMaterial(atlas: THREE.Texture, resolved: ResolvedSwatch[], method: SwatchIdMethod): THREE.MeshStandardMaterial | null {
   const ai = atlasIndexFor(atlas, method);
   if (!ai) return null;
   const { w, h, idx, L } = ai;
@@ -484,19 +339,29 @@ function bakeMaterial(atlas: THREE.Texture, resolved: ResolvedSwatch[], method: 
 
   // per-swatch target Hue+Sat (from the mapped tint) + surface + tiling slot (aligned to resolved order)
   const tH: number[] = [], tS: number[] = [], rgh: number[] = [], mtl: number[] = [], slot: number[] = [];
+  // ...and the swatch's OWN reference lightness. KayKit's baked gradient is exactly
+  // pixelL / refL, so storing that ratio (below) lets an 'albedo' texture wear the same shading
+  // instead of having its colour thrown away. Floor the reference so a near-black swatch can't
+  // divide by ~0 and blow the ratio out.
+  const refL: number[] = [];
   for (const s of resolved) {
     const [h0, s0] = rgb2hsl((s.tint >> 16) & 255, (s.tint >> 8) & 255, s.tint & 255);
     tH.push(h0); tS.push(s0); rgh.push(Math.round(s.roughness * 255)); mtl.push(Math.round(s.metalness * 255)); slot.push(PRESET_SLOT[s.preset]);
+    refL.push(Math.max(rgb2hsl((s.ref >> 16) & 255, (s.ref >> 8) & 255, s.ref & 255)[2], 0.04));
   }
 
   const albedo = new Uint8Array(n * 4);
   const orm = new Uint8Array(n * 4);
+  const shade = new Uint8Array(n * 4);
   for (let p = 0; p < n; p++) {
     const i = idx[p]!;
     const [r, g, b] = hsl2rgb(tH[i]!, tS[i]!, L[p]!); // target hue+sat, the pixel's own lightness
     const a = p * 4;
     albedo[a] = r; albedo[a + 1] = g; albedo[a + 2] = b; albedo[a + 3] = 255;
     orm[a] = slot[i]!; orm[a + 1] = rgh[i]!; orm[a + 2] = mtl[i]!; orm[a + 3] = 255; // R=tiling slot, G=rough, B=metal
+    // the gradient as a RATIO/2 (128 = "unshaded"), so 0..2x fits in a byte.
+    shade[a] = Math.max(0, Math.min(255, Math.round((L[p]! / refL[i]!) * 127.5)));
+    shade[a + 3] = 255;
   }
 
   const albTex = new THREE.DataTexture(albedo, w, h, THREE.RGBAFormat);
@@ -508,8 +373,13 @@ function bakeMaterial(atlas: THREE.Texture, resolved: ResolvedSwatch[], method: 
   ormTex.magFilter = ormTex.minFilter = THREE.NearestFilter;
   ormTex.needsUpdate = true;
 
+  // SHADE map — the baked KayKit gradient on its own. LINEAR-filtered (unlike ORM) because it IS a
+  // gradient; nearest would step visibly wherever an 'albedo' texture wears it.
+  const shadeTex = new THREE.DataTexture(shade, w, h, THREE.RGBAFormat);
+  shadeTex.colorSpace = THREE.NoColorSpace; copyTexParams(atlas, shadeTex); shadeTex.needsUpdate = true;
+
   const mat = new THREE.MeshStandardMaterial({ map: albTex, roughnessMap: ormTex, metalnessMap: ormTex, roughness: 1, metalness: 1 });
-  if (_texLib) patchTilingDetail(mat, _texLib, presentPresets); // real tiling grain (+ relief), if loaded
+  patchTilingDetail(mat, shadeTex); // real tiling grain + relief + per-texel roughness + AO
   return mat;
 }
 
@@ -526,10 +396,6 @@ export function applyRecolor(root: THREE.Object3D, meshUrl: string, method: Swat
   // (the model turns that colour). If it doesn't, the bundle is stale / the bake isn't applying.
   if (tintAll !== undefined) for (const s of resolved) s.tint = tintAll;
 
-  // PRESENT presets — which material types this object actually wears (from the present swatch set).
-  // Lets the bake bind tiling/normal samplers only for what's used, so relief fits the sampler budget.
-  const presentPresets = present ? new Set(resolved.filter((s) => present.has(s.ref)).map((s) => s.preset)) : undefined;
-
   // find the model's atlas (shared across its meshes)
   let atlas: THREE.Texture | null = null;
   root.traverse((o) => {
@@ -540,7 +406,7 @@ export function applyRecolor(root: THREE.Object3D, meshUrl: string, method: Swat
   });
   if (!atlas) return null; // no atlas → procedural element; caller keeps its own material (not an error)
 
-  const baked = bakeMaterial(atlas, resolved, method, presentPresets);
+  const baked = bakeMaterial(atlas, resolved, method);
   if (!baked) {
     // The atlas exists but couldn't be read (undrawable/0-size image, tainted canvas). Surface it —
     // otherwise the model silently keeps its raw KayKit colours and looks like the recolor "did nothing".
