@@ -33,10 +33,29 @@ import data from '../game/mesh-surfaces.json' with { type: 'json' };
 /** Per-mesh hidden triangle lists, keyed by the mesh's index in a depth-first traverse. */
 export type HiddenByMesh = Record<string, number[]>;
 
+/**
+ * A NAMED region of a mesh, saved by hand.
+ *
+ * The auto facet partition (face-select.ts) is a PROPOSAL — it is recomputed from the tolerance
+ * every time, and moving the slider redraws it wholesale. A saved group is a DECISION. It stores
+ * the triangles themselves, not the tolerance that happened to produce them, so retuning the slider
+ * afterwards cannot silently redraw work someone already committed to. That distinction is the
+ * whole reason this is persisted rather than derived.
+ */
+export interface SurfaceGroup {
+  /** Stable slug — what a texture transform will key off once per-group mapping lands. */
+  id: string;
+  name: string;
+  /** mesh index -> triangle indices, sorted. Same numbering as `hidden`: the UNFILTERED source. */
+  tris: HiddenByMesh;
+}
+
 export interface SurfaceEntry {
   /** Checksum of the geometry these indices were authored against. */
   geom: string;
   hidden: HiddenByMesh;
+  /** Hand-authored named regions. Absent on entries written before groups existed. */
+  groups?: SurfaceGroup[];
 }
 
 export interface SurfaceStore {

@@ -134,6 +134,35 @@ four floor tiles meeting to form one diamond — are separate facets here and ca
 once world positions are known. Anything that wants them to agree (a shared texture phase) needs
 a world-level anchor, not a bigger flood.
 
+## SAVED GROUPS — the decision, not the proposal
+
+The auto facet partition is a **proposal**: recomputed from the tolerance, redrawn wholesale every
+time it moves. A saved group is a **decision**. It stores its TRIANGLES, not the tolerance that
+happened to produce them, so once you have committed to a region no slider drag can silently
+redraw it. Verified: with a group saved, the auto partition swings 73 → 5 → 17 → 49 facets across
+planar 15/45 and carve 75/30 while the saved group does not move.
+
+That is the whole reason groups are persisted rather than derived, and it is what makes
+hand-authored grouping safe to build texture mapping on top of.
+
+```jsonc
+"models/…/floor_tile_large.gltf.glb": {
+  "geom": "67dd9829",
+  "hidden": {},
+  "groups": [ { "id": "octagon-centre", "name": "octagon centre", "tris": { "0": [ … 24 … ] } } ]
+}
+```
+
+Workflow: switch to `carve`, click a tile (one click took the octagonal centre paver and its
+slants — 24 triangles), **New group from selection**, name it, **Save**. The list gives you hover
+to highlight, click-the-name to load it back into the selection, rename, and delete. `saved
+groups` tints them all at once; it and `show groups` share one overlay so turning either on turns
+the other off rather than stacking two tints.
+
+Groups live in the same entry as `hidden`, keyed by mesh URL, under the same geometry hash — so a
+KayKit re-export invalidates the groups exactly as it invalidates the hidden set, and for the same
+reason. `id` is a stable slug: it is what a per-group texture transform will key off.
+
 ### The store, and why the geometry hash is not optional
 
 `src/game/mesh-surfaces.json` (via `POST /__lab/surfaces`), keyed by **mesh URL** rather than lab
