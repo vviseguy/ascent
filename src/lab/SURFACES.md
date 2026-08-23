@@ -78,10 +78,31 @@ carrying its slants. An edge is convex when the neighbour’s centroid sits BEHI
 plane. Below ~8° the centroid offset is nearly in-plane so the sign is meaningless noise; those
 edges always join regardless.
 
-`carve` still honours the tolerance as a cone about the seed, which caps how far down a slant may
-roll before it stops belonging to the face. 50° is the useful setting for KayKit floor tiles; 75°
-starts merging across pavers.
+### The tolerance means something different in each mode
 
+In `planar` the cone IS the boundary rule. In `carve` the concave creases draw the boundaries and
+the cone only caps how far down a slant may roll before it stops belonging to its face — so it
+wants to be much higher, and each mode remembers its own value (**15° planar, 75° carve**).
+
+Set it too low in carve mode and you do not get over-merging, you get ORPHANED SLANTS: the paver
+top groups fine but its steeper chamfers fall outside the cone and reappear as their own sliver
+facets. That is what the extra facets at 50° were — not ruts being crossed.
+
+| carve tolerance | facets on `floor_tile_large` |
+|---|---|
+| 50° | 21 — pavers, plus orphaned slants |
+| 55° | 21 |
+| 60° | 18 |
+| **65-89°** | **17 — one per paver, each carrying its slants** |
+
+Flat across a 25° plateau, because in that range the cone is inert and the creases are doing all
+the work. It cannot usefully go past 89° on this asset: the tile perimeter (top meeting the outer
+side wall) is convex at 90-95°, so a 90°+ cone would swallow the side walls into the top.
+
+**It generalises.** On the dungeon wall at 75°, each protruding brick becomes ONE group (top,
+front and sides together) and stays separate from the wall face — a protrusion is bounded by
+concave creases at its base, exactly as a recess is. Same rule, opposite geometry: 257 facets at
+15°, 41 at 75°.
 ## GROUPS — the partition, not just one hover
 
 A **facet** is a maximal run of edge-connected triangles within the angle tolerance: the same
