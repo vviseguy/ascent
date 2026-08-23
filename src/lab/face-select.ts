@@ -81,6 +81,15 @@ export interface FaceSelectHandle {
   highlightFacet: (id: number | null) => void;
   /** Add or remove a whole facet, as if it had been clicked in the viewport. */
   commitFacet: (id: number, add: boolean) => void;
+  /** The current selection, per mesh index, sorted — the shape a saved group stores. */
+  selection: () => Record<string, number[]>;
+  /** Replace the selection (restoring a saved group into it). */
+  setSelection: (rec: Readonly<Record<string, number[]>>) => void;
+  /** Preview an arbitrary triangle set without touching the selection (null clears). */
+  highlightTris: (rec: Readonly<Record<string, number[]>> | null) => void;
+  /** Paint a list of triangle sets in distinct hues, or null for nothing. The panel decides
+   *  whether that is the auto partition or the saved groups; this only draws what it is given. */
+  paintSets: (sets: readonly (readonly number[])[] | null) => void;
   dispose: () => void;
 }
 
@@ -375,10 +384,11 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
    *  the ones you need to tell apart. */
   const facetColor = (id: number, out: THREE.Color): THREE.Color => out.setHSL((id * 0.61803398875) % 1, 0.62, 0.55);
 
-  const paintGroups = (): void => {
+  /** Draw an explicit list of triangle sets. `null` hides the overlay. */
+  const paintSets = (sets: readonly (readonly number[])[] | null): void => {
     const info = primary();
-    if (!showGroups || !info) { groupOverlay.visible = false; return; }
-    const { list } = partition(info);
+    if (!sets || !sets.length || !info) { groupOverlay.visible = false; return; }
+    const list = sets.map((tris, id) => ({ id, tris }));
     info.mesh.updateWorldMatrix(true, false);
     const m = info.mesh.matrixWorld;
     let n = 0;
@@ -404,6 +414,12 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     groupOverlay.geometry = g;
     groupOverlay.visible = true;
+  };
+
+  /** Repaint whatever the overlay is currently showing (used after the partition changes). */
+  const paintGroups = (): void => {
+    const info = primary();
+    paintSets(showGroups && info ? partition(info).list.map((f) => f.tris) : null);
   };
 
   const setOf = (map: Map<number, Set<number>>, i: number): Set<number> => {
@@ -578,6 +594,25 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     },
     facets: () => { const info = primary(); return info ? partition(info).list : []; },
     setShowGroups: (on) => { showGroups = on; paintGroups(); render(); },
+    paintSets: (sets) => { showGroups = false; paintSets(sets); render(); },
+    selection: () => {
+      const out: Record<string, number[]> = {};
+      for (const [i, set] of selected) if (set.size) out[String(i)] = [...set].sort((a, b) => a - b);
+      return out;
+    },
+    setSelection: (rec) => {
+      selected.clear();
+      for (const [k, tris] of Object.entries(rec)) if (tris.length) selected.set(Number(k), new Set(tris));
+      repaintSelection();
+      onChange();
+      render();
+    },
+    highlightTris: (rec) => {
+      const info = primary();
+      if (!info || !rec) { prevOverlay.visible = false; render(); return; }
+      paint(prevOverlay, info, rec[String(info.index)] ?? []);
+      render();
+    },
     highlightFacet: (id) => {
       const info = primary();
       if (!info || id === null) { prevOverlay.visible = false; render(); return; }

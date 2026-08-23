@@ -10,14 +10,15 @@
 // ============================================================================
 
 import type { FaceSelectHandle, GrowMode } from './face-select.ts';
+import { hiddenFor, type SurfaceGroup } from './face-surfaces.ts';
 
 export interface SurfacePanelOpts {
   container: HTMLElement;
   /** Resolved lazily: a texture change rebuilds the object, which swaps every mesh, so the picker
    *  is re-mounted and the panel must not be holding the dead one. */
   select: () => FaceSelectHandle | null;
-  /** Persist the current hidden set for this mesh. */
-  save: () => Promise<{ ok: boolean; error?: string }>;
+  /** Persist the current hidden set AND the named groups for this mesh. */
+  save: (groups: readonly SurfaceGroup[]) => Promise<{ ok: boolean; error?: string }>;
   /** Shown so it is obvious WHICH mesh an edit is attached to (the store is keyed by mesh URL). */
   meshUrl: string;
   /** Rebuild the object — hiding changes the collision footprint, which is fitted at build time. */
@@ -192,6 +193,102 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
 
   gcb.addEventListener('change', () => { select()?.setShowGroups(gcb.checked); renderGroups(); });
 
+  // --- SAVED GROUPS: the decisions, as opposed to the proposal above ---
+  // The auto partition is recomputed from the tolerance and redrawn wholesale whenever it moves. A
+  // saved group stores its TRIANGLES, so once you have committed to a region, retuning the slider
+  // cannot quietly redraw it. That is the entire point of persisting rather than deriving.
+  let saved: SurfaceGroup[] = (hiddenFor(meshUrl)?.groups ?? []).map((g) => ({ ...g, tris: { ...g.tris } }));
+
+  const savedHdr = document.createElement('label');
+  Object.assign(savedHdr.style, { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', margin: '10px 0 4px', paddingTop: '8px', borderTop: '1px solid rgba(120,130,170,.22)' } as Partial<CSSStyleDeclaration>);
+  const scb = document.createElement('input');
+  scb.type = 'checkbox';
+  const stxt = document.createElement('span');
+  stxt.innerHTML = '<b style="color:#cfe3ff">saved groups</b>';
+  savedHdr.append(scb, stxt);
+  panel.appendChild(savedHdr);
+
+  const savedList = document.createElement('div');
+  Object.assign(savedList.style, { maxHeight: '150px', overflowY: 'auto', margin: '0 0 5px' } as Partial<CSSStyleDeclaration>);
+  panel.appendChild(savedList);
+
+  const bNew = document.createElement('button');
+  bNew.textContent = 'New group from selection';
+  Object.assign(bNew.style, BTN);
+  bNew.style.width = '100%';
+  panel.appendChild(bNew);
+
+  const slug = (n: string): string => n.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'group';
+  const triCountOf = (g: SurfaceGroup): number => Object.values(g.tris).reduce((a, b) => a + b.length, 0);
+
+  const paintSaved = (): void => {
+    const h = select();
+    if (!h) return;
+    h.paintSets(scb.checked ? saved.map((g) => g.tris['0'] ?? []) : null);
+  };
+
+  const renderSaved = (): void => {
+    savedList.replaceChildren();
+    if (!saved.length) {
+      const empty = document.createElement('div');
+      Object.assign(empty.style, { fontSize: '10px', opacity: '.5', padding: '2px 0' } as Partial<CSSStyleDeclaration>);
+      empty.textContent = 'none yet — select faces, then New group';
+      savedList.appendChild(empty);
+      return;
+    }
+    saved.forEach((g, i) => {
+      const row = document.createElement('div');
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '5px', padding: '2px 4px', borderRadius: '4px', fontSize: '10px' } as Partial<CSSStyleDeclaration>);
+      const dot = document.createElement('span');
+      Object.assign(dot.style, { display: 'inline-block', width: '9px', height: '9px', borderRadius: '2px', flex: '0 0 auto', background: hue(i) } as Partial<CSSStyleDeclaration>);
+      const nm = document.createElement('span');
+      nm.textContent = g.name;
+      nm.title = 'click to load into the selection';
+      Object.assign(nm.style, { flex: '1 1 auto', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as Partial<CSSStyleDeclaration>);
+      const n = document.createElement('span');
+      n.textContent = `${triCountOf(g)} tri`;
+      Object.assign(n.style, { opacity: '.6', flex: '0 0 auto' } as Partial<CSSStyleDeclaration>);
+      const ren = document.createElement('button');
+      ren.textContent = '✎'; ren.title = 'rename';
+      const del = document.createElement('button');
+      del.textContent = '×'; del.title = 'delete';
+      for (const b of [ren, del]) Object.assign(b.style, { ...BTN, flex: '0 0 auto', padding: '0 4px' } as Partial<CSSStyleDeclaration>);
+
+      row.addEventListener('mouseenter', () => { row.style.background = 'rgba(78,161,255,.16)'; select()?.highlightTris(g.tris); });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; select()?.highlightTris(null); });
+      nm.addEventListener('click', () => { select()?.setSelection(g.tris); sync(); say(`loaded ${g.name} into the selection`); });
+      ren.addEventListener('click', () => {
+        const v = window.prompt('Rename group', g.name);
+        if (!v) return;
+        g.name = v; g.id = slug(v);
+        renderSaved(); say('renamed — Save to persist');
+      });
+      del.addEventListener('click', () => {
+        saved.splice(i, 1);
+        renderSaved(); paintSaved(); say('deleted — Save to persist');
+      });
+      row.append(dot, nm, n, ren, del);
+      savedList.appendChild(row);
+    });
+  };
+
+  // The two overlays share one mesh, so they are mutually exclusive: showing saved groups turns the
+  // auto-facet tint off rather than drawing one on top of the other.
+  scb.addEventListener('change', () => {
+    if (scb.checked && gcb.checked) { gcb.checked = false; renderGroups(); }
+    paintSaved();
+  });
+  bNew.addEventListener('click', () => {
+    const sel = select()?.selection() ?? {};
+    if (!Object.keys(sel).length) return say('nothing selected', true);
+    const name = window.prompt('Name this group', `group ${saved.length + 1}`);
+    if (!name) return;
+    const id = slug(name);
+    if (saved.some((g) => g.id === id)) return say(`"${id}" already exists`, true);
+    saved.push({ id, name, tris: sel });
+    renderSaved(); paintSaved(); say(`created ${name} — Save to persist`);
+  });
+
   const status = document.createElement('div');
   Object.assign(status.style, { fontSize: '10px', minHeight: '2.4em', marginTop: '5px', wordBreak: 'break-word' } as Partial<CSSStyleDeclaration>);
   status.textContent = meshUrl.split('/').pop() ?? '';
@@ -226,12 +323,13 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   bClear.addEventListener('click', () => { select()?.clearSelection(); sync(); });
   bUnhide.addEventListener('click', () => { select()?.unhideAll(); sync(); refit(); say('restored — Save to persist'); });
   bSave.addEventListener('click', () => {
-    void save().then((r) => say(r.ok ? `saved ${select()?.counts().hidden ?? 0} hidden face(s)` : (r.error ?? 'save failed'), !r.ok));
+    void save(saved).then((r) => say(r.ok ? `saved ${select()?.counts().hidden ?? 0} hidden face(s) + ${saved.length} group(s)` : (r.error ?? 'save failed'), !r.ok));
   });
 
   applyTolText();
   sync();
   renderGroups();
+  renderSaved();
   container.appendChild(panel);
 
   const rebind = (): void => {
@@ -243,6 +341,8 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
     h.setShowGroups(gcb.checked);
     sync();
     renderGroups();
+    renderSaved();
+    paintSaved();
   };
 
   // keep the readout live as the pointer moves over the model
