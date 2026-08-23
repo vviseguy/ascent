@@ -66,6 +66,18 @@ async function loadPixels(file: string | undefined, res: number): Promise<Uint8C
     const c = document.createElement('canvas');
     c.width = c.height = res;
     const g = c.getContext('2d', { willReadFrequently: true })!;
+    // FLIP VERTICALLY. Every normal map in existence is authored for the convention TextureLoader
+    // gives you: flipY = true, so V = 0 is the BOTTOM row. DataArrayTexture hard-sets flipY = false,
+    // and UNPACK_FLIP_Y_WEBGL is ignored for ArrayBufferView uploads regardless — so a canvas read
+    // (row 0 = top) lands with V = 0 at the TOP and the whole array is upside-down against the rest
+    // of the world.
+    //
+    // Invisible in the albedo: mirrored stone is still stone. NOT invisible in the normal map, where
+    // green encodes the slope along +V — run V the other way through the image and every bump lights
+    // as a dent. Flipping here rather than negating green in the shader keeps albedo, normal, rough
+    // and AO in ONE consistent parameterisation, so a map added later behaves without a special case.
+    g.translate(0, res);
+    g.scale(1, -1);
     g.drawImage(img, 0, 0, res, res);
     return g.getImageData(0, 0, res, res).data;
   } catch {
