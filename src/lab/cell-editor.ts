@@ -23,6 +23,12 @@
 //   pinned `none` = "this is air, and I am saying so"   → the maze cannot carve through it
 //   ABSTAIN (all) = "I have no opinion"                 → the maze may do as it likes
 // so leaving a field open is a real choice, not a blank. Right-click abstains.
+//
+// THE GESTURES. Left paints every target you cross. Right abstains the one you pressed on — and a
+// right press that then MOVES becomes a box instead, filled with the brush on release (Shift fills it
+// with abstentions). A box spans whatever kind of thing it was anchored on, never a guess at which
+// channels you meant. COPY is the odd brush out: it carries a whole lattice point rather than one
+// channel of it, so it is the only way to say "make this bit look like that bit".
 
 import {
   SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, OPENS,
@@ -31,7 +37,7 @@ import {
 } from '../floor/cell.ts';
 import {
   fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches, opens,
-  type CellField, type Mask, type FieldKey,
+  FIELD_KEYS, type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
 import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
@@ -78,7 +84,7 @@ let cells: CellField[] = [];
 const undoStack: string[] = [];
 let showReach = false;
 
-type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch' | 'select' | 'stamp';
+type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch' | 'copy' | 'select' | 'stamp';
 /** How the PREVIEW resolves a field that is still undecided. `generator` is what actually ships. */
 type Ambiguity = 'generator' | 'none' | 'wall' | 'random';
 
@@ -118,7 +124,11 @@ function h(tag: string, attrs: Record<string, unknown> = {}, ...kids: (Node | st
   return e;
 }
 
-const pushUndo = (): void => { undoStack.push(JSON.stringify(cells)); if (undoStack.length > 80) undoStack.shift(); };
+const pushUndoFrom = (snapshot: string): void => {
+  undoStack.push(snapshot);
+  if (undoStack.length > 80) undoStack.shift();
+};
+const pushUndo = (): void => pushUndoFrom(JSON.stringify(cells));
 
 /* ------------------------------ the padding rule ----------------------------- */
 
@@ -188,22 +198,121 @@ function resolvedAll(): (Cell | null)[] {
 
 type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch';
 
+/** What this brush would lay down for `what` — null when the brush has no value picked. */
+function maskFor(what: Paintable, clear: boolean): Mask | null {
+  if (clear) return fullField()[what as FieldKey];
+  if (what === 'wallN' || what === 'wallW') return brush.seg.size ? segs(...brush.seg) : null;
+  if (what === 'floor') return brush.floor.size ? floors(...brush.floor) : null;
+  if (what === 'corner') return brush.corner.size ? corners(...brush.corner) : null;
+  if (what === 'torch') return brush.torch.size ? torches(...brush.torch) : null;
+  if (what === 'open') return brush.open.size ? opens(...brush.open) : null;
+  return brush.wallType.size ? wallTypes(...brush.wallType) : null;
+}
+
+/**
+ * THE ONLY WRITER of a single channel. It does not push undo and does not redraw, because a box fill
+ * writes hundreds of points and wants ONE undo entry and ONE frame for the lot. Returns whether it
+ * changed anything, which is also what keeps a drag that re-crosses its own path off the undo stack.
+ */
+function setAt(px: number, py: number, what: Paintable, clear: boolean): boolean {
+  const f = cells[base() + py * stride() + px];
+  if (!f) return false;
+  const m = maskFor(what, clear);
+  if (m === null || f[what as FieldKey] === m) return false;
+  (f as unknown as Record<string, Mask>)[what] = m;
+  return true;
+}
+
+/** One target painted by hand: its own undo entry, its own redraw. */
 function applyAt(px: number, py: number, what: Paintable, clear: boolean): void {
+  const snapshot = JSON.stringify(cells);
+  if (!setAt(px, py, what, clear)) return;
+  pushUndoFrom(snapshot);
+  render();
+}
+
+/* -------------------------------- the clipboard ------------------------------- */
+// COPY is the only brush that carries a WHOLE lattice point — floor, the two walls that start there,
+// corner, opening type, open, torch — rather than one channel of it. That is what makes it the answer
+// to "make this bit look like that bit", which no single-channel brush can express.
+
+let clip: CellField | null = null;
+let clipFrom: { x: number; y: number; level: number } | null = null;
+/** Picking and pasting share the left button, so the drag that FOLLOWS a pick must not paste. */
+let pickedThisDrag = false;
+
+const sameField = (a: CellField, b: CellField): boolean => FIELD_KEYS.every((k) => a[k] === b[k]);
+
+function pickField(px: number, py: number): void {
   const f = cells[base() + py * stride() + px];
   if (!f) return;
-  const pick = (): Mask | null => {
-    if (what === 'wallN' || what === 'wallW') return brush.seg.size ? segs(...brush.seg) : null;
-    if (what === 'floor') return brush.floor.size ? floors(...brush.floor) : null;
-    if (what === 'corner') return brush.corner.size ? corners(...brush.corner) : null;
-    if (what === 'torch') return brush.torch.size ? torches(...brush.torch) : null;
-    if (what === 'open') return brush.open.size ? opens(...brush.open) : null;
-    return brush.wallType.size ? wallTypes(...brush.wallType) : null;
-  };
-  const m = clear ? fullField()[what as FieldKey] : pick();
-  if (m === null) return;
-  if (f[what as FieldKey] === m) return; // no-op — keeps a drag from flooding the undo stack
-  pushUndo();
-  (f as unknown as Record<string, Mask>)[what] = m;
+  clip = { ...f };
+  clipFrom = { x: px, y: py, level: L };
+  buildPanel();
+  status(`copied the cell at (${px},${py})`);
+}
+
+/** Paste the held cell, or — with `clear` — hand the whole point back to the generator. */
+function setField(px: number, py: number, clear: boolean): boolean {
+  const i = base() + py * stride() + px;
+  const f = cells[i];
+  if (!f) return false;
+  const next = clear ? fullField() : clip ? { ...clip } : null;
+  if (!next || sameField(f, next)) return false;
+  cells[i] = next;
+  return true;
+}
+
+function applyField(px: number, py: number, clear: boolean): void {
+  if (!clear && !clip) { status('nothing copied yet — click a cell to pick one up'); return; }
+  const snapshot = JSON.stringify(cells);
+  if (!setField(px, py, clear)) return;
+  pushUndoFrom(snapshot);
+  render();
+}
+
+/* ----------------------------------- the box ---------------------------------- */
+// RIGHT-DRAG rubber-bands a rectangle and fills it on release. A right press that never LEAVES its
+// target is still the abstain it always was — the box is armed on press and only fires once the
+// pointer has moved — so nothing that used to work stopped working. Shift makes the box abstain
+// instead of paint, which is the swath-erase a right-drag used to be.
+//
+// The rectangle spans whatever kind of thing it was anchored on: start on a north wall and it fills
+// north walls, start on a corner and it fills corners, start in COPY and it fills whole cells. A box
+// that guessed which channels you meant would be wrong half the time, so it never guesses.
+
+type BoxKind = Paintable | 'field';
+interface Box {
+  kind: BoxKind; x0: number; y0: number; x1: number; y1: number;
+  clear: boolean; moved: boolean;
+  /** What a press that never moved should do instead: the plain right-click abstain. */
+  anchor: () => void;
+}
+let box: Box | null = null;
+
+function applyBox(b: Box): void {
+  if (b.kind === 'field' && !b.clear && !clip) {
+    status('nothing copied yet — click a cell to pick one up');
+    return;
+  }
+  const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1);
+  const y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+  const snapshot = JSON.stringify(cells);   // taken BEFORE the fill: one entry undoes the whole box
+  let n = 0;
+  for (let py = y0; py <= y1; py++) {
+    for (let px = x0; px <= x1; px++) {
+      if (px > W || py > H) continue;
+      if (b.kind === 'field') { if (setField(px, py, b.clear)) n++; continue; }
+      // a channel that does not exist at this point is skipped, never pinned — the padding rule
+      if (b.kind === 'floor' && !hasFloor(px, py)) continue;
+      if (b.kind === 'wallN' && !hasN(px)) continue;
+      if (b.kind === 'wallW' && !hasW(py)) continue;
+      if (setAt(px, py, b.kind, b.clear)) n++;
+    }
+  }
+  if (!n) { status('the box changed nothing'); return; }
+  pushUndoFrom(snapshot);
+  status(`${b.clear ? 'cleared' : 'filled'} ${n} ${n === 1 ? 'point' : 'points'}`);
   render();
 }
 
@@ -290,12 +399,46 @@ const svgEl = (tag: string, attrs: Record<string, string | number>): SVGElement 
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
   return e;
 };
-/** Wire an element for click AND drag painting, with right-click as abstain. */
-function paintable(node: SVGElement, run: (clear: boolean) => void): void {
+/** One gesture on one target. `press` separates the mousedown that STARTS a drag from the rest of it. */
+interface Hit { clear: boolean; alt: boolean; press: boolean }
+
+/**
+ * Wire an element for click AND drag painting.
+ *
+ *   LEFT           paints every target you cross
+ *   RIGHT          abstains the one you pressed on
+ *   RIGHT + move   rubber-bands a box and fills it on release (Shift: abstains it)
+ *
+ * `kind` is what a box anchored HERE would fill; null means this element does not box in the current
+ * mode, and a right press on it stays a plain abstain.
+ */
+function paintable(node: SVGElement, px: number, py: number, kind: BoxKind | null,
+                   run: (hit: Hit) => void): void {
   node.addEventListener('mousedown', (ev) => {
-    ev.preventDefault(); dragging = true; run((ev as MouseEvent).button === 2);
+    const e = ev as MouseEvent;
+    e.preventDefault();
+    dragging = true;
+    if (e.button === 2 && kind) {
+      // ARMED, not fired. Nothing happens until mouseup, and that is the whole trick: a right-click
+      // that never moved still resolves to the abstain it has always been.
+      box = {
+        kind, x0: px, y0: py, x1: px, y1: py, clear: e.shiftKey, moved: false,
+        anchor: () => run({ clear: true, alt: e.altKey, press: true }),
+      };
+      return;
+    }
+    run({ clear: e.button === 2, alt: e.altKey, press: true });
   });
-  node.addEventListener('mouseenter', (ev) => { if (dragging) run((ev as MouseEvent).buttons === 2); });
+  node.addEventListener('mouseenter', (ev) => {
+    if (!dragging) return;
+    const e = ev as MouseEvent;
+    if (box) {
+      // only targets of the anchor's own kind stretch it — crossing a wall mid-corner-box means nothing
+      if (kind === box.kind) { box.x1 = px; box.y1 = py; box.moved = true; render(); }
+      return;
+    }
+    run({ clear: e.buttons === 2, alt: e.altKey, press: false });
+  });
 }
 
 function render(): void {
@@ -355,6 +498,7 @@ function render(): void {
   }
 
   // FLOOR — only where a cell exists
+  const floorKind: BoxKind | null = brush.mode === 'floor' ? 'floor' : brush.mode === 'copy' ? 'field' : null;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const f = cells[base() + y * stride() + x]!;
@@ -369,10 +513,16 @@ function render(): void {
         stroke: ink.conflict ? CONFLICT : '#12161c',
         'stroke-width': ink.conflict ? 2 : 1, cursor: 'pointer',
       });
-      paintable(rect, (clear) => {
-        if (brush.mode === 'floor') applyAt(x, y, 'floor', clear);
-        else if (brush.mode === 'stamp') stampBrush(x, y);
-        else if (brush.mode === 'select') dragSelect(x, y);
+      paintable(rect, x, y, floorKind, (gest) => {
+        if (brush.mode === 'floor') applyAt(x, y, 'floor', gest.clear);
+        else if (brush.mode === 'copy') {
+          // Alt is the eyedropper — and so is a plain click while nothing is held, which is what makes
+          // the brush usable before anyone has read that Alt is the eyedropper.
+          if (gest.clear) applyField(x, y, true);
+          else if (gest.alt || !clip) { if (gest.press) { pickField(x, y); pickedThisDrag = true; } }
+          else if (!pickedThisDrag) applyField(x, y, false);
+        } else if (brush.mode === 'stamp') stampBrush(x, y);
+        else if (brush.mode === 'select') dragSelect(x, y, gest.press);
       });
       svg.append(rect);
       // the two PARALLEL diagonals, riding on top of the material colour
@@ -412,11 +562,17 @@ function render(): void {
       const f = cells[base() + py * stride() + px]!;
       const line = (x2: number, y2: number, m: Mask, what: 'wallN' | 'wallW'): void => {
         const ink = segInk(m);
-        const hit = svgEl('line', {
-          x1: X(px), y1: Y(py), x2, y2, stroke: 'transparent', 'stroke-width': 20, cursor: 'pointer',
-        });
-        paintable(hit, (clear) => { if (brush.mode === 'wall') applyAt(px, py, what, clear); });
-        svg.append(hit);
+        /* The hit target EXISTS ONLY WHILE THE WALL BRUSH IS UP. It is 20px wide and sits above the
+           floor squares, so leaving it in place for every mode laid a dead stripe along every cell
+           border: floor paint and selection drags that strayed near an edge hit this and did nothing,
+           which read as the brush being unreliable rather than as something being in the way. */
+        if (brush.mode === 'wall') {
+          const hit = svgEl('line', {
+            x1: X(px), y1: Y(py), x2, y2, stroke: 'transparent', 'stroke-width': 20, cursor: 'pointer',
+          });
+          paintable(hit, px, py, what, (gest) => applyAt(px, py, what, gest.clear));
+          svg.append(hit);
+        }
         if (ink.certainlyGone) return;             // nothing there, and it says so by being nothing
         // a dark CASING first, so a wall never merges into ground of the same channel
         svg.append(svgEl('line', {
@@ -440,6 +596,13 @@ function render(): void {
   }
 
   // CORNERS
+  /* The three point brushes all aim at the same target, so which one is up is the only question the
+     hit circle has to answer — and when none of them is, it must not be there at all. */
+  const pointBrush: Paintable | null =
+    brush.mode === 'corner' ? 'corner'
+      : brush.mode === 'wallType' ? 'wallType'
+        : brush.mode === 'torch' ? 'torch'
+          : brush.mode === 'open' ? 'open' : null;
   for (let py = 0; py <= H; py++) {
     for (let px = 0; px <= W; px++) {
       const f = cells[base() + py * stride() + px]!;
@@ -457,19 +620,17 @@ function render(): void {
         });
       }
       /* A GENEROUS HIT TARGET, drawn first so it sits under the dot. The corner is the smallest thing
-         on the board and carries three of the five brushes (corner, opening, torch), so hitting it
+         on the board and carries four of the brushes (corner, opening, open, torch), so hitting it
          exactly was the fiddliest part of authoring. The target is much larger than the mark — you
-         aim at the junction, not at the disc. */
-      const hit = svgEl('circle', {
-        cx: X(px), cy: Y(py), r: 16, fill: 'transparent', cursor: 'pointer',
-      });
-      paintable(hit, (clear) => {
-        if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
-        else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
-        else if (brush.mode === 'torch') applyAt(px, py, 'torch', clear);
-        else if (brush.mode === 'open') applyAt(px, py, 'open', clear);
-      });
-      svg.append(hit);
+         aim at the junction, not at the disc — which is exactly why it may not exist while a brush
+         that aims at the SQUARE is up: r=16 at every point covers the corners of every cell. */
+      if (pointBrush) {
+        const hit = svgEl('circle', {
+          cx: X(px), cy: Y(py), r: 16, fill: 'transparent', cursor: 'pointer',
+        });
+        paintable(hit, px, py, pointBrush, (gest) => applyAt(px, py, pointBrush, gest.clear));
+        svg.append(hit);
+      }
 
       const dot = svgEl('circle', {
         cx: X(px), cy: Y(py), r: domainSize(f.corner) === 1 ? 8 : 6,
@@ -491,10 +652,38 @@ function render(): void {
     }
   }
 
+  if (box?.moved) {
+    const r = boxRect(box);
+    svg.append(svgEl('rect', {
+      ...r, rx: 3, 'pointer-events': 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4',
+      fill: box.clear ? '#ff2d5514' : '#e0a83020', stroke: box.clear ? CONFLICT : '#e0a830',
+    }));
+  }
+
   drawEdgeHandles(svg);
   buildReadout(res);
   buildBrushBar();
   schedule3d();
+}
+
+/**
+ * Where the rubber band is DRAWN. It has to be honest about which targets the fill will land on, and
+ * those are not all the same shape: a floor box covers squares, a corner box covers the points
+ * themselves, and a wall box is a span one way and a thin band the other.
+ */
+function boxRect(b: Box): Record<string, number> {
+  const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1);
+  const y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+  const squareX = { x: X(x0) + 3, width: (x1 - x0 + 1) * U - 6 };
+  const squareY = { y: Y(y0) + 3, height: (y1 - y0 + 1) * U - 6 };
+  const pointX = { x: X(x0) - 15, width: (x1 - x0) * U + 30 };
+  const pointY = { y: Y(y0) - 15, height: (y1 - y0) * U + 30 };
+  const spanX = { x: X(x0), width: (x1 - x0 + 1) * U };
+  const spanY = { y: Y(y0), height: (y1 - y0 + 1) * U };
+  if (b.kind === 'floor' || b.kind === 'field') return { ...squareX, ...squareY };
+  if (b.kind === 'wallN') return { ...spanX, ...pointY };   // edges running east from a row of points
+  if (b.kind === 'wallW') return { ...pointX, ...spanY };   // edges running south from a column
+  return { ...pointX, ...pointY };                          // corner, opening, open, torch
 }
 
 /** −/+ on each edge: grow, shrink and slide, from one control set. */
@@ -525,8 +714,13 @@ function drawEdgeHandles(svg: SVGSVGElement): void {
   mk(X(W) + 20, midY + 16, '+', 'add a column on the right', () => edge('E', 1));
 }
 
-function dragSelect(x: number, y: number): void {
-  if (!selection || !dragging) selection = { x0: x, y0: y, x1: x, y1: y };
+/**
+ * `press` is load-bearing. This used to re-anchor on `!dragging`, but `paintable` sets `dragging`
+ * BEFORE it calls in — so once a selection existed, every new press extended the old rectangle from
+ * its old corner instead of starting a fresh one, and the box could only ever grow.
+ */
+function dragSelect(x: number, y: number, press: boolean): void {
+  if (press || !selection) selection = { x0: x, y0: y, x1: x, y1: y };
   else selection = { ...selection, x1: x, y1: y };
   render();
 }
@@ -582,6 +776,11 @@ function buildBrushBar(): void {
       const m = brush.wallType.size ? wallTypes(...brush.wallType) : 0;
       return { vals: [...brush.wallType], color: openingRings(m).find(Boolean) ?? '#3b6ea5', hatches: [] };
     }
+    if (brush.mode === 'copy' && clip) {
+      // the held cell wears its own floor colour, so the strip says WHICH cell rather than "a cell"
+      const ink = floorInk(clip.floor);
+      return { vals: [], color: ink.certainlyVoid ? '#0d1016' : ink.fill, hatches: ink.hatches };
+    }
     return { vals: [], color: '#3b6ea5', hatches: [] };
   };
 
@@ -591,10 +790,12 @@ function buildBrushBar(): void {
   bar.append(sw);
   bar.append(h('span', { class: 'bb-mode' }, brush.mode === 'stamp' ? (activeBrush ?? 'stamp') : brush.mode));
   bar.append(h('span', { class: 'bb-vals' },
-    vals.length === 0 ? (brush.mode === 'select' || brush.mode === 'stamp' ? '' : 'nothing selected')
-      : vals.length === 1 ? vals[0]!
-        : `${vals.join(' + ')}  — a SET, left undecided`));
-  bar.append(h('span', { class: 'bb-hint' }, 'right-click = abstain'));
+    brush.mode === 'copy'
+      ? (clipFrom ? `the whole cell from (${clipFrom.x},${clipFrom.y})` : 'click a square to pick one up')
+      : vals.length === 0 ? (brush.mode === 'select' || brush.mode === 'stamp' ? '' : 'nothing selected')
+        : vals.length === 1 ? vals[0]!
+          : `${vals.join(' + ')}  — a SET, left undecided`));
+  bar.append(h('span', { class: 'bb-hint' }, 'right-click = abstain · right-DRAG = fill a box'));
 
   /* STOREY CONTROL. Lives here rather than in the panel because it changes what the schematic MEANS —
      you need to see which level you are on in the same glance as what you are painting. */
@@ -807,7 +1008,7 @@ function buildPanel(): void {
   p.append(h('h2', {}, 'Brush'));
   const modes: [BrushMode, string][] = [
     ['wall', 'Wall'], ['floor', 'Floor'], ['corner', 'Corner'], ['wallType', 'Opening'],
-    ['open', 'Open'], ['torch', 'Torch'], ['select', 'Select'], ['stamp', 'Stamp'],
+    ['open', 'Open'], ['torch', 'Torch'], ['copy', 'Copy'], ['select', 'Select'], ['stamp', 'Stamp'],
   ];
   p.append(h('div', { class: 'row' }, ...modes.map(([m, label]) =>
     h('div', { class: `chip${brush.mode === m ? ' on' : ''}`, onclick: () => { brush.mode = m; buildPanel(); } }, label))));
@@ -835,12 +1036,27 @@ function buildPanel(): void {
     p.append(h('h2', {}, 'opening — a SET'));
     p.append(chipRow(WALL_TYPES, brush.wallType, WALLTYPE_SWATCH));
     p.append(h('div', { class: 'hint' }, 'door / arch need an `air` corner to be walkable; the rest stay solid.'));
+  } else if (brush.mode === 'copy') {
+    p.append(h('h2', {}, clip ? 'copy — holding a cell' : 'copy — nothing held'));
+    if (clip && clipFrom) {
+      p.append(h('div', { class: 'row' },
+        h('button', { onclick: () => { clip = null; clipFrom = null; buildPanel(); } }, 'drop it')));
+    }
+    p.append(h('div', { class: 'hint' }, clip && clipFrom
+      ? `Holding the cell from (${clipFrom.x},${clipFrom.y})`
+        + `${clipFrom.level === L ? '' : ` on storey ${clipFrom.level}`}. `
+        + 'Click or drag to paste it · right-drag to fill a box · Alt+click to pick up a different '
+        + 'one · right-click hands a cell back to the generator, Shift+right-drag a whole box of them.'
+      : 'Click a square to pick it up — ALL of it: the floor, the two walls that start at its corner, '
+        + 'the corner itself, the opening, whether that opening is open, and the torch. Then click or '
+        + 'drag to paste it anywhere else, or right-drag a box to fill a region with it.'));
   } else if (brush.mode === 'select') {
     p.append(h('h2', {}, 'selection'));
     p.append(h('div', { class: 'row' },
       h('button', { class: 'primary', onclick: () => void saveBrush() }, '＋ Save as brush'),
       h('button', { onclick: () => { selection = null; render(); } }, 'clear')));
-    p.append(h('div', { class: 'hint' }, 'Drag over the floor squares to mark a region.'));
+    p.append(h('div', { class: 'hint' },
+      'Drag over the floor squares to mark a region. Each new press starts a fresh rectangle.'));
   } else {
     p.append(h('h2', {}, `stamp${activeBrush ? ` — ${activeBrush}` : ''}`));
     p.append(h('div', { class: 'hint' }, Object.keys(brushes).length
@@ -1214,7 +1430,16 @@ function initSplit(): void {
 /* ---------------------------------- boot ------------------------------------ */
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
-window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mouseup', () => {
+  if (box) {
+    // moved = a box; never moved = the right-click abstain it was armed over
+    if (box.moved) applyBox(box); else box.anchor();
+    box = null;
+    render();
+  }
+  dragging = false;
+  pickedThisDrag = false;
+});
 // Ctrl/Cmd+S saves back to the loaded structure, or opens the name dialog when the grid came from
 // nowhere. The browser's own Save-page dialog is never what anyone wants on this screen.
 window.addEventListener('keydown', (ev) => {
@@ -1224,7 +1449,8 @@ window.addEventListener('keydown', (ev) => {
   void saveStructure(loadedName ?? undefined);
 });
 el('hint').textContent =
-  'drag to paint · right-click ABSTAINS (restores the full domain) · dashed = undecided · '
+  'drag to paint · right-click ABSTAINS (restores the full domain) · right-DRAG boxes a region and '
+  + 'fills it with the brush, Shift+right-drag clears it · dashed = undecided · '
   + 'the −/+ handles grow, shrink and slide the grid · the last column has no east-running edge and '
   + 'the last row no south-running one, so those are not drawn — but the SOUTH and EAST borders are, '
   + 'and they are what the padding exists for.';

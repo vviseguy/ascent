@@ -67,6 +67,10 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
 5. **Look at it.** Every change in this folder is a change to something visual; screenshot it
    headlessly before claiming it works. Verifying only in-session missed two persistence bugs that
    a cold reload caught immediately.
+6. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
+   and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
+   were emitted in every mode they ate floor paint and selection drags along every border. They are
+   emitted inside `if (brush.mode === …)` for that reason. See TOOLING.md.
 
 ## Keeping these current
 

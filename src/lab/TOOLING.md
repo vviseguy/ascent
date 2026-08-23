@@ -115,3 +115,34 @@ dropped rather than repaired.
 `loadedName` is also what lets Save write straight back to the structure you opened, with the name
 ON the button in place of a confirm dialog (Ctrl/Cmd+S does the same thing). Loading binds it,
 saving under a new name rebinds it, clearing the grid and deleting that structure both release it.
+
+## The cell editor's gestures, and why the hit targets come and go
+
+Three buttons' worth of meaning on a board where four brushes aim at a point, one aims at a square
+and one aims at an edge. The rules, in full:
+
+| gesture | what it does |
+|---|---|
+| left click / drag | paints every target you cross |
+| right click | abstains the one target you pressed on — restores its full domain |
+| right **drag** | rubber-bands a box and fills it with the brush on release |
+| shift + right drag | same box, filled with abstentions |
+| alt + click (COPY) | picks a cell up instead of pasting |
+
+The box is **armed on press and only fires once the pointer has moved**. That is the whole reason
+right-click-abstain still works: a press that never left its target resolves to the abstain it was
+armed over. A box also spans **whatever kind of thing it was anchored on** — start on a north wall
+and it fills north walls, start on a corner and it fills corners. It never infers which channels you
+meant from the shape of the region, because it would be wrong about half the time.
+
+COPY is the one brush that carries a whole lattice point rather than one channel of it, which is what
+makes "make this bit look like that bit" expressible at all. A plain click picks up while nothing is
+held and pastes once something is, so the brush works before anyone has read that Alt is the
+eyedropper; the drag that follows a pick is suppressed so it cannot smear what it only just picked up.
+
+**The hit targets exist only while the brush that uses them is up, and that is not tidiness.** The
+wall hit line is 20px wide and the corner hit circle is r=16, and both are drawn ABOVE the floor
+squares. Leaving them in place for every mode put a dead cross over every cell border and corner that
+swallowed floor paint and selection drags and did nothing with them — which reads as the brush being
+unreliable, not as something being in the way. If you ever hoist those `svgEl` calls back out of their
+`if (brush.mode === …)`, you have put the dead zones back.
