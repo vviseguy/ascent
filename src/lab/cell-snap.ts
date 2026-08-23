@@ -29,7 +29,7 @@ import { generateEmergent } from '../floor/cell-emergent.ts';
 import { resolveFloor } from '../floor/cell-defray.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
-import type { Cell } from '../floor/cell.ts';
+import { WALL_TYPES, type Cell } from '../floor/cell.ts';
 
 declare global {
   interface Window {
@@ -49,7 +49,7 @@ interface Subject { cells: (Cell | null)[]; w: number; h: number; extent: { w: n
 /** Synthetic subjects. For checking a placement rule that no authored structure happens to exercise —
  *  a bare flight with open flanks, say, when every structure in the store has walled ones. */
 function demo(kind: string): Subject {
-  const W = 7, H = 7;
+  const W = kind === 'walltypes' ? WALL_TYPES.length * 2 + 3 : 7, H = 7;
   const cells: (Cell | null)[] = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -76,6 +76,16 @@ function demo(kind: string): Subject {
         if (y === 3 && x === 3) c.corner = 'column';     // the east end of the lower run
         if (y === 3 && x === 1) c.torch = 'yes';
         if (y === 5 && x === 1) { c.corner = 'balcony'; c.torch = 'yes'; }
+      }
+      /* EVERY WALL TYPE in a row, each in its own stretch of wall, so the whole catalogue can be
+         compared at one glance and a mesh that does not look like its name is obvious. */
+      if (kind === 'walltypes') {
+        c.floor = 'stone';
+        const slot = Math.floor((x - 1) / 2);
+        if (y === 3 && x >= 1 && x < 1 + WALL_TYPES.length * 2) {
+          c.wallN = 'wall';
+          if ((x - 1) % 2 === 1 && slot < WALL_TYPES.length) c.wallType = WALL_TYPES[slot]!;
+        }
       }
       if (kind === 'torch-facing') {
         c.floor = 'stone';

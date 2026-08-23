@@ -7,7 +7,10 @@ import {
   CORNER_CHANNEL, FLOOR_CHANNEL, SEG_CHANNEL,
 } from './cell-visual.ts';
 import { floors, segs, corners, wallTypes, fullField } from '../floor/cell-field.ts';
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from '../floor/cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, isOpenType, type WallType } from '../floor/cell.ts';
+
+/** Ringed on the OUTER ring: see through, walk into. */
+const SEE_THROUGH: readonly WallType[] = ['window', 'window_arched', 'window_barred'];
 
 describe('cell-visual — channels ADD, and a mixture decodes', () => {
   it('one value is its own channel, two are the sum, three are white', () => {
@@ -77,21 +80,31 @@ describe('cell-visual — CERTAINTY is intensity', () => {
 });
 
 describe('cell-visual — openings ride as two rings', () => {
-  it('splits six values into two rings of three', () => {
-    expect(openingRings(wallTypes('door'))[0]).toBe(rgb([false, true, false]));
+  it('inner ring = walk through, outer = see through', () => {
+    // `door` is the first of the walkable three, `window` the first of the see-through three
+    expect(openingRings(wallTypes('door'))[0]).toBe(rgb([true, false, false]));
     expect(openingRings(wallTypes('door'))[1]).toBeNull();
-    expect(openingRings(wallTypes('arch'))[0]).toBeNull();
-    expect(openingRings(wallTypes('arch'))[1]).toBe(rgb([false, true, false]));
+    expect(openingRings(wallTypes('window'))[0]).toBeNull();
+    expect(openingRings(wallTypes('window'))[1]).toBe(rgb([true, false, false]));
     // one from each ring lights both
-    const both = openingRings(wallTypes('door', 'arch'));
+    const both = openingRings(wallTypes('door', 'window'));
     expect(both[0]).not.toBeNull();
     expect(both[1]).not.toBeNull();
+    // and the three walkable types are three distinct channels
+    const walk = ['door', 'arch', 'arch_scaffold'] as const;
+    expect(new Set(walk.map((v) => openingRings(wallTypes(v))[0])).size).toBe(3);
   });
 
   it('draws nothing for plain solid OR for abstaining — a ring is a claim', () => {
     expect(openingIsPlain(wallTypes('solid'))).toBe(true);
     expect(openingIsPlain(wallTypes(...WALL_TYPES))).toBe(true);
     expect(openingIsPlain(wallTypes('door'))).toBe(false);
+  });
+
+  it('a solid variant wears no ring — it changes the look, not the map', () => {
+    for (const v of ['cracked', 'scaffold', 'shelves', 'engaged_pillar', 'arch_blind'] as const) {
+      expect(openingRings(wallTypes(v)).some(Boolean)).toBe(false);
+    }
   });
 });
 
@@ -120,7 +133,13 @@ describe('cell-visual — the layers stay apart', () => {
       if (v === 'none' || v === 'rock') continue;   // absence and fill are hatch/dim, not colour
       if (FLOOR_CHANNEL[v] === undefined) missing.push(`floor:${v}`);
     }
-    for (const v of WALL_TYPES) if (!openingRings(wallTypes(v)).some(Boolean)) missing.push(`opening:${v}`);
+    // A ring means you can get through, so only those types need one — see `OPENING_RING`. A solid
+    // variant with a ring would be the real gap, so check that direction too.
+    for (const v of WALL_TYPES) {
+      const ringed = openingRings(wallTypes(v)).some(Boolean);
+      if (isOpenType(v) && !ringed) missing.push(`walkable with no ring: ${v}`);
+      if (ringed && !isOpenType(v) && !SEE_THROUGH.includes(v)) missing.push(`solid but ringed: ${v}`);
+    }
     expect(missing).toEqual([]);
   });
 });

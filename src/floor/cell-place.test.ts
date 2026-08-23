@@ -14,12 +14,12 @@ const grid = (mut: (c: Cell, x: number, y: number) => void = () => {}): Cell[] =
  *  renderer and the collision compiler read. */
 const urls = (cs: Cell[], x: number, y: number): string[] =>
   (gridPlacements(cs, W, H).find((e) => e.x === x && e.y === y)?.placements ?? [])
-    .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''))
+    .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''))
     .filter((u) => u !== 'wall_endcap');   // caps are dressing on a loose end; see their own test
 /** Every piece on the whole grid — for asserting about walls, which no longer belong to one cell. */
 const allUrls = (cs: Cell[], w = W, h = H): string[] =>
   gridPlacements(cs, w, h).flatMap((e) => e.placements)
-    .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''));
+    .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''));
 
 describe('cell-place — one piece per thing the cell owns', () => {
   it('an open cell is just its floor', () => {
@@ -200,7 +200,7 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
     const EDGES: Record<string, number> = { wall: 2, wall_corner: 2, wall_half: 1, barrier: 2, barrier_corner: 2, barrier_half: 1 };
     const walls = (fx?: { w: number; h: number }): number =>
       gridPlacements(cs, sw, sh, fx).flatMap((e) => e.placements)
-        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, '')] ?? 0), 0);
+        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '')] ?? 0), 0);
 
     // every point has both walls set, so without a floor extent every one is drawn
     expect(walls()).toBe(sw * sh * 2);
@@ -220,7 +220,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
   };
   const drew = (cs: Cell[], x: number, y: number): string[] =>
     (gridPlacements(cs, SW, SH).find((e) => e.x === x && e.y === y)?.placements ?? [])
-      .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''));
+      .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''));
   /** Only the GROUND a cell lays — its own walls are a separate question from whose flight it is in. */
   const ground = (cs: Cell[], x: number, y: number): string[] =>
     drew(cs, x, y).filter((u) => u.includes('floor') || u.includes('stairs'));

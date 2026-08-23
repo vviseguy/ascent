@@ -102,12 +102,37 @@ export const isStairFloor = (f: FloorMaterial): f is 'stairs' | 'stairs_wood' =>
 export const floorSolid = (f: FloorMaterial): boolean => f === 'rock';
 
 /** What a 4u opening looks like. `solid` means there is no opening here. */
-export type WallType = 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate';
-export const WALL_TYPES: readonly WallType[] = ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'];
+export type WallType =
+  | 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate'
+  | 'arch_blind' | 'arch_scaffold'
+  | 'cracked' | 'scaffold' | 'shelves' | 'engaged_pillar'
+  | 'window_closed' | 'window_arched' | 'window_barred';
+/**
+ * APPEND-ONLY, and the order is the storage format. A domain is a bitmask indexed by POSITION, so a
+ * value appended at the end costs one bit and shifts nothing; inserting one silently rewrites the
+ * meaning of every mask already saved. The first six are the original set and must stay put.
+ *
+ * Which mesh each draws is in `cell-place.ts:WALLTYPE_URL`, and every one of these was MEASURED before
+ * it was listed (see the asset audit) — several of the kit's names promise a hole that is not there.
+ */
+export const WALL_TYPES: readonly WallType[] = [
+  // ---- the original six; do not reorder ----
+  'solid', 'door', 'window', 'hole', 'arch', 'low_gate',
+  // ---- appended ----
+  'arch_blind',      // a deep arch cut into BOTH faces with a 0.10 web left between: solid, and opaque
+  'arch_scaffold',   // a timber post-and-lintel frame — walk through, 3.40 clear
+  'cracked', 'scaffold', 'shelves', 'engaged_pillar',   // solid walls that look like something
+  'window_closed', 'window_arched', 'window_barred',    // see-through to varying degrees, none passable
+];
 
 /** The only wall types you can actually walk through. A window is too high, a broken wall is rubble
  *  and a low_gate is barred — those are cosmetic variants of a solid wall, not passages. */
-export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch'];
+/**
+ * THE ONES YOU CAN ACTUALLY WALK THROUGH — measured, not inferred from the name. Everything else is
+ * solid, including several that look like openings: `arch_blind` is sealed by a 0.10 membrane,
+ * `window*` are above waist height, and `low_gate` has a portcullis on a 0.75 sill.
+ */
+export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch', 'arch_scaffold'];
 export const isOpenType = (wt: WallType): boolean => OPEN_WALL_TYPES.includes(wt);
 
 /** What stands at a lattice point where walls meet. `air` is a hole — the precondition for a door. */

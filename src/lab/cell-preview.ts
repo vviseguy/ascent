@@ -28,6 +28,11 @@ export const CELL = 2;
  * and has to go. Hiding it is the blunt version; the nicer one is to swing it open on its hinge, which
  * needs the view layer to own a little state and is worth doing when doors become interactive.
  */
+/** `…#open` asks for the leaf to come out. It also keys the cache separately, so the same file can be
+ *  loaded once shut and once open. */
+export const wantsOpen = (url: string): boolean => url.endsWith('#open');
+export const stripFragment = (url: string): string => url.replace(/#.*$/, '');
+
 export function openDoorLeaves(root: THREE.Object3D): THREE.Object3D {
   const doomed: THREE.Object3D[] = [];
   root.traverse((o) => { if (/_door$/i.test(o.name)) doomed.push(o); });
@@ -51,7 +56,7 @@ export const loadFailures = (): { url: string; why: string }[] =>
 function template(url: string): Promise<THREE.Object3D> {
   let p = cache.get(url);
   if (!p) {
-    p = loader.loadAsync(url).then((g) => openDoorLeaves(g.scene), (e: unknown) => {
+    p = loader.loadAsync(stripFragment(url)).then((g) => (wantsOpen(url) ? openDoorLeaves(g.scene) : g.scene), (e: unknown) => {
       failures.set(url, e instanceof Error ? e.message : String(e));
       throw e instanceof Error ? e : new Error(String(e));
     });

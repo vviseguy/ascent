@@ -55,9 +55,18 @@ export const PIECE = {
      layer strips it (`openDoorLeaves`) and the opening is real. `wall_open_scaffold` is also genuinely
      passable and wider (3.40 clear), but it is a TIMBER frame and reads as scaffolding, which turned
      every doorway on the floor into a building site. Kept as `archScaffold` for when that is wanted. */
-  arch: u1('wall_doorway'),      // its door LEAF is stripped at load — see `openDoorLeaves`
+  /* THE OPENING FAMILY. `#open` marks the url for leaf-stripping and gives it its own cache slot, so
+     the same file serves an open arch and (one day) a shut door. */
+  archOpen: `${u1('wall_doorway')}#open`,
   archScaffold: u('wall_open_scaffold'),
-  archBlind: u('wall_arched'),   // the decorative one — solid, for a wall that only looks arched
+  archBlind: u('wall_arched'),
+  windowArched: u('wall_archedwindow_open'),
+  windowBarred: u('wall_archedwindow_gated'),
+  windowClosed: u('wall_window_closed'),
+  cracked: u('wall_cracked'),
+  scaffold: u('wall_scaffold'),
+  shelves: u('wall_shelves'),
+  wallPillar: u('wall_pillar'),
   /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
   stairsNarrow: u('stairs_narrow'),
   stairsBanister: u('stairs'),
@@ -66,7 +75,7 @@ export const PIECE = {
   stairsWallLeft: u('stairs_wall_left'),
   stairsWallRight: u('stairs_wall_right'),
   stairsWood: u('stairs_wood'),
-  window: u('wall_archedwindow_open'),
+  window: u('wall_window_open'),
   gate: u('wall_gated'),
   broken: u('wall_broken'),
   wall: u('wall'),
@@ -101,12 +110,32 @@ const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'sta
 };
 
 /** Which 4u module an opening draws. `door` and `arch` share a mesh today. */
-export const wallTypeUrl = (wt: WallType): string =>
-  wt === 'door' || wt === 'arch' ? PIECE.arch
-    : wt === 'window' ? PIECE.window
-      : wt === 'low_gate' ? PIECE.gate
-        : wt === 'hole' ? PIECE.broken
-          : PIECE.wall;
+/**
+ * TYPE -> MESH, one table rather than a chain of conditionals, so adding an asset is a line and not a
+ * branch. Every entry was measured (the asset audit); the names in this kit are not reliable.
+ *
+ * `#open` on the doorway is not decoration — it is a distinct CACHE KEY for the same file. The loader
+ * strips the door leaf from any url carrying it (`openDoorLeaves`), which is how one GLB serves both
+ * an open arch and a shut door without shipping two copies.
+ */
+const WALLTYPE_URL: Record<WallType, string> = {
+  solid: PIECE.wall,
+  door: PIECE.archOpen,             // wall_doorway, leaf stripped — 2.00 x 2.70, PASSABLE
+  arch: PIECE.archOpen,             // the same stone opening; a separate name an author can reach for
+  arch_scaffold: PIECE.archScaffold, // timber frame, 3.40 clear, PASSABLE
+  arch_blind: PIECE.archBlind,      // wall_arched — looks like a deep arch, sealed by a 0.10 web
+  window: PIECE.window,             // 1.40 x 1.30 at sill 1.30
+  window_arched: PIECE.windowArched, // 2.00 x 1.60 at sill 1.05
+  window_barred: PIECE.windowBarred, // the same envelope, 18 bars of 0.40
+  window_closed: PIECE.windowClosed, // the same envelope as `window`, infilled
+  low_gate: PIECE.gate,             // portcullis on a 0.75 sill
+  hole: PIECE.broken,               // a ragged breach that pinches to 0.10 — see through, not walk
+  cracked: PIECE.cracked,
+  scaffold: PIECE.scaffold,
+  shelves: PIECE.shelves,
+  engaged_pillar: PIECE.wallPillar,
+};
+export const wallTypeUrl = (wt: WallType): string => WALLTYPE_URL[wt];
 
 const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z): CellPlacement =>
   ({ url, x, y, z, turn, scale });

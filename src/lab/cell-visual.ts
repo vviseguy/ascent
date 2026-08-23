@@ -29,7 +29,7 @@
 //            solid/door/window, the outer hole/arch/low_gate. Six independent bits shown in the space
 //            of a corner, and a plain `solid` corner draws no ring at all so the board stays quiet.
 
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES } from '../floor/cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, isOpenType } from '../floor/cell.ts';
 import type { Seg, FloorMaterial, Corner, WallType, Torch } from '../floor/cell.ts';
 import type { Mask } from '../floor/cell-field.ts';
 
@@ -176,10 +176,19 @@ export const cornerStrength = (m: Mask): number => certainty(maskValues(m, CORNE
 /** SIX values do not fit three channels, so they are split across two rings drawn tight around the
  *  corner — the corner's own boundary, in effect. Inner is the ordinary three, outer the rarer three. */
 export const OPENING_RING: readonly (readonly WallType[])[] = [
-  ['solid', 'door', 'window'],
-  ['hole', 'arch', 'low_gate'],
+  ['door', 'arch', 'arch_scaffold'],            // inner: you can WALK through
+  ['window', 'window_arched', 'window_barred'], // outer: you can SEE through
 ];
 
+/**
+ * A RING MEANS YOU CAN GET THROUGH — which is the only thing about a wall type the schematic has to
+ * shout about. The other nine types are solid walls that happen to look like something (cracked,
+ * shelved, scaffolded, a blind arch), and they draw NO ring on purpose: a board where every wall wore
+ * a marker would say nothing at all, and none of them changes where you can go.
+ *
+ * That is a change of meaning from when there were six types and the rings simply enumerated them.
+ * Which decorative variant a wall wears is in the readout and the brush; whether you can pass is here.
+ */
 /** `null` for a ring with nothing in it, so a plain solid corner draws no rings at all. */
 export function openingRings(m: Mask): (string | null)[] {
   return OPENING_RING.map((ring) => {
@@ -267,8 +276,14 @@ export const SEG_SWATCH = swatchTable(SEGS, SEG_CHANNEL);
 export const FLOOR_SWATCH = swatchTable(FLOOR_MATERIALS, FLOOR_CHANNEL, 'ground');
 export const CORNER_SWATCH = swatchTable(CORNERS, CORNER_CHANNEL);
 /** An opening's colour is its position WITHIN its ring; the ring it sits on carries the rest. */
+/** Ringed types wear their channel; the solid ones share a neutral swatch, because they are all the
+ *  same answer to the only question the schematic asks. */
 export const WALLTYPE_SWATCH: Record<WallType, string> = Object.fromEntries(
-  OPENING_RING.flatMap((ring) => ring.map((v, j) => [v, channelColor(j as Channel)])),
+  WALL_TYPES.map((v) => {
+    const ring = OPENING_RING.findIndex((r) => r.includes(v));
+    const j = ring >= 0 ? OPENING_RING[ring]!.indexOf(v) : -1;
+    return [v, j >= 0 ? channelColor(j as Channel) : '#5b6470'];
+  }),
 ) as Record<WallType, string>;
 export const TORCH_SWATCH: Record<Torch, string> = { no: rgb([false, false, false]), yes: TORCH_MARK };
 
@@ -309,9 +324,10 @@ export function legend(): { title: string; note: string; rows: LegendRow[] }[] {
     },
     {
       title: 'opening',
-      note: 'two rings around the corner: inner solid/door/window, outer hole/arch/low_gate.',
+      note: 'a ring means you can get THROUGH — inner walk, outer see. The nine solid variants '
+        + '(cracked, shelves, scaffold, a blind arch...) wear no ring: none of them changes where you can go.',
       rows: OPENING_RING.flatMap((ring, i) =>
-        ring.map((v, j) => ({ label: `${v}`, color: channelColor(j as Channel), note: i === 0 ? 'inner' : 'outer' }))),
+        ring.map((v, j) => ({ label: v, color: channelColor(j as Channel), note: i === 0 ? 'walk' : 'see' }))),
     },
   ];
 }
