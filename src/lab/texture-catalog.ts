@@ -62,6 +62,11 @@ export interface TextureOption {
 /** The texture library. Order = menu order within each group. */
 export const TEXTURES: readonly TextureOption[] = [
   { id: 'none', label: '— flat (no texture) —', group: 'neutral', scale: 1 },
+  // RELIEF CALIBRATION — a flat grey albedo plus a normal map whose height profile is known:
+  // height RISES from the image top to the middle and FALLS after, so the crest is the midline
+  // and the troughs are the top and bottom edges. Pick it on any type and the surface tells you
+  // unambiguously whether the pipeline lights a ridge as a ridge. Not art — a measuring stick.
+  { id: 'calibration', label: 'Relief calibration (test)', group: 'neutral', diff: 'calib_diff.png', nor: 'calib_nor.png', scale: 2.0 },
   // stone family
   { id: 'masonry', label: 'Masonry', group: 'stone', diff: 'stone_diff.jpg', nor: 'stone_nor.jpg', rough: 'stone_rough.jpg', scale: 3.0 },
   { id: 'brick', label: 'Brick', group: 'stone', diff: 'brick_diff.jpg', nor: 'brick_nor.jpg', scale: 2.2 },
