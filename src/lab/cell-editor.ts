@@ -44,7 +44,7 @@ import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts'
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
 import {
   CASING, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend,
-  openingIsPlain, openingRings, patternDefs, segInk, segValueColor,
+  openingIsPlain, openingRings, openState, patternDefs, segInk, segValueColor,
   CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH, OPEN_SWATCH, TORCH_SWATCH, TORCH_MARK, torchState,
 } from './cell-visual.ts';
 import * as THREE from 'three';
@@ -611,11 +611,21 @@ function render(): void {
          rather than a separate mark competing for the same spot. A plain solid opening draws neither,
          which keeps a board of ordinary corners quiet. */
       if (!openingIsPlain(f.wallType)) {
+        /* A GAP IN THE RING is the opening; a complete ring is closed; undecided is complete and faint.
+           The circumference at r is 2*pi*r, so a dash pattern of [C - gap, gap] draws exactly one
+           break of `gap` px wherever the ring is. */
+        const os = openState(f.open);
         openingRings(f.wallType).forEach((col, i) => {
           if (!col) return;
+          const r = 11 + i * 3.5;
+          const circ = 2 * Math.PI * r;
+          const GAP = 7;
           svg.append(svgEl('circle', {
-            cx: X(px), cy: Y(py), r: 11 + i * 3.5, fill: 'none', stroke: col,
-            'stroke-width': 2.6, 'pointer-events': 'none',
+            cx: X(px), cy: Y(py), r, fill: 'none', stroke: col,
+            'stroke-width': 2.6,
+            ...(os === 'open' ? { 'stroke-dasharray': `${(circ - GAP).toFixed(1)} ${GAP}` } : {}),
+            opacity: os === 'undecided' ? 0.4 : 1,
+            'pointer-events': 'none',
           }));
         });
       }

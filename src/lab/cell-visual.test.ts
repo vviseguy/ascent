@@ -3,10 +3,10 @@
 // silently when someone appends a value.
 import { describe, it, expect } from 'vitest';
 import {
-  certainty, cornerInk, floorInk, floorValueColor, openingIsPlain, openingRings, rgb, segInk,
+  certainty, cornerInk, floorInk, floorValueColor, openingIsPlain, openingRings, openState, rgb, segInk,
   CORNER_CHANNEL, FLOOR_CHANNEL, SEG_CHANNEL,
 } from './cell-visual.ts';
-import { floors, segs, corners, wallTypes, fullField } from '../floor/cell-field.ts';
+import { floors, segs, corners, wallTypes, opens, fullField } from '../floor/cell-field.ts';
 import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from '../floor/cell.ts';
 
 
@@ -148,3 +148,21 @@ describe('cell-visual — the layers stay apart', () => {
 
 // keep the imports honest
 void corners;
+
+describe('cell-visual — `open` is VISIBLE, which it was not', () => {
+  /* The field was authorable and undrawn: the brush painted it, the schematic did not change, and an
+     author had no way to see whether it took. A structure shipped with twenty scaffold walls whose
+     `open` was still undecided — settling to `closed`, exactly as specified — and the only hint was
+     the `random` lens flickering them open. */
+  it('tells the three states apart', () => {
+    expect(openState(opens('open'))).toBe('open');
+    expect(openState(opens('closed'))).toBe('closed');
+    expect(openState(opens('closed', 'open'))).toBe('undecided');
+    expect(openState(fullField().open)).toBe('undecided');
+  });
+
+  it('UNDECIDED is not `open` — that is the confusion that caused this', () => {
+    // a domain allowing both is not a claim that it is open; it settles closed
+    expect(openState(opens('closed', 'open'))).not.toBe('open');
+  });
+});

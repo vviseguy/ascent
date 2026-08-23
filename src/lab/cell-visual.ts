@@ -288,6 +288,26 @@ export const WALLTYPE_SWATCH: Record<WallType, string> = Object.fromEntries(
 ) as Record<WallType, string>;
 /** `closed` is the quiet default; `open` is the claim, so it gets the bright half. */
 export const OPEN_SWATCH: Record<Open, string> = { closed: rgb([false, false, false]), open: channelColor(1) };
+
+/**
+ * WHETHER THE MODULE HAS A HOLE IN IT — and the schematic has to SHOW it.
+ *
+ * It did not, which is the whole reason this exists. `open` was authorable and invisible: the brush
+ * painted it, the drawing did not change, and an author had no way to tell whether it took or which
+ * walls were already open. A structure went in with twenty scaffold walls whose `open` was still
+ * undecided, settling to `closed`, exactly as the field says it should — and the only clue was the
+ * `random` ambiguity lens flickering them open now and then.
+ *
+ * The mark is a GAP IN THE RING: the ring is the module, so a break in it is the way through. A
+ * complete ring is closed. Undecided keeps the complete ring and goes faint, which is what every other
+ * field here does when it has not been decided (`certainty`) — so the gap only ever appears when the
+ * opening is certain, and faintness never means "open".
+ */
+export const openState = (m: Mask): 'closed' | 'open' | 'undecided' => {
+  const v = maskValues(m, OPENS);
+  if (v.length === 1) return v[0] === 'open' ? 'open' : 'closed';
+  return 'undecided';
+};
 export const TORCH_SWATCH: Record<Torch, string> = { no: rgb([false, false, false]), yes: TORCH_MARK };
 
 /* ---------------------------------- legend ----------------------------------- */
