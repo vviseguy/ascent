@@ -152,7 +152,7 @@ suppression must both ask `moduleAxis` — two hand-written conditions had alrea
 opening's axis, and a torch's facing. Each is read from the walls at draw time. Anything that is a
 fact about the walls belongs to the walls.
 
-Two rules that keep biting if forgotten:
+Three rules that keep biting if forgotten:
 - **Abstaining ≠ asserting.** A full domain says "no opinion" and every later phase reads it as
   "help yourself"; a pinned `none` says "this is air". A room must SAY its interior is air or the
   maze carves through it.
@@ -164,7 +164,7 @@ Two rules that keep biting if forgotten:
   preview with a bare `collapse` — it takes the canonical-lowest option, and the lowest floor
   material is `none`, so an unclaimed floor previews as a pit rather than the stone it becomes.
 
-### The 4u worldgen pipeline (still what renders — read docs/13 before editing it)
+### The 4u worldgen pipeline (NO LONGER the default — `?substrate=4u`; read docs/13 before editing it)
 ```
 Floor graph  (src/floor/generate.ts)   spines → openness → rooms → puzzles   → Floor
   → verify   (src/floor/verify.ts)     INDEPENDENT solvability proof (generator-blind)
