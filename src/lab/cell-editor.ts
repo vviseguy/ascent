@@ -99,6 +99,9 @@ let dragging = false;
 interface Stored { w: number; h: number; levels?: number; cells: CellField[] }
 let structures: Record<string, Stored> = {};
 let brushes: Record<string, Stored> = {};
+// The structure this grid was LOADED from, so putting it back needs no dialog. Null means the grid is
+// not (yet) any stored structure: a fresh page, or one that has been cleared.
+let loadedName: string | null = null;
 
 const blankGrid = (): CellField[] => Array.from({ length: (W + 1) * (H + 1) * LEVELS }, fullField);
 const el = (id: string): HTMLElement => document.getElementById(id)!;
@@ -780,13 +783,14 @@ function chipRow<T extends string>(vals: readonly T[], set: Set<T>, table: Recor
     }, ...(table ? [h('span', { class: 'sw', style: `background:${table[v]}` })] : []), v)));
 }
 
-function listBox(store: Record<string, Stored>, onPick: (n: string) => void, onDel: (n: string) => void): HTMLElement {
+function listBox(store: Record<string, Stored>, onPick: (n: string) => void, onDel: (n: string) => void,
+                 cur: string | null = null): HTMLElement {
   const names = Object.keys(store).sort();
   if (!names.length) return h('div', { class: 'hint', style: 'margin-top:0' }, 'none yet');
   const box = h('div', {});
   for (const n of names) {
     const s = store[n]!;
-    box.append(h('div', { class: 'item' },
+    box.append(h('div', { class: `item${n === cur ? ' cur' : ''}` },
       h('span', { class: 'nm', onclick: () => onPick(n) }, `${n} · ${s.w}×${s.h}`),
       h('button', { class: 'danger', onclick: () => onDel(n) }, '✕')));
   }
@@ -864,9 +868,20 @@ function buildPanel(): void {
     (n) => void del('cell-brushes', n, 'brush')));
 
   p.append(h('h2', {}, 'Structures → game'));
-  p.append(listBox(structures, load, (n) => void del('cell-structures', n, 'structure')));
+  const cur = loadedName;   // captured, so the handlers below close over a name and not a mutable slot
+  p.append(listBox(structures, load, (n) => void del('cell-structures', n, 'structure'), cur));
   p.append(h('div', { class: 'row', style: 'margin-top:6px' },
-    h('button', { class: 'primary', onclick: () => void saveStructure() }, '↑ Save structure')));
+    // The loop is paint → look → save → look again, so the common save is back onto the piece you
+    // opened. Naming the target ON the button is the confirmation — no dialog to click through.
+    ...(cur
+      ? [h('button', {
+          class: 'primary', title: `Ctrl+S — overwrite “${cur}” in place`,
+          onclick: () => void saveStructure(cur),
+        }, `↑ Save “${cur}”`),
+        h('button', { title: 'Save under a different name', onclick: () => void saveStructure() }, 'Save as…')]
+      : [h('button', { class: 'primary', onclick: () => void saveStructure() }, '↑ Save structure')])));
+  if (cur) p.append(h('div', { class: 'hint', style: 'margin-top:6px' },
+    `Editing “${cur}” — Save overwrites it; Save as… leaves it alone and stores a copy.`));
 
   p.append(h('div', { id: 'ready' }));
   p.append(h('div', { id: 'status' }));
@@ -912,22 +927,29 @@ function load(name: string): void {
   L = 0;
   cells = s.cells.map((f) => ({ ...f }));
   framedFor = '';
+  loadedName = name;
   buildPanel(); frameCamera();
   status(`loaded “${name}”${LEVELS > 1 ? ` · ${LEVELS} storeys` : ''}`);
 }
 
-async function saveStructure(): Promise<void> {
-  const name = await ask({
-    title: 'Save structure', input: 'new structure', ok: 'Save',
+/**
+ * `over` is the name to overwrite outright — the grid came from it, so no dialog and no retyping.
+ * Called with nothing this asks for a name, defaulting to the loaded one so Save as… starts from
+ * where you are rather than from `new structure`.
+ */
+async function saveStructure(over?: string): Promise<void> {
+  const name = over ?? (await ask({
+    title: 'Save structure', input: loadedName ?? 'new structure', ok: 'Save',
     body: `${W}×${H} floor cells${LEVELS > 1 ? ` × ${LEVELS} storeys` : ''}. The generator places these — an existing `
       + `structure of the same name is overwritten.`
       + (LEVELS > 1 ? ' NOTE: the generator builds one floor at a time and will not place a multi-storey structure yet.' : ''),
-  });
+  }));
   if (!name) return;
   // the padding rule is applied on the way OUT, so the store never carries phantom geometry
   if (await post('cell-structures', name, {
     structure: { w: W, h: H, ...(LEVELS > 1 ? { levels: LEVELS } : {}), cells: forStore() },
   })) {
+    loadedName = name;   // saving under a new name is also a statement about what you are editing now
     await refresh();
     status(`saved structure “${name}”`);
   }
@@ -963,7 +985,11 @@ async function del(kind: string, name: string, what: string): Promise<void> {
     body: `“${name}” will be removed from the store. This cannot be undone.`,
   });
   if (!go) return;
-  if (await post(kind, name, { remove: true })) { await refresh(); status(`deleted “${name}”`); }
+  if (await post(kind, name, { remove: true })) {
+    if (kind === 'cell-structures' && name === loadedName) loadedName = null;
+    await refresh();
+    status(`deleted “${name}”`);
+  }
 }
 
 async function clearAll(): Promise<void> {
@@ -975,7 +1001,8 @@ async function clearAll(): Promise<void> {
   pushUndo();
   LEVELS = 1; L = 0;
   cells = blankGrid();
-  render();
+  loadedName = null;
+  buildPanel();
 }
 
 /* ----------------------------------- 3D ------------------------------------- */

@@ -433,7 +433,13 @@ function flightGeometry(
   const walls: -1 | 0 | 1 | 2 =
     closed[left] && closed[right] ? 2 : closed[left] ? -1 : closed[right] ? 1 : 0;
 
-  if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run)) {
+  /* RUN AND WIDTH ARE BOTH HARD. Run length was already — a 4u mesh in a 6u hole leaves a step
+     missing — but width was only a preference, and a block wider than any mesh fell through to
+     `fits[0]`. That drew a 7.00 mesh over an 8u block and left 1.00 x 4.00 of deck simply absent,
+     because the block's other cells abstain from drawing ground of their own (`insideFlight`).
+     Failing here instead sends the whole block to per-cell stone: visible, walkable, and
+     `stairFaultText` tells the author which sizes exist. */
+  if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run && m.across === width)) {
     return { fault: { kind: 'no-mesh', mat, run, width } };
   }
   return { ok: { mat, bw, bh, up, width, run, walls } };
@@ -449,10 +455,10 @@ export function stairFlight(
   /* The first mesh that FITS. MATERIAL and RUN LENGTH are hard requirements — a stone flight is not a
      wooden one, and a 4u mesh in a 6u hole leaves a step missing — while width and walls are
      preferences, so an unusual block degrades to a plainer mesh instead of vanishing. */
-  const fits = STAIR_MESHES.filter((m) => m.mat === mat && m.run === run);
-  const best = fits.find((m) => m.across === width && m.walls === walls)
-    ?? fits.find((m) => m.across === width)
-    ?? fits[0];
+  const fits = STAIR_MESHES.filter((m) => m.mat === mat && m.run === run && m.across === width);
+  // walls stay a PREFERENCE — a flight with no matching walled variant is still the right size, so it
+  // degrades to a plainer mesh of the same footprint rather than vanishing
+  const best = fits.find((m) => m.walls === walls) ?? fits[0];
   if (!best) return null;
 
   return { x, y, bw, bh, up, width, run, walls: best.walls, url: best.url };
@@ -484,8 +490,11 @@ export function stairFaultText(f: StairFault): string {
     return 'cannot tell which way it climbs — one END must be walled and the opposite one open, '
       + 'so there is a top to climb toward and a bottom to walk in at';
   }
-  const want = [...new Set(STAIR_MESHES.filter((m) => m.mat === f.mat).map((m) => m.run))].sort();
-  return `no ${f.mat} flight is ${f.run} cells long — it must be ${want.join(' or ')}`;
+  const forMat = STAIR_MESHES.filter((m) => m.mat === f.mat);
+  const runs: number[] = [...new Set<number>(forMat.map((m) => m.run))].sort();
+  const widths: number[] = [...new Set<number>(forMat.filter((m) => m.run === f.run).map((m) => m.across))].sort();
+  if (!runs.includes(f.run)) return `no ${f.mat} flight is ${f.run} cells long — it must be ${runs.join(' or ')}`;
+  return `no ${f.mat} flight ${f.run} long is ${f.width} across — it must be ${widths.join(' or ')}`;
 }
 
 /** Is this cell inside a flight owned by another cell? Such a cell contributes no ground of its own. */
