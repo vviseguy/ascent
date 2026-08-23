@@ -9,7 +9,7 @@
 // Pure VIEW/tooling — no sim, no determinism constraints.
 // ============================================================================
 
-import type { FaceSelectHandle } from './face-select.ts';
+import type { FaceSelectHandle, GrowMode } from './face-select.ts';
 
 export interface SurfacePanelOpts {
   container: HTMLElement;
@@ -67,6 +67,23 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   panel.appendChild(enable);
 
   // --- tolerance ---
+  // --- GROW MODE ---
+  // Two different questions, not two settings of one. 'planar' asks what is FLAT with this face;
+  // 'carve' asks what belongs to the same carved piece — the face plus the slants that roll off
+  // it, stopping where the next piece's slant comes back up (a concave crease).
+  const modeRow = document.createElement('div');
+  Object.assign(modeRow.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '6px 0 2px' } as Partial<CSSStyleDeclaration>);
+  const modeLbl = document.createElement('span');
+  modeLbl.textContent = 'grow';
+  modeLbl.style.flex = '0 0 34px';
+  const modeSel = document.createElement('select');
+  Object.assign(modeSel.style, { flex: '1 1 auto', background: '#20202e', color: '#def', border: '1px solid #383850', borderRadius: '5px', padding: '2px 4px', font: '10px system-ui' } as Partial<CSSStyleDeclaration>);
+  for (const [v, t] of [['planar', 'planar — flat faces'], ['carve', 'carved tile — face + its slants']]) {
+    const o = document.createElement('option'); o.value = v!; o.textContent = t!; modeSel.appendChild(o);
+  }
+  modeSel.addEventListener('change', () => { select()?.setMode(modeSel.value as GrowMode); sync(); renderGroups(); });
+  modeRow.append(modeLbl, modeSel);
+  panel.appendChild(modeRow);
   const tolWrap = document.createElement('label');
   Object.assign(tolWrap.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 4px' } as Partial<CSSStyleDeclaration>);
   const tolTxt = document.createElement('span');
@@ -197,6 +214,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   const rebind = (): void => {
     const h = select();
     if (!h) return;
+    h.setMode(modeSel.value as GrowMode);
     h.setTolerance(Number(tol.value));
     h.setEnabled(cb.checked);
     h.setShowGroups(gcb.checked);
