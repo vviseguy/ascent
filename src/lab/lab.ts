@@ -677,7 +677,7 @@ async function boot(): Promise<void> {
         refit: () => refit(),
         // sourceHash, NOT the live root: with faces already hidden the root IS the filtered mesh,
         // and storing that hash makes the next cold load reject the edit as "geometry changed".
-        save: () => saveSurfaces(surfaceUrl, { geom: faces!.sourceHash(), hidden: faces!.hidden() }),
+        save: (groups) => saveSurfaces(surfaceUrl, { geom: faces!.sourceHash(), hidden: faces!.hidden(), groups: [...groups] }),
       });
     }
 
