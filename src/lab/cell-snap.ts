@@ -113,7 +113,7 @@ function subject(): Subject {
     const w = Number(m[1]), h = Number(m[2]);
     const r = generateEmergent({ width: w, height: h, seed: BigInt(num('seed', 1)) });
     return {
-      cells: resolveFloor(r.grid), w, h, extent: { w, h },
+      cells: resolveFloor(r), w, h, extent: { w, h },
       label: `floor ${w}x${h} seed ${num('seed', 1)} — ${r.stats.structuresPlaced} structures`,
     };
   }
