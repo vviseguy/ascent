@@ -25,6 +25,9 @@ npm run build          # tsc -b && vite build (also the CI/Pages build)
 
 # Asset Lab (browse/iterate KayKit models + colors in isolation):
 npm run lab            # opens lab.html — turntable gallery + box-fit + recolor legend
+npm run sheet          # opens sheet.html — EVERY object on one grid under one material profile
+npm run tex:seams      # is a texture actually tileable? scores every public/textures/*_diff
+npm run stores:check   # before committing: is a tracked authoring store dirty vs HEAD?
 npm run lab:snap -- <element>   # headless screenshot of one element (agents can see PNGs)
 npm run probe:palette  # sample the real GLBs → which atlas swatch each triangle lands on
 

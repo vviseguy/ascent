@@ -13,3 +13,7 @@ tmp/
 
 # Claude Code preview launch config (local)
 .claude/launch.json
+
+# A headless script whose output dir resolved to the literal string "undefined" once wrote four
+# screenshots here and `git add -A` shipped them to main. Belt and braces.
+undefined/
