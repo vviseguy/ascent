@@ -114,7 +114,12 @@ const WALL_FALLBACK: Record<string, { w: number; d: number; h: number; gap?: num
   wall: { w: 4, d: 0.5, h: 4 },
   wall_half: { w: 2, d: 0.5, h: 4 },
   wall_half_endcap: { w: 2, d: 0.5, h: 4 },
-  wall_endcap: { w: 1.07, d: 0.5, h: 4 },
+  /* NO ENTRY FOR `wall_endcap`, and that is the point. A cap is a 1.07 flourish pushed PAST the end
+     of the wall it finishes — the model says the wall stops at the lattice point, and the cap sticks
+     out beyond it into the next cell. Giving it collision made the map narrower than the model
+     describes: it stands in the MIDDLE of a cell rather than on a seam, so `route-check`'s seam test
+     cannot see it, the route walked straight through it, and the Anchor wedged on the third waypoint.
+     Collision follows what the walls ASSERT; decoration that overhangs is drawn and not collided. */
   wall_cracked: { w: 4, d: 0.5, h: 4 },
   wall_scaffold: { w: 4, d: 0.5, h: 4 },
   wall_shelves: { w: 4, d: 0.5, h: 4 },

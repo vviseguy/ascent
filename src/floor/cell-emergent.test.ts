@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateEmergent, resolveEmergent } from './cell-emergent.ts';
+import { generateEmergentTower, generateEmergent, resolveEmergent } from './cell-emergent.ts';
 import { buildCellGraph, reachableFrom, reachableFromSet, nodeId } from './cell-graph.ts';
 import { resolveGrid } from './cell-grid.ts';
 import { hasConflict, domainSize, FIELD_KEYS, previewCell, settleMask, fullField, template, floors } from './cell-field.ts';
@@ -217,14 +217,28 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
     /* The perimeter used to be marked porous wholesale: both sides of every edge cell, drawn or not.
        SEAL then stamped a wall into each, and wherever the author had merely ABSTAINED the stamp
        succeeded — inventing walls nobody drew. Those invented segments were the nubs sprouting off
-       every structure. On this store it was 241 seals against 80 real ones. */
+       every structure. On this store it was 241 seals against 80 real ones.
+
+       RUN ON A TOWER, not a single floor. A structure taller than the stack is declined, and the store
+       is now mostly multi-storey — a lone floor places only the two flat structures and never exercises
+       the seal at all, so this assertion silently stopped testing anything. */
     for (const seed of SEEDS) {
-      const s = run(seed).stats;
+      const t = generateEmergentTower({ width: W, height: H, seed, levels: 3 });
+      const s = t.stats;
+      expect(s.structuresPlaced).toBeGreaterThan(0);
       // whatever porosity opened, seal accounts for: it closed it, or kept it as a door
       expect(s.ringSealed + s.doorsKept).toBeGreaterThan(0);
       // and the count is now bounded by the walls the structures actually carry on their edges
-      expect(s.ringSealed).toBeLessThan(200);
+      expect(s.ringSealed).toBeLessThan(200 * 3);
     }
+  });
+
+  it('a single floor can no longer place a multi-storey structure, and SAYS so', () => {
+    /* Not a bug — a three-storey hall cannot stand on a one-storey floor. But it is worth pinning,
+       because the store drifting to mostly-multi-storey is what quietly emptied the test above. */
+    const g = generateEmergent({ width: W, height: H, seed: 3n });
+    expect(g.stats.structuresSkippedMultiLevel).toBeGreaterThan(0);
+    expect(g.placed.every((p) => p.name !== 'throne room')).toBe(true);
   });
 
   it('a door appears where one is NEEDED — the porous ring is a safety valve, not decoration', () => {

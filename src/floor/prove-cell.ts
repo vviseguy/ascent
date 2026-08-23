@@ -7,7 +7,7 @@
 // collapsed cells, not by the domain machinery that built them. Then the non-vacuity controls: a
 // generator that accepted every proposal would pass the first three and fail these.
 
-import { generateEmergent, resolveEmergent } from './cell-emergent.ts';
+import { generateEmergent, generateEmergentTower, resolveEmergent, type EmergentResult } from './cell-emergent.ts';
 import { buildCellGraph, reachableFrom } from './cell-graph.ts';
 import { domainSize, FIELD_KEYS, hasConflict } from './cell-field.ts';
 import { listStructures } from './cell-structures.ts';
@@ -16,27 +16,42 @@ import type { Cell } from './cell.ts';
 let floors = 0, settled = 0, deterministic = 0, exitOk = 0, roomsOk = 0, wholeOk = 0;
 let placed = 0, walls = 0, doors = 0, sealed = 0, refused = 0;
 
+/* GENERATE TOWERS, not lone floors. A structure taller than the stack is declined, and the store is
+   now mostly multi-storey — on a single floor only the two flat structures place, so the perimeter is
+   never made porous and the SEAL control below had nothing to observe. It reported honestly (0 sealed,
+   0 refused) rather than passing on an empty world, which is what a non-vacuity control is for. */
 const SIZES: [number, number][] = [[24, 20], [30, 24], [36, 28]];
+const LEVELS = 3;
 for (const [w, h] of SIZES) {
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 4; i++) {
     const seed = BigInt(i * 7919 + w * 31 + 1);
-    const r = generateEmergent({ width: w, height: h, seed });
-    const cells = resolveEmergent(r, seed) as (Cell | null)[];
-    floors++;
+    const tower = generateEmergentTower({ width: w, height: h, seed, levels: LEVELS });
 
-    if (r.grid.cells.every((f) => !hasConflict(f) && FIELD_KEYS.every((k) => domainSize(f[k]) === 1))) settled++;
-    if (JSON.stringify(generateEmergent({ width: w, height: h, seed }).grid) === JSON.stringify(r.grid)) deterministic++;
+    // determinism is a property of the WHOLE stack: same seed, same tower, byte for byte
+    const again = generateEmergentTower({ width: w, height: h, seed, levels: LEVELS });
+    const same = tower.floors.every((f, k) => JSON.stringify(f.grid) === JSON.stringify(again.floors[k]!.grid));
 
-    const seen = reachableFrom(buildCellGraph(cells, w, h), r.entry);
-    if (seen[r.exit]) exitOk++;
-    if (r.placed.every((p) => seen[p.centre])) roomsOk++;
-    if (seen.filter(Boolean).length / (w * h) > 0.95) wholeOk++;
+    for (const r of tower.floors) {
+      const cells = resolveEmergent(r as unknown as EmergentResult, seed) as (Cell | null)[];
+      floors++;
+      if (same) deterministic++;
+      if (r.grid.cells.every((f) => !hasConflict(f) && FIELD_KEYS.every((k) => domainSize(f[k]) === 1))) settled++;
 
-    placed += r.stats.structuresPlaced;
-    walls += r.stats.wallsPlaced;
-    doors += r.stats.doorsKept;
-    sealed += r.stats.ringSealed;
-    refused += r.stats.wallsRejectedUnreachable + r.stats.wallsRejectedConflict + r.stats.structuresRejectedOverlap;
+      const seen = reachableFrom(buildCellGraph(cells, w, h), r.entry);
+      if (seen[r.exit]) exitOk++;
+      if (r.placed.every((p) => seen[p.centre])) roomsOk++;
+      if (seen.filter(Boolean).length / (w * h) > 0.95) wholeOk++;
+    }
+
+    /* Stats are kept for the STACK, not per floor — structures are placed across the whole tower in
+       one phase, so a per-floor tally of "structures placed" would count a three-storey hall three
+       times or not at all depending on where you looked. */
+    placed += tower.stats.structuresPlaced;
+    walls += tower.stats.wallsPlaced;
+    doors += tower.stats.doorsKept;
+    sealed += tower.stats.ringSealed;
+    refused += tower.stats.wallsRejectedUnreachable + tower.stats.wallsRejectedConflict
+      + tower.stats.structuresRejectedOverlap;
   }
 }
 

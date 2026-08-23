@@ -52,8 +52,20 @@ export interface RouteProbe {
   reach: number;
   /** Clearance required above a surface to stand on it (≈ body height). */
   headroom: number;
-  /** Footprint core shrink for the headroom test (≈ body radius). */
+  /**
+   * Footprint core inset for the headroom test — a TOLERANCE, not a body size. It stops a slab being
+   * rejected because its extreme corner clips something overhead. Raising it accepts MORE nodes.
+   */
   shrink: number;
+  /**
+   * The body's actual radius, for "does it fit through this gap". Raising it accepts FEWER crossings.
+   *
+   * SEPARATE FROM `shrink` ON PURPOSE. One number used to serve both, and the two pull in opposite
+   * directions: correcting it to the Anchor's real 0.55 made the seam test properly stricter and the
+   * headroom test quietly looser at the same time, which turned a sealed tower routable and broke the
+   * negative control. Two meanings, two fields.
+   */
+  radius: number;
   /** Minimum footprint side for a top to count as standable floor. */
   minSide: number;
 }
@@ -63,11 +75,23 @@ export interface RouteProbe {
  * maxStep 0.6 < its 0.71 u jump apex; 1.9 headroom for its 2.0 u body (the small
  * allowance keeps flush-top boxes from reading as their own ceiling).
  */
+/**
+ * THE ANCHOR'S ACTUAL BODY, and it must stay that way.
+ *
+ * There was no `radius` at all: the seam test used `shrink * 2` = 0.8 against a body `scene.ts` spawns
+ * at radius 0.55 — 1.10 wide — and `headroom` was 1.9 against a 2.00-tall body. The probe NAMED for the
+ * Anchor was 27% too narrow, so it certified crossings the Anchor cannot fit through: a doorway jamb
+ * leaves 1.0 of clear seam, which passes a 0.8 test and stops a 1.1 body dead. PROOF 9 wedged on
+ * exactly that, which is the entire reason it drives a real body instead of trusting the graph.
+ *
+ * If the Anchor's dimensions change in `scene.ts`, these change with them.
+ */
 export const ANCHOR_PROBE: RouteProbe = {
   maxStep: 0.6,
   reach: 0.35,
-  headroom: 1.9,
+  headroom: 2.0,
   shrink: 0.4,
+  radius: 0.55,
   minSide: 0.8,
 };
 
@@ -248,7 +272,17 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
    * Only asked of surfaces at the SAME height; see the call site for why.
    */
   const SAMPLE = 0.1;
-  const bodyWide = probe.shrink * 2;
+  const bodyWide = probe.radius * 2;
+  /**
+   * WHERE the last seam test found room, keyed `${ai}>${bi}`.
+   *
+   * A node's CENTRE is not always a point you can walk to from the node before it: half a seam can be
+   * filled by a doorway jamb, and the centre may sit behind the filled half. Steering at centres then
+   * drives the body into the jamb's corner even though the crossing is genuinely wide enough — which
+   * is exactly how PROOF 9 wedged on its third waypoint with a perfectly good route in hand.
+   */
+  const gateAt = new Map<string, { x: number; z: number }>();
+
   function seamBlocked(a: StandNode, b: StandNode): boolean {
     const y0 = Math.max(a.top, b.top) + 0.05;
     const y1 = y0 + probe.headroom * 0.55; // knee to chest — where a wall would stop you
@@ -269,7 +303,7 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
     const pz0 = acrossX ? lo : seam - SAMPLE, pz1 = acrossX ? hi : seam + SAMPLE;
     gatherBoxes(px0, px1, pz0, pz1, seen, near);
 
-    let run = 0;
+    let run = 0, best = 0, bestEnd = lo;
     for (let t = lo; t <= hi; t += SAMPLE) {
       const x = acrossX ? seam : t;
       const z = acrossX ? t : seam;
@@ -282,10 +316,18 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
       }
       if (hit) { run = 0; continue; }
       run += SAMPLE;
-      if (run >= bodyWide - 1e-9) return false; // a gap wide enough to walk through
+      /* The WIDEST clear run, not the first one that fits. Taking the first gives a point half a body
+         from the obstacle that ended the previous run — zero margin — and the body's own radius then
+         overlaps the very jamb the gap is next to. Scanning on for the widest costs one pass and puts
+         the aim point in the middle of the actual opening. */
+      if (run > best) { best = run; bestEnd = t; }
     }
-    return true;
+    if (best < bodyWide - 1e-9) return true;
+    const mid = bestEnd - best / 2;
+    lastGate = acrossX ? { x: seam, z: mid } : { x: mid, z: seam };
+    return false;
   }
+  let lastGate: { x: number; z: number } | null = null;
 
   const visited = new Array<boolean>(nodes.length).fill(false);
   const prev = new Array<number>(nodes.length).fill(-1);
@@ -296,13 +338,64 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
   const aSeen = new Set<number>();
   const aOut: number[] = [];
   /** Walk `prev` back to the start; the centre of each surface, entry first. */
-  const trace = (end: number): { x: number; z: number; top: number }[] => {
-    const out: { x: number; z: number; top: number }[] = [];
-    for (let i = end; i >= 0; i = prev[i]!) {
-      const n = nodes[i]!;
-      out.push({ x: (n.minX + n.maxX) / 2, z: (n.minZ + n.maxZ) / 2, top: n.top });
+  /**
+   * A point inside the node the body can actually OCCUPY, not merely its centre.
+   *
+   * A wall sits ON the slab it borders — an approved footprint is ~0.88 thick, so it reaches 0.44 into
+   * a 2.0 cell — and the Anchor's radius is 0.55. The centre of a cell against such a wall is therefore
+   * a place the Anchor cannot stand, and steering at it drives the body into the wall and holds it
+   * there. Sample the node's own core and take the first point with room all round.
+   */
+  function standablePoint(n: StandNode): { x: number; z: number } {
+    const y0 = n.top + 0.05, y1 = n.top + probe.headroom * 0.55;
+    const near: number[] = [];
+    gatherBoxes(n.minX - probe.radius, n.maxX + probe.radius, n.minZ - probe.radius, n.maxZ + probe.radius,
+      new Set<number>(), near);
+    const clear = (x: number, z: number): boolean => {
+      for (const bi of near) {
+        const b = solids[bi]!;
+        if (F(b.maxY) <= y0 || F(b.minY) >= y1) continue;
+        // A STEP IS NOT AN OBSTACLE. Anything whose top is within one stride of this surface is
+        // something you walk ONTO, not into — and on a staircase the next tread is always right
+        // there, so counting it rejected every tread on every flight.
+        if (F(b.maxY) - n.top <= probe.maxStep) continue;
+        if (x > F(b.minX) - probe.radius && x < F(b.maxX) + probe.radius
+          && z > F(b.minZ) - probe.radius && z < F(b.maxZ) + probe.radius) return false;
+      }
+      return true;
+    };
+    const cx = (n.minX + n.maxX) / 2, cz = (n.minZ + n.maxZ) / 2;
+    if (clear(cx, cz)) return { x: cx, z: cz };
+    // the centre is inside a wall's reach — try a grid across the node and take the roomiest point
+    const STEP = 0.15;
+    let bestPt: { x: number; z: number } | null = null, bestD = -1;
+    for (let x = n.minX + STEP; x <= n.maxX - STEP; x += STEP) {
+      for (let z = n.minZ + STEP; z <= n.maxZ - STEP; z += STEP) {
+        if (!clear(x, z)) continue;
+        const d = Math.min(x - n.minX, n.maxX - x, z - n.minZ, n.maxZ - z);
+        if (d > bestD) { bestD = d; bestPt = { x, z }; }
+      }
     }
-    return out.reverse();
+    /* NEVER DROP THE POINT. Returning null here made `trace` skip the node entirely, which silently
+       shortened the route — a staircase's treads all vanished and the path went from the floor to the
+       storey above in one 4-unit "step" no body could take. A cramped aim point still beats none. */
+    return bestPt ?? { x: cx, z: cz };
+  }
+
+  const trace = (end: number): { x: number; z: number; top: number }[] => {
+    const chain: number[] = [];
+    for (let i = end; i >= 0; i = prev[i]!) chain.push(i);
+    chain.reverse();
+    const out: { x: number; z: number; top: number }[] = [];
+    for (const [k, i] of chain.entries()) {
+      const n = nodes[i]!;
+      // the GATE first — the clear point on the seam this step crossed — then somewhere in the node
+      const g = k > 0 ? gateAt.get(`${chain[k - 1]}>${i}`) : undefined;
+      if (g) out.push({ x: g.x, z: g.z, top: n.top });
+      const c = standablePoint(n);
+      out.push({ x: c.x, z: c.z, top: n.top });
+    }
+    return out;
   };
   while (head < queue.length) {
     const ai = queue[head++]!;
@@ -321,7 +414,9 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
       // Telling those apart needs the swept-path model this check explicitly is not, so a hop is
       // left to the input-driven climbs to falsify. (Applying it to hops rejected the 4u tower's own
       // staircase, which PROOF 8 demonstrably walks.)
+      lastGate = null;
       if (Math.abs(b.top - a.top) < 0.05 && seamBlocked(a, b)) continue;
+      if (lastGate) gateAt.set(`${ai}>${j}`, lastGate);
       visited[j] = true;
       prev[j] = ai;
       reached++;

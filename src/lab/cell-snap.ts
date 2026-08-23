@@ -13,6 +13,7 @@
 //   ?demo=<kind>               a synthetic subject, for checking a mesh choice in isolation
 //   ?structure=<name>          one authored structure, on its own
 //   ?floor=<w>x<h>&seed=<n>    a generated floor
+//   &levels=<n>&level=<i>      ...from a real TOWER stack, so MULTI-STOREY structures can appear
 //   &level=<n>                 ONE storey of a multi-level structure (default: all, stacked)
 //   &turn=0..3 &flip=1         orient the structure first — the placement must survive all eight
 //   &angle=<deg> &pitch=<deg>  camera around / above
@@ -26,7 +27,7 @@ import { buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
 import { previewCell } from '../floor/cell-field.ts';
 import { getStructure, levelsOf, listStructures } from '../floor/cell-structures.ts';
 import { orientStructure } from '../floor/cell-orient.ts';
-import { generateEmergent } from '../floor/cell-emergent.ts';
+import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveFloor } from '../floor/cell-defray.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
@@ -116,7 +117,21 @@ function subject(): Subject {
     const m = /^(\d+)x(\d+)$/.exec(floor);
     if (!m) throw new Error(`bad floor size: ${floor}`);
     const w = Number(m[1]), h = Number(m[2]);
-    const r = generateEmergent({ width: w, height: h, seed: BigInt(num('seed', 1)) });
+    const seed = BigInt(num('seed', 1));
+    /* A SINGLE floor cannot show a multi-storey structure — the throne room is three levels, and only
+       `generateEmergentTower` places across the stack. Ask for `levels` to see what really generates. */
+    const levels = Math.max(1, Math.floor(num('levels', 1)));
+    if (levels > 1) {
+      const t = generateEmergentTower({ width: w, height: h, seed, levels });
+      const i = Math.max(0, Math.min(levels - 1, Math.floor(num('level', 0))));
+      const f = t.floors[i]!;
+      return {
+        cells: resolveFloor(f), w, h, extent: { w, h },
+        label: `tower ${w}x${h} seed ${num('seed', 1)} — storey ${i + 1}/${levels}, `
+          + `${f.placed.length} structures (${f.placed.map((p) => p.name).join(', ') || 'none'})`,
+      };
+    }
+    const r = generateEmergent({ width: w, height: h, seed });
     return {
       cells: resolveFloor(r), w, h, extent: { w, h },
       label: `floor ${w}x${h} seed ${num('seed', 1)} — ${r.stats.structuresPlaced} structures`,

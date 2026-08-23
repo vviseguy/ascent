@@ -452,7 +452,12 @@ console.log('[9] THE 2u TOWER — compiled route, then a real Anchor walking it'
     const wp = wps[Math.min(wpi, wps.length - 1)]!;
     const dx = wp.x - px, dz = wp.z - pz;
     const d = Math.hypot(dx, dz);
-    if (d < 0.6 && wpi < wps.length - 1) wpi++;
+    /* A WAYPOINT IS NOT REACHED UNTIL THE BODY IS AT ITS HEIGHT. Advancing on horizontal distance
+       alone let the body slide along the GROUND past a staircase — every tread's (x,z) ticked by
+       underneath it — and arrive at the last waypoint still on stratum 0 with nothing left to steer
+       toward. A tread is somewhere you have to get ON TO, not past. */
+    const feetNow = rawF(w.py[a]!) - half;
+    if (d < 0.6 && Math.abs(feetNow - wp.top) < 0.6 && wpi < wps.length - 1) wpi++;
     const sc2 = d > 1e-6 ? 1 / d : 0;
     const inp: PlayerInput = {
       ...NEUTRAL_INPUT,
