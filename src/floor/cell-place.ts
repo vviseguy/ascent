@@ -494,8 +494,24 @@ function flightCoversWall(cells: readonly (Cell | null)[], w: number, h: number,
 
 /** `torch_mounted` projects +Z from the surface it is on, so +Z is the way it faces. */
 const TORCH_TURN: Record<Dir, number> = { S: 0, E: 1, N: 2, W: 3 };
-/** Head height on a 4.00 wall. */
+/**
+ * A TORCH HANGS ON A SURFACE, NOT AT A POINT — and getting that wrong is invisible in the numbers and
+ * obvious the moment you look. `torch_mounted` projects 0.62 from its own origin, so placed at the
+ * lattice point it sits INSIDE whatever it is mounted on: on a 1.50-wide pillar only a grey speck of
+ * it emerged from the stone. It has to be pushed out to the face.
+ *
+ * Measured AT TORCH HEIGHT (`tmp/width-at.mjs`), not from a bounding box — which is the second half of
+ * the same mistake. A pillar's box is 0.75 across because of the flare at its base; at 2.1 it is 0.55,
+ * and mounting to the box left the bracket floating a fifth of a unit off the stone. A wall's body is
+ * 0.25 but its brick detail stands proud to 0.33.
+ *
+ *   pillar 0.55 at y 2.1   |   wall 0.33 at y 2.1   |   balcony post 0.35 at y 0.95
+ */
+const MOUNT_OUT = { column: fromFloatConst(0.55), balcony: fromFloatConst(0.35), none: fromFloatConst(0.33) };
+/** Head height on a 4.00 wall — but a balcony post is only 1.40 tall, and a torch at head height
+ *  above one floats in the air with nothing under it. */
 const TORCH_Y = fromFloatConst(2.1);
+const TORCH_Y_LOW = fromFloatConst(0.95);
 /** Fixed order, so which way a torch faces is a property of the map and not of the loop. */
 const TORCH_ORDER: readonly Dir[] = ['S', 'E', 'N', 'W'];
 
@@ -633,8 +649,14 @@ export function cellPlacements(
 
   // TORCH — hung on whatever stands here, facing somewhere worth lighting. See `torchFacing`.
   if (c.torch === 'yes') {
+    const outBy = MOUNT_OUT[c.corner];
+    const high = c.corner === 'balcony' ? TORCH_Y_LOW : TORCH_Y;
     for (const d of torchFacings(cells, w, h, x, y)) {
-      out.push(at(PIECE.torchMounted, TORCH_TURN[d], CX, CZ, ONE, TORCH_Y));
+      const [sx, sz] = STEP[d];
+      out.push(at(
+        PIECE.torchMounted, TORCH_TURN[d],
+        add(CX, mul(fromInt(sx), outBy)), add(CZ, mul(fromInt(sz), outBy)), ONE, high,
+      ));
     }
   }
 

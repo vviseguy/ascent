@@ -105,13 +105,18 @@ src/net/        ✅ rollback primitives + proofs (input bus, wire format, clock 
 ```
 
 ### ⚠ TWO SUBSTRATES right now — read docs/13 §0 first
-A **2u CELL** model (`src/floor/cell*.ts`) is replacing the 4u tile model. It is complete through
-generation and proven (`npm run prove:cell`), the authored structures are migrated onto it
-cell-for-cell, it has meshes (`cell-place.ts`) and its own editor with a live 3D preview
-(`/ascent/cell-editor.html`). What is NOT done is wiring it into `tower.ts` — the game still compiles
-the 4u path below, so that is what it draws. Neither is deleted; nothing is half-converted.
+A **2u CELL** model (`src/floor/cell*.ts`) has replaced the 4u tile model **as the default**. It is
+proven (`npm run prove:cell`), the authored structures are migrated onto it cell-for-cell, it has
+meshes (`cell-place.ts`) and its own editor with a live 3D preview (`/ascent/cell-editor.html`).
 
-A cell owns `{floor, wallN, wallW, corner, wallType}`. **The stored grid is the lattice of POINTS**,
+**`?substrate=4u` still selects the tile lattice** and PROOF 8 still proves it — the two are complete
+alternative producers of the same IR, not a half-conversion, and neither is deleted. What moved the
+default was **PROOF 9**: a route check alone was never enough, because it cannot see a body wedge
+somewhere the graph calls open, so PROOF 9 drives a real Anchor along the route the CHECKER found and
+up the stairs. The 2u path is much heavier — ~12.5k meshes against 300, 43k solids against 5.7k — and
+instancing the walls is the open lever.
+
+A cell owns `{floor, wallN, wallW, corner, wallType, torch}`. **The stored grid is the lattice of POINTS**,
 not of cells: a w×h structure stores (w+1)×(h+1) entries **per STOREY**, so it owns all four of its
 borders and rotates losslessly. `levels` (absent = 1) stacks those lattices FLOOR_HEIGHT apart, which
 is how a staircase says there is a hole in the ceiling above it. `generateEmergentTower` builds the
@@ -119,11 +124,17 @@ whole stack at once so a structure can span storeys, and **guarantees a stairwel
 storey below the top** (`stats.storeysWithoutStairwell` is the alarm).
 
 `src/game/cell-tower.ts` compiles those floors into the SAME IR the 4u compiler produces — both meet
-at `StratumCellGrid.wallPlacements`. `buildTower({ substrate: '2u' })` or `?substrate=2u` selects it;
-**4u is still the default** because PROOF 8's input-driven climb is written against the 4u synthetic
-stair. `cell-tower.test.ts` proves the 2u tower on its own terms (every shaft open, summit route
-holds across seeds, plus a negative control). `wallN` is the edge running east from a point, `wallW` the edge running south,
-`corner` the junction at it; only `floor` belongs to the cell south-east of it.
+at `StratumCellGrid.wallPlacements`. `cell-tower.test.ts` proves the 2u tower on its own terms (every
+shaft open, summit route holds across seeds, plus a negative control).
+
+`wallN` is the edge running east from a point, `wallW` the edge running south, `corner` the junction at
+it; only `floor` belongs to the cell south-east of it. **`corner` says only what STANDS there**
+(`none | column | balcony`) — passability comes from the wall type alone (`isOpenType`), because when
+both had a say they disagreed. `torch` is a flag whose FACING is sensed from the walls, never stored.
+
+**Three things are derived, never written down twice**: a stair flight's direction and mesh, an
+opening's axis, and a torch's facing. Each is read from the walls at draw time. Anything that is a
+fact about the walls belongs to the walls.
 
 Two rules that keep biting if forgotten:
 - **Abstaining ≠ asserting.** A full domain says "no opinion" and every later phase reads it as
