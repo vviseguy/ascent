@@ -88,3 +88,30 @@ npm run stores:restore                               # after an interactive sess
 `store-guard --check` is the one to reach for reflexively: it answers "is a data store dirty
 relative to HEAD", which is the question you actually have before every commit in this folder.
 Add any new middleware-written store to the `STORES` list in the script.
+
+## A save must not cost the author their work
+
+Two things in the authoring loop conspired to throw away a painted grid, and both are fixed in ways
+that are easy to undo by accident.
+
+**A store write used to reload the page.** `jsonStorePlugin` writes a git-tracked JSON file that
+`src/floor/cell-structures.ts` imports, so Vite saw the author's own save as a source change, found
+no HMR boundary, and full-reloaded — wiping the grid at the exact moment they said "keep this". The
+plugin now returns `[]` from `handleHotUpdate` for its OWN store file. The editors read the store
+over HTTP (`GET /__lab/<name>`), so nothing needs the module graph to notice; a page that wants the
+new data reloads on purpose. `profilesPlugin` and `surfacesPlugin` write their stores the same way
+and do NOT have this guard yet — the lab reloads on Approve. Same fix if it starts to hurt.
+
+Path comparison there goes through `posix()`: `fileURLToPath` hands back a native path and Vite
+normalizes the watcher's to forward slashes, so on Windows the two never compare equal.
+
+**A reload used to cost the grid regardless.** `cell-editor.ts` mirrors the whole lattice —
+integer masks, so it is small — into `localStorage` under `ascent:cell-editor:draft` on a 400 ms
+debounce from `render()`, and reads it back at boot. `loadedName` rides along, so the Save button
+still names its target after a reload. It is a DRAFT, not a save: the store is still the only thing
+the generator reads, and a draft whose cell count does not match the `w`/`h`/`levels` it claims is
+dropped rather than repaired.
+
+`loadedName` is also what lets Save write straight back to the structure you opened, with the name
+ON the button in place of a confirm dialog (Ctrl/Cmd+S does the same thing). Loading binds it,
+saving under a new name rebinds it, clearing the grid and deleting that structure both release it.

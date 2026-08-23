@@ -1,6 +1,11 @@
 import { defineConfig, type PluginOption } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { sep } from 'node:path';
+
+// `fileURLToPath` hands back a native path; Vite normalizes the watcher's to forward slashes. On
+// Windows those two never compare equal, so a path comparison has to go through this first.
+const posix = (p: string): string => p.split(sep).join('/');
 
 // Path aliases mirror tsconfig.json "paths". Keep them in sync.
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
@@ -134,6 +139,11 @@ function jsonStorePlugin(name: string, file: string): PluginOption {
     new Promise((res) => { let b = ''; req.on('data', (c) => (b += String(c))); req.on('end', () => res(b)); });
   return {
     name: `lab-store-${name}`,
+    // An editor SAVING writes this file, and the file is in the module graph (the generator imports
+    // it), so by default the author's own save hot-reloads the page out from under them and whatever
+    // was on the grid is gone. Swallow the update for our own store: the editors read it over HTTP,
+    // and a page that wants the new data can be reloaded on purpose.
+    handleHotUpdate({ file }) { if (posix(file) === posix(STORE)) return []; return undefined; },
     configureServer(server) {
       server.middlewares.use(`/__lab/${name}`, (req, res, next) => {
         const read = (): { version: number; structures: Record<string, unknown>; [k: string]: unknown } => {
