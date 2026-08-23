@@ -25,12 +25,12 @@
 // so leaving a field open is a real choice, not a blank. Right-click abstains.
 
 import {
-  SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES,
+  SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES,
   isStairFloor,
-  type Seg, type FloorMaterial, type Corner, type WallType, type Cell,
+  type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Cell,
 } from '../floor/cell.ts';
 import {
-  fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes,
+  fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches,
   type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
@@ -39,7 +39,7 @@ import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-s
 import {
   CASING, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend,
   openingIsPlain, openingRings, patternDefs, segInk, segValueColor,
-  CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH,
+  CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH, TORCH_SWATCH, TORCH_MARK, torchState,
 } from './cell-visual.ts';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -78,7 +78,7 @@ let cells: CellField[] = [];
 const undoStack: string[] = [];
 let showReach = false;
 
-type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'select' | 'stamp';
+type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'torch' | 'select' | 'stamp';
 /** How the PREVIEW resolves a field that is still undecided. `generator` is what actually ships. */
 type Ambiguity = 'generator' | 'none' | 'wall' | 'random';
 
@@ -86,8 +86,9 @@ const brush = {
   mode: 'wall' as BrushMode,
   seg: new Set<Seg>(['wall']),
   floor: new Set<FloorMaterial>(['stone']),
-  corner: new Set<Corner>(['solid']),
+  corner: new Set<Corner>(['column']),
   wallType: new Set<WallType>(['solid']),
+  torch: new Set<Torch>(['yes']),
 };
 let ambiguity: Ambiguity = 'generator';
 let selection: { x0: number; y0: number; x1: number; y1: number } | null = null;
@@ -181,7 +182,7 @@ function resolvedAll(): (Cell | null)[] {
 
 /* --------------------------------- painting --------------------------------- */
 
-type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType';
+type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType' | 'torch';
 
 function applyAt(px: number, py: number, what: Paintable, clear: boolean): void {
   const f = cells[base() + py * stride() + px];
@@ -190,6 +191,7 @@ function applyAt(px: number, py: number, what: Paintable, clear: boolean): void 
     if (what === 'wallN' || what === 'wallW') return brush.seg.size ? segs(...brush.seg) : null;
     if (what === 'floor') return brush.floor.size ? floors(...brush.floor) : null;
     if (what === 'corner') return brush.corner.size ? corners(...brush.corner) : null;
+    if (what === 'torch') return brush.torch.size ? torches(...brush.torch) : null;
     return brush.wallType.size ? wallTypes(...brush.wallType) : null;
   };
   const m = clear ? fullField()[what as FieldKey] : pick();
@@ -457,8 +459,19 @@ function render(): void {
       paintable(dot, (clear) => {
         if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
         else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
+        else if (brush.mode === 'torch') applyAt(px, py, 'torch', clear);
       });
       svg.append(dot);
+
+      // TORCH — a small flame-coloured pip beside the junction; hollow while it is still undecided
+      const ts = torchState(f.torch);
+      if (ts !== 'no') {
+        svg.append(svgEl('circle', {
+          cx: X(px) + 9, cy: Y(py) - 9, r: 4,
+          fill: ts === 'yes' ? TORCH_MARK : 'none', stroke: TORCH_MARK,
+          'stroke-width': 2, 'pointer-events': 'none',
+        }));
+      }
     }
   }
 
@@ -777,7 +790,7 @@ function buildPanel(): void {
   p.append(h('h2', {}, 'Brush'));
   const modes: [BrushMode, string][] = [
     ['wall', 'Wall'], ['floor', 'Floor'], ['corner', 'Corner'], ['wallType', 'Opening'],
-    ['select', 'Select'], ['stamp', 'Stamp'],
+    ['torch', 'Torch'], ['select', 'Select'], ['stamp', 'Stamp'],
   ];
   p.append(h('div', { class: 'row' }, ...modes.map(([m, label]) =>
     h('div', { class: `chip${brush.mode === m ? ' on' : ''}`, onclick: () => { brush.mode = m; buildPanel(); } }, label))));
@@ -785,6 +798,13 @@ function buildPanel(): void {
   if (brush.mode === 'wall') { p.append(h('h2', {}, 'wall — a SET')); p.append(chipRow(SEGS, brush.seg, SEG_SWATCH)); }
   else if (brush.mode === 'floor') { p.append(h('h2', {}, 'floor — a SET')); p.append(chipRow(FLOOR_MATERIALS, brush.floor, FLOOR_SWATCH)); }
   else if (brush.mode === 'corner') { p.append(h('h2', {}, 'corner — a SET')); p.append(chipRow(CORNERS, brush.corner, CORNER_SWATCH)); }
+  else if (brush.mode === 'torch') {
+    p.append(h('h2', {}, 'torch — a SET'));
+    p.append(chipRow(TORCHES, brush.torch, TORCH_SWATCH));
+    p.append(h('div', { class: 'hint' },
+      'A torch hangs on whatever stands at the point — a pillar, or a wall meeting there — and faces '
+      + 'a direction that is not a wall and not solid rock. Which way is READ from the walls, never stored.'));
+  }
   else if (brush.mode === 'wallType') {
     p.append(h('h2', {}, 'opening — a SET'));
     p.append(chipRow(WALL_TYPES, brush.wallType, WALLTYPE_SWATCH));

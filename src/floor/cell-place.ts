@@ -38,9 +38,21 @@ export const PIECE = {
   barrierCorner: u('barrier_corner'),
   halfCap: u('wall_half_endcap'),
   pillar: u('pillar'),
+  balcony: u('column'),          // 0.70 x 1.40 — a short post, rail height rather than full wall
+  torchMounted: u('torch_mounted'),  // 0.55 x 1.06 x 0.62, projecting +Z from whatever it is on
   barrierHalf: u('barrier_half'),
   barrierColumn: u('barrier_column'),
-  arch: u('wall_arched'),
+  /* `arch` is NOT `wall_arched`. Measured (see the asset audit): that mesh's arch is cut 0.20 deep
+     into BOTH faces and leaves a 0.10-thick sealing web — 0 of 4800 rays pass through it. It is a
+     BLIND arch: it looks like a deep opening from either side and is solid. Using it for a type the
+     graph calls walk-through is render disagreeing with sim, which is the one thing this pipeline is
+     built not to do.
+     `wall_open_scaffold` is the only 4u piece that is genuinely passable as loaded — a post-and-lintel
+     frame with 3.40 clear. `wall_doorway` has a real 2.00 x 2.70 arched aperture too, but its door
+     LEAF ships as a separate node (620 of 1068 triangles) and has to be hidden at load; until that
+     exists, the open frame is the honest mesh for an opening you can walk through. */
+  arch: u('wall_open_scaffold'),
+  archBlind: u('wall_arched'),   // the decorative one — solid, for a wall that only looks arched
   /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
   stairsNarrow: u('stairs_narrow'),
   stairsBanister: u('stairs'),
@@ -143,7 +155,8 @@ export function openingAt(
   cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number, axis: Axis,
 ): boolean {
   const c = cellAt(cells, w, h, px, py);
-  if (!c || c.corner !== 'air' || !isOpenType(c.wallType)) return false;
+  // the wall TYPE decides passability now; the corner only says what is standing there
+  if (!c || !isOpenType(c.wallType)) return false;
   const spans = axis === 'H'
     ? [cellAt(cells, w, h, px - 1, py)?.wallN, c.wallN]
     : [cellAt(cells, w, h, px, py - 1)?.wallW, c.wallW];
@@ -443,6 +456,58 @@ function flightCoversWall(cells: readonly (Cell | null)[], w: number, h: number,
   return false;
 }
 
+/* ----------------------------------- torches ----------------------------------- */
+
+/** `torch_mounted` projects +Z from the surface it is on, so +Z is the way it faces. */
+const TORCH_TURN: Record<Dir, number> = { S: 0, E: 1, N: 2, W: 3 };
+/** Head height on a 4.00 wall. */
+const TORCH_Y = fromFloatConst(2.1);
+/** Fixed order, so which way a torch faces is a property of the map and not of the loop. */
+const TORCH_ORDER: readonly Dir[] = ['S', 'E', 'N', 'W'];
+
+/**
+ * WHICH WAY A TORCH FACES, sensed rather than stored — the same rule the opening axis and the stair
+ * direction follow, and for the same reason: a fact the walls already carry should not be written down
+ * a second time where it can disagree with them.
+ *
+ * A torch needs something to hang on and somewhere to shine. It mounts on whatever is standing at the
+ * point — a pillar, or one of the walls meeting there — and faces a cardinal direction that is NOT a
+ * wall and NOT solid rock, so it lights a space someone can actually stand in. With nothing to mount
+ * on, or nowhere to face, there is no torch: `null`.
+ */
+export function torchFacing(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+): Dir | null {
+  const c = cellAt(cells, w, h, x, y);
+  if (!c) return null;
+
+  /** The wall running `d` from this point, if any. */
+  const arm = (d: Dir): Seg => {
+    if (d === 'E') return cellAt(cells, w, h, x, y)?.wallN ?? 'none';
+    if (d === 'W') return cellAt(cells, w, h, x - 1, y)?.wallN ?? 'none';
+    if (d === 'S') return cellAt(cells, w, h, x, y)?.wallW ?? 'none';
+    return cellAt(cells, w, h, x, y - 1)?.wallW ?? 'none';
+  };
+  const standing = c.corner !== 'none' || TORCH_ORDER.some((d) => blocks(arm(d)));
+  if (!standing) return null; // nothing here to hang it on
+
+  /** Ground you can stand on — `none` is a hole and `rock` is solid fill. */
+  const open = (cx: number, cy: number): boolean => {
+    const n = cellAt(cells, w, h, cx, cy);
+    return !!n && n.floor !== 'none' && n.floor !== 'rock';
+  };
+  for (const d of TORCH_ORDER) {
+    if (blocks(arm(d))) continue;                      // it would be inside the wall
+    // the two cells either side of that direction; one of them being real ground is enough
+    const pair: [number, number][] = d === 'E' ? [[x, y - 1], [x, y]]
+      : d === 'W' ? [[x - 1, y - 1], [x - 1, y]]
+        : d === 'S' ? [[x - 1, y], [x, y]]
+          : [[x - 1, y - 1], [x, y - 1]];
+    if (pair.some(([cx, cy]) => open(cx, cy))) return d;
+  }
+  return null;
+}
+
 /* --------------------------------- placement --------------------------------- */
 
 /**
@@ -508,11 +573,20 @@ export function cellPlacements(
      laid over the WHOLE GRID by `wallEdgePlacements`, which `gridPlacements` composes with this. See
      the note there. */
 
-  // CORNER — a pillar stands at the junction. `air` is a hole and draws nothing; `solid` is the
-  // ordinary case where the wall runs simply meet.
+  /* CORNER — what STANDS at the junction, and nothing more. `none` is the ordinary case where wall
+     runs simply meet and there is nothing to draw. A `column` is the full-height pillar; a `balcony`
+     is the short post you can see over. */
   if (c.corner === 'column') {
     const lowOnly = c.wallN === 'barrier' && c.wallW === 'barrier';
     out.push(at(lowOnly ? PIECE.barrierColumn : PIECE.pillar, 0, CX, CZ));
+  } else if (c.corner === 'balcony') {
+    out.push(at(PIECE.balcony, 0, CX, CZ));
+  }
+
+  // TORCH — hung on whatever stands here, facing somewhere worth lighting. See `torchFacing`.
+  if (c.torch === 'yes') {
+    const d = torchFacing(cells, w, h, x, y);
+    if (d) out.push(at(PIECE.torchMounted, TORCH_TURN[d], CX, CZ, ONE, TORCH_Y));
   }
 
   return out;
@@ -663,14 +737,18 @@ export function wallEdgePlacements(
 
     /* CAPS on a loose end. `wall_endcap` is a short +X-native stub, so the low end takes it facing
        back along the run and the high end takes it facing forward — a nub on the outside of the last
-       piece, not a replacement for it. */
+       piece, not a replacement for it.
+       A run that ends AT A COLUMN needs none: the column is already the end of the wall, and a cap
+       tucked inside it is a nub buried in a pillar. */
     const cap = FAMILY[fam].cap;
     if (!cap) return;
+    const endsInColumn = (px: number, py: number): boolean =>
+      cellAt(cells, w, h, px, py)?.corner === 'column';
     const ex = sx + stepX * len, ey = sy + stepY * len;
-    if (armsAt(sx, sy) === 1) {
+    if (armsAt(sx, sy) === 1 && !endsInColumn(sx, sy)) {
       push(sx, sy, at(cap, dir === 'E' ? TURN.W : TURN.N, ox, oz));
     }
-    if (armsAt(ex, ey) === 1) {
+    if (armsAt(ex, ey) === 1 && !endsInColumn(ex, ey)) {
       const along = fromInt(2 * len);
       push(sx, sy, at(cap, turn, dir === 'E' ? add(ox, along) : ox, dir === 'E' ? oz : add(oz, along)));
     }

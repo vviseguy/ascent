@@ -149,10 +149,10 @@ describe('cell-orient — a wall really does change axis', () => {
   });
 
   it('a corner travels with its POINT, not its cell index', () => {
-    const s = fixture([1, 1], template({ corner: corners('air'), wallType: wallTypes('door') }));
+    const s = fixture([1, 1], template({ corner: corners('none'), wallType: wallTypes('door') }));
     for (const o of ORIENTATIONS) {
       const t = orientStructure(s, o);
-      expect(t.cells.filter((f) => f.corner === corners('air')).length).toBe(1);
+      expect(t.cells.filter((f) => f.corner === corners('none')).length).toBe(1);
       expect(t.cells.filter((f) => f.wallType === wallTypes('door')).length).toBe(1);
     }
   });

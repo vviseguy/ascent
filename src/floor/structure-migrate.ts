@@ -110,7 +110,7 @@ export const wallTypeDomain = (m: Mask): Mask => {
 export function centreDomain(m: Mask): Mask {
   let out = 0;
   for (const c of valuesOf(OLD_CENTRES, m)) {
-    const to: Corner = c === 'none' ? 'solid' : 'column';
+    const to: Corner = c === 'none' ? 'none' : 'column';
     out |= corners(to);
   }
   return out;
@@ -127,9 +127,10 @@ export function certainOpening(t: OldTileField): boolean {
   return openOnly(t.wallType) && (lineEW || lineNS);
 }
 
-/** The corner domain for the tile centre, taking a certain opening into account. */
+/** The corner domain for the tile centre. An opening no longer needs the corner to agree — the wall
+ *  TYPE decides passability on its own — so a certain opening simply leaves nothing standing there. */
 export const cornerDomainFor = (t: OldTileField): Mask =>
-  certainOpening(t) ? corners('air') : centreDomain(t.centre);
+  certainOpening(t) ? corners('none') : centreDomain(t.centre);
 
 /* --------------------------------- the conversion --------------------------------- */
 

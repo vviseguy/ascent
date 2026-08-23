@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { listStructures, getStructure, levelsOf, stride, STORED_VALUE_SETS } from './cell-structures.ts';
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from './cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES } from './cell.ts';
 import { collapse, domainSize, fullField } from './cell-field.ts';
 
 describe('cell-structures — the store matches the model it was written against', () => {
@@ -12,7 +12,7 @@ describe('cell-structures — the store matches the model it was written against
       seg: SEGS.length,
       floor: FLOOR_MATERIALS.length,
       corner: CORNERS.length,
-      wallType: WALL_TYPES.length,
+      wallType: WALL_TYPES.length, torch: TORCHES.length,
     });
   });
 

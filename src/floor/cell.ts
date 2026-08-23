@@ -111,8 +111,20 @@ export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch'];
 export const isOpenType = (wt: WallType): boolean => OPEN_WALL_TYPES.includes(wt);
 
 /** What stands at a lattice point where walls meet. `air` is a hole — the precondition for a door. */
-export type Corner = 'solid' | 'column' | 'air';
-export const CORNERS: readonly Corner[] = ['solid', 'column', 'air'];
+/**
+ * WHAT STANDS AT A JUNCTION — and only that.
+ *
+ * It used to be `solid | column | air`, where `solid` and `air` both drew NOTHING and differed only in
+ * whether an opening at that point counted as walk-through. That put a fact about the OPENING into the
+ * corner field, so a door was traversable or not depending on a second field you had to remember to
+ * set, and the two disagreed constantly. Passability now comes from the wall type alone (`isOpenType`),
+ * which is where it was always described, and the corner says only what is standing there.
+ *
+ * `column` is the full-height pillar; `balcony` is the short post — a rail height marker for an edge
+ * you can see over.
+ */
+export type Corner = 'none' | 'column' | 'balcony';
+export const CORNERS: readonly Corner[] = ['none', 'column', 'balcony'];
 
 /** The four directions, in the fixed order every iteration uses. */
 export type Dir = 'N' | 'E' | 'S' | 'W';
@@ -123,21 +135,36 @@ export type Axis = 'H' | 'V';
 export const AXES: readonly Axis[] = ['H', 'V'];
 
 /** One 2u square. Every field is OWNED by this cell — see the header for what that means. */
+/**
+ * A torch bracket at this junction. A domain like everything else, so a structure can leave it open
+ * and let the generator decide, or pin it.
+ *
+ * WHICH WAY IT FACES IS NOT STORED — it is read from the walls, the same way a flight's direction and
+ * an opening's axis are. A torch mounts on whatever it is standing against and faces a direction you
+ * can actually see it from; see `cell-place.ts:torchFacing`.
+ */
+export type Torch = 'no' | 'yes';
+export const TORCHES: readonly Torch[] = ['no', 'yes'];
+
 export interface Cell {
   floor: FloorMaterial;
   /** The wall along this cell's north edge: the lattice segment (x,y)→(x+1,y). */
   wallN: Seg;
   /** The wall along this cell's west edge: the lattice segment (x,y)→(x,y+1). */
   wallW: Seg;
-  /** What stands at this cell's NW corner point: walls joining, a pillar, or a hole. */
+  /** What STANDS at this cell's NW corner point — nothing, a pillar, or a balcony post. It says
+   *  nothing about passability; see `Corner`. */
   corner: Corner;
-  /** Which 4u module is drawn at that corner. `door`/`arch` need `air`; the rest need `solid`. */
+  /** Which 4u module is drawn at that corner, and the ONLY thing that decides whether you can walk
+   *  through it (`isOpenType`). */
   wallType: WallType;
+  /** A torch bracket at this point. See `Torch`. */
+  torch: Torch;
 }
 
 /** A plain open cell: stone ground, no walls, no openings. */
 export const openCell = (floor: FloorMaterial = 'stone'): Cell => ({
-  floor, wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid',
+  floor, wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', torch: 'no',
 });
 
 /** Does this wall segment stop a body? `wall` and `sloped` do; `barrier` is surmountable and `none`
@@ -162,7 +189,8 @@ export const opposite = (d: Dir): Dir => (d === 'N' ? 'S' : d === 'S' ? 'N' : d 
 
 /** Is there a hole at this cell's corner that a body can actually get through? Both fields are on
  *  THIS cell — the local half of the test. The axis still has to be derived from the walls. */
-export const cornerIsOpen = (c: Cell): boolean => c.corner === 'air' && isOpenType(c.wallType);
+/** Is there a walk-through opening here? The WALL TYPE says so, and nothing else needs to agree. */
+export const cornerIsOpen = (c: Cell): boolean => isOpenType(c.wallType);
 
 /**
  * The four cells around the lattice point owned by cell (x,y) — its NW corner — split into the two

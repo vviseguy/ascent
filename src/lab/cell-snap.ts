@@ -49,11 +49,11 @@ interface Subject { cells: (Cell | null)[]; w: number; h: number; extent: { w: n
 /** Synthetic subjects. For checking a placement rule that no authored structure happens to exercise —
  *  a bare flight with open flanks, say, when every structure in the store has walled ones. */
 function demo(kind: string): Subject {
-  const W = 6, H = 6;
+  const W = 7, H = 7;
   const cells: (Cell | null)[] = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const c: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'air', wallType: 'solid' };
+      const c: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', torch: 'no' };
       const inBlock = x >= 2 && x <= 3 && y >= 2 && y <= 3;
       if (inBlock) c.floor = kind === 'stairs-wood' ? 'stairs_wood' : 'stairs';
       if (y === 2 && x >= 2 && x <= 3) c.wallN = 'wall';             // north end closed: climbs north
@@ -61,6 +61,29 @@ function demo(kind: string): Subject {
       // climbing north, WEST is on your left and EAST on your right
       if (kind === 'stairs-left' && (y === 2 || y === 3) && x === 2) c.wallW = 'wall';
       if (kind === 'stairs-right' && (y === 2 || y === 3) && x === 4) c.wallW = 'wall';
+
+      /* CORNERS AND TORCHES. A row of wall with, left to right: a bare end (capped), a full pillar,
+         a balcony post, and a torch on each — so the four pieces sit side by side at the same scale. */
+      if (kind === 'corners') {
+        c.floor = 'stone';
+        /* Four cases side by side, each on its own so nothing is buried inside a wall run:
+             row 1, x1-x2   a wall ending FREE          -> capped
+             row 3, x1-x2   a wall ending at a COLUMN   -> no cap, the pillar is the end
+             row 5, x1      a BALCONY post on its own   -> the short rail-height post
+             row 3, x1      a TORCH on the wall                                            */
+        if (y === 1 && (x === 1 || x === 2)) c.wallN = 'wall';
+        if (y === 3 && (x === 1 || x === 2)) c.wallN = 'wall';
+        if (y === 3 && x === 3) c.corner = 'column';     // the east end of the lower run
+        if (y === 3 && x === 1) c.torch = 'yes';
+        if (y === 5 && x === 1) { c.corner = 'balcony'; c.torch = 'yes'; }
+      }
+      if (kind === 'torch-facing') {
+        c.floor = 'stone';
+        // a cross of walls with a pillar in the middle: the torch has to pick an open direction
+        if (y === 3 && (x === 1 || x === 2)) c.wallN = 'wall';
+        if (x === 3 && (y === 1 || y === 2)) c.wallW = 'wall';
+        if (x === 3 && y === 3) { c.corner = 'column'; c.torch = 'yes'; }
+      }
       cells.push(c);
     }
   }

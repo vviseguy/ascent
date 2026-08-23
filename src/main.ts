@@ -103,10 +103,12 @@ async function boot(): Promise<void> {
     else if (MODELS[modelName]) await renderer.preloadModels(MODELS[modelName]!.url, MODELS[modelName]!.opts ?? {});
     else await renderer.preloadModelSet(KAYKIT_CREW);
     // KAYKIT DUNGEON environment (default on; `?dungeon=off` keeps the abstract tower view).
-    /* PROPS: on by default, `?props=off` for a plain dungeon that builds much faster. A 2u grid has
-       four times the cells of the 4u one the torch density was tuned for, so it gets a proportionally
-       sparser scatter rather than four times as many torches. */
-    const dressing = params.get('props') !== 'off';
+    /* PROPS OFF by default — `?props=on` brings back the scattered furniture and torches.
+       They are placed by a deterministic per-cell scatter that was tuned for the 4u grid, and on a 2u
+       one it strews four times as much of it across a floor with four times the cells. Until placement
+       is something a structure ASKS for rather than something sprinkled over the map, off is the
+       honest default. */
+    const dressing = params.get('props') === 'on';
     const torchEvery = substrate === '4u' ? 11 : 40;
     if (scene.cellGrid && params.get('dungeon') !== 'off') {
       await renderer.buildDungeon(scene.cellGrid, scene.stairs, { dressing, torchEvery });

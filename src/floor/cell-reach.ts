@@ -41,8 +41,7 @@ const BLOCKING: Mask = segs(...BLOCKING_SEGS);
 const PASSABLE: Mask = segs(...SEGS.filter((s) => !BLOCKING_SEGS.includes(s)));
 /** Off the map: the perimeter shell. */
 const PERIMETER: Mask = segs('wall');
-/** An opening is certain when the corner can only be `air` and the type can only be walk-through. */
-const AIR: Mask = corners('air');
+/** An opening is certain when the wall TYPE can only be walk-through — the corner has no say now. */
 /** A cell is CERTAINLY solid fill when `rock` is the only ground it can still be. Solid fill is not a
  *  place a body can occupy, so it contributes no edges — the one way `floor` reaches passability. */
 const ROCK_ONLY: Mask = floors('rock');
@@ -104,7 +103,9 @@ export const wallOpen = (m: Mask, p: Polarity): boolean => (p === 'may' ? mayBeO
 export function openingCertain(at: FieldAt, x: number, y: number): boolean {
   const f = at(x, y);
   if (!f) return false;
-  return f.corner === AIR && f.wallType !== 0 && (f.wallType & ~OPEN_TYPES) === 0;
+  // CERTAIN when every type still on the table walks through. The corner used to have to agree
+  // as well, which meant an opening's passability lived in two fields that could disagree.
+  return f.wallType !== 0 && (f.wallType & ~OPEN_TYPES) === 0;
 }
 
 /* ------------------------------- the ONE enumeration ------------------------------- */

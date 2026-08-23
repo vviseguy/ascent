@@ -206,8 +206,8 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
   });
 
   it('a rock cell is not a place — it contributes no edges even with no walls around it', () => {
-    const solid: Cell = { floor: 'rock', wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid' };
-    const open: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'solid', wallType: 'solid' };
+    const solid: Cell = { floor: 'rock', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', torch: 'no' };
+    const open: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', torch: 'no' };
     const cells = [open, solid, open, open, open, open, open, open, open]; // 3x3, (1,0) is rock
     const g = buildCellGraph(cells, 3, 3);
     expect(g.adj[nodeId(3, 1, 0)]).toHaveLength(0);
@@ -257,8 +257,9 @@ describe('cell-emergent — the editor preview and the generator settle IDENTICA
     const c = previewCell(blank)!;
     expect(c.floor).toBe('stone');   // NOT `none`, which is what a bare collapse would give
     expect(c.wallN).toBe('none');
-    expect(c.corner).toBe('solid');
+    expect(c.corner).toBe('none');   // nothing standing at the junction
     expect(c.wallType).toBe('solid');
+    expect(c.torch).toBe('no');
   });
 
   it('settle always decides, even when the default was ruled out', () => {

@@ -22,8 +22,8 @@
 // `pick` is the only entropy seam; the default is the canonical lowest surviving option.
 
 import {
-  SEGS, FLOOR_MATERIALS, WALL_TYPES, CORNERS,
-  type Cell, type Seg, type FloorMaterial, type WallType, type Corner,
+  SEGS, FLOOR_MATERIALS, WALL_TYPES, CORNERS, TORCHES,
+  type Cell, type Seg, type FloorMaterial, type WallType, type Corner, type Torch,
 } from './cell.ts';
 
 /** A domain over one enum, as a bitmask (bit i set = the i-th value is allowed). */
@@ -39,6 +39,7 @@ export const segs = (...allowed: Seg[]): Mask => maskOf(SEGS, allowed);
 export const floors = (...allowed: FloorMaterial[]): Mask => maskOf(FLOOR_MATERIALS, allowed);
 export const wallTypes = (...allowed: WallType[]): Mask => maskOf(WALL_TYPES, allowed);
 export const corners = (...allowed: Corner[]): Mask => maskOf(CORNERS, allowed);
+export const torches = (...v: Torch[]): Mask => maskOf(TORCHES, v);
 
 /** How many values a domain still allows. 0 = conflict, 1 = decided. */
 // `>>>`, not `>>`: a signed shift on a value with bit 31 set sign-extends forever.
@@ -57,9 +58,10 @@ export interface CellField {
   wallW: Mask;
   corner: Mask;
   wallType: Mask;
+  torch: Mask;
 }
 
-export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as const;
+export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'torch'] as const;
 
 /**
  * THE BIT LAYOUT — for a packed representation, with room left over ON PURPOSE.
@@ -69,13 +71,19 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as c
  * nothing else. Without the padding, giving `floor` a fifth material would move every field above it
  * and invalidate anything already packed.
  *
- *   bits  0–7    floor      8 slots, 4 used     (+4 materials)
+ *   bits  0–7    floor      8 slots, 7 used     (+1 material)
  *   bits  8–12   wallN      5 slots, 4 used     (+1 segment kind)
  *   bits 13–17   wallW      5 slots, 4 used
  *   bits 18–21   corner     4 slots, 3 used     (+1 junction kind)
- *   bits 22–30   wallType   9 slots, 6 used     (+3 opening kinds)
+ *   bits 22–28   wallType   7 slots, 6 used     (+1 opening kind)
+ *   bits 29–30   torch      2 slots, 2 used     (a flag; it will not grow)
  *                           ─────────────────
  *                           31 bits. Bit 31 deliberately left alone.
+ *
+ * `wallType` gave up two of its nine slots to make room for `torch`. Re-slotting like that shifts
+ * every field above it and would invalidate anything already packed — which is safe here only because
+ * NOTHING packs yet: this table describes an intended representation, and `CellField` is still an
+ * object of numbers. Once something reads it, this becomes a migration rather than an edit.
  *
  * WHY BIT 31 IS OFF LIMITS even in a Uint32Array. The storage would hold it fine, but JavaScript's
  * bitwise operators coerce to INT32 — so `1 << 31` is negative while the same bits read back out of a
@@ -89,8 +97,8 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as c
  * pays a zero-extend). A second representation would buy nothing and add a second thing that can
  * disagree with the first — which is exactly the class of bug that cost us an evening.
  */
-export const BIT_OFFSETS: Record<FieldKey, number> = { floor: 0, wallN: 8, wallW: 13, corner: 18, wallType: 22 };
-export const BIT_SLOTS: Record<FieldKey, number> = { floor: 8, wallN: 5, wallW: 5, corner: 4, wallType: 9 };
+export const BIT_OFFSETS: Record<FieldKey, number> = { floor: 0, wallN: 8, wallW: 13, corner: 18, wallType: 22, torch: 29 };
+export const BIT_SLOTS: Record<FieldKey, number> = { floor: 8, wallN: 5, wallW: 5, corner: 4, wallType: 7, torch: 2 };
 export const TOTAL_BITS = 31;
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
@@ -101,6 +109,7 @@ export const fullField = (): CellField => ({
   wallW: full(SEGS),
   corner: full(CORNERS),
   wallType: full(WALL_TYPES),
+  torch: full(TORCHES),
 });
 
 /** A concrete cell as singleton domains. */
@@ -110,6 +119,7 @@ export const fromCell = (c: Cell): CellField => ({
   wallW: bitOf(SEGS, c.wallW),
   corner: bitOf(CORNERS, c.corner),
   wallType: bitOf(WALL_TYPES, c.wallType),
+  torch: bitOf(TORCHES, c.torch),
 });
 
 export const cloneField = (f: CellField): CellField => ({ ...f });
@@ -128,6 +138,7 @@ export const andGate = (a: CellField, b: CellField): CellField => ({
   wallW: a.wallW & b.wallW,
   corner: a.corner & b.corner,
   wallType: a.wallType & b.wallType,
+  torch: a.torch & b.torch,
 });
 
 /** Which fields have gone EMPTY — no legal value remains. */
@@ -153,8 +164,9 @@ export const SETTLE_DEFAULTS: Record<FieldKey, Mask> = {
   wallN: maskOf(SEGS, ['none']),
   wallW: maskOf(SEGS, ['none']),
   floor: maskOf(FLOOR_MATERIALS, ['stone']),
-  corner: maskOf(CORNERS, ['solid']),
+  corner: maskOf(CORNERS, ['none']),
   wallType: maskOf(WALL_TYPES, ['solid']),
+  torch: maskOf(TORCHES, ['no']),
 };
 
 /** Narrow one field to its settle default, or — if the default was ruled out — to the canonical
@@ -172,6 +184,7 @@ export const settleField = (f: CellField): CellField => ({
   wallW: settleMask(f.wallW, 'wallW'),
   corner: settleMask(f.corner, 'corner'),
   wallType: settleMask(f.wallType, 'wallType'),
+  torch: settleMask(f.torch, 'torch'),
 });
 
 /** What the generator will actually build from this field. Use this for any PREVIEW — a bare
@@ -199,5 +212,6 @@ export function collapse(f: CellField, pick?: Pick): Cell | null {
     wallW: choose('wallW', SEGS, f.wallW),
     corner: choose('corner', CORNERS, f.corner),
     wallType: choose('wallType', WALL_TYPES, f.wallType),
+    torch: choose('torch', TORCHES, f.torch),
   };
 }

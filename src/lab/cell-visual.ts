@@ -29,8 +29,8 @@
 //            solid/door/window, the outer hole/arch/low_gate. Six independent bits shown in the space
 //            of a corner, and a plain `solid` corner draws no ring at all so the board stays quiet.
 
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from '../floor/cell.ts';
-import type { Seg, FloorMaterial, Corner, WallType } from '../floor/cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES } from '../floor/cell.ts';
+import type { Seg, FloorMaterial, Corner, WallType, Torch } from '../floor/cell.ts';
 import type { Mask } from '../floor/cell-field.ts';
 
 /* ---------------------------------- channels --------------------------------- */
@@ -164,7 +164,9 @@ export function segInk(m: Mask): SegInk {
 
 /* ----------------------------------- corner ---------------------------------- */
 
-export const CORNER_CHANNEL: Partial<Record<Corner, Channel>> = { solid: 0, column: 1, air: 2 };
+// `none` takes no channel — nothing standing there is an ABSENCE, drawn faint, the same convention
+// `none` follows for floors and walls.
+export const CORNER_CHANNEL: Partial<Record<Corner, Channel>> = { column: 0, balcony: 1 };
 export const cornerInk = (m: Mask): string =>
   m === 0 ? rgb([false, false, false]) : rgb(channels(m, CORNERS, CORNER_CHANNEL));
 export const cornerStrength = (m: Mask): number => certainty(maskValues(m, CORNERS).length, CORNERS.length);
@@ -197,6 +199,20 @@ export const openingIsPlain = (m: Mask): boolean => {
   const v = maskValues(m, WALL_TYPES);
   if (v.length >= WALL_TYPES.length) return true;
   return v.length === 1 && v[0] === 'solid';
+};
+
+/* ----------------------------------- torch ------------------------------------ */
+
+/**
+ * A torch is a FLAG, not a family, so it does not take a channel — it is drawn as a small flame-
+ * coloured pip beside the corner. One value is the absence of the thing, which the channel scheme
+ * always draws by drawing less; a pip that is either there or not says it more directly.
+ */
+export const TORCH_MARK = '#f0a24a';
+export const torchState = (m: Mask): 'no' | 'yes' | 'maybe' => {
+  const v = maskValues(m, TORCHES);
+  if (v.length === 1) return v[0] === 'yes' ? 'yes' : 'no';
+  return 'maybe';
 };
 
 /* --------------------------------- patterns ---------------------------------- */
@@ -254,6 +270,7 @@ export const CORNER_SWATCH = swatchTable(CORNERS, CORNER_CHANNEL);
 export const WALLTYPE_SWATCH: Record<WallType, string> = Object.fromEntries(
   OPENING_RING.flatMap((ring) => ring.map((v, j) => [v, channelColor(j as Channel)])),
 ) as Record<WallType, string>;
+export const TORCH_SWATCH: Record<Torch, string> = { no: rgb([false, false, false]), yes: TORCH_MARK };
 
 /* ---------------------------------- legend ----------------------------------- */
 
@@ -282,8 +299,13 @@ export function legend(): { title: string; note: string; rows: LegendRow[] }[] {
     },
     {
       title: 'corner',
-      note: '',
+      note: 'what STANDS at the junction. It no longer decides passability — the opening type does.',
       rows: CORNERS.map((v) => ({ label: v, color: ch(CORNER_CHANNEL[v]) })),
+    },
+    {
+      title: 'torch',
+      note: 'a pip beside the corner. Which way it faces is read from the walls, not stored.',
+      rows: TORCHES.map((v) => ({ label: v, color: TORCH_SWATCH[v] })),
     },
     {
       title: 'opening',

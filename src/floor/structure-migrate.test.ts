@@ -55,10 +55,10 @@ describe('structure-migrate — the arm domain is exact over all 9 combinations'
 
 describe('structure-migrate — the centre becomes the corner', () => {
   it('none → solid (walls joined), wall/barrier → column (a pillar stood there)', () => {
-    expect(centreDomain(segs('none'))).toBe(corners('solid'));
+    expect(centreDomain(segs('none'))).toBe(corners('none'));
     expect(centreDomain(segs('wall'))).toBe(corners('column'));
     expect(centreDomain(segs('barrier'))).toBe(corners('column')); // lossy: low-ness dropped
-    expect(centreDomain(segs('none', 'wall'))).toBe(corners('solid', 'column'));
+    expect(centreDomain(segs('none', 'wall'))).toBe(corners('none', 'column'));
   });
 
   it('a tile that DREW an archway converts to an `air` corner', () => {

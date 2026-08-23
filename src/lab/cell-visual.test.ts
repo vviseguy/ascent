@@ -114,7 +114,8 @@ describe('cell-visual — the layers stay apart', () => {
   it('covers every value of every field — an appended value with no channel is a silent gap', () => {
     const missing: string[] = [];
     for (const v of SEGS) if (v !== 'none' && SEG_CHANNEL[v] === undefined) missing.push(`seg:${v}`);
-    for (const v of CORNERS) if (CORNER_CHANNEL[v] === undefined) missing.push(`corner:${v}`);
+    // `none` is ABSENCE, like a floor's `none` and a wall's — shown by drawing less, not by a hue
+    for (const v of CORNERS) if (v !== 'none' && CORNER_CHANNEL[v] === undefined) missing.push(`corner:${v}`);
     for (const v of FLOOR_MATERIALS) {
       if (v === 'none' || v === 'rock') continue;   // absence and fill are hatch/dim, not colour
       if (FLOOR_CHANNEL[v] === undefined) missing.push(`floor:${v}`);

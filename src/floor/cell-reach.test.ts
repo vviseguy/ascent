@@ -134,7 +134,7 @@ describe('cell-reach — openings', () => {
     sealColumn(g);
     applyBatch(g, [{
       region: { x: 3, y: 3, w: 1, h: 1 },
-      stamp: template({ corner: corners('air'), wallType: wallTypes('door') }),
+      stamp: template({ corner: corners('none'), wallType: wallTypes('door') }),
     }]);
     return g;
   };
@@ -149,7 +149,7 @@ describe('cell-reach — openings', () => {
     const g = g0(); sealColumn(g);
     applyBatch(g, [{
       region: { x: 3, y: 3, w: 1, h: 1 },
-      stamp: template({ corner: corners('air'), wallType: wallTypes('door', 'window') }),
+      stamp: template({ corner: corners('none'), wallType: wallTypes('door', 'window') }),
     }]);
     expect(openingCertain(gridAt(g), 3, 3)).toBe(false);
     expect(reaches(gridAt(g), W, H, 'may', START, GOAL)).toBe(false);
@@ -196,7 +196,7 @@ describe('cell-reach — the fast reachSet agrees with the edge enumeration exac
       () => { const g = g0(); sealColumn(g); return g; },
       () => {
         const g = g0(); sealColumn(g);
-        applyBatch(g, [{ region: { x: 3, y: 3, w: 1, h: 1 }, stamp: template({ corner: corners('air'), wallType: wallTypes('door') }) }]);
+        applyBatch(g, [{ region: { x: 3, y: 3, w: 1, h: 1 }, stamp: template({ corner: corners('none'), wallType: wallTypes('door') }) }]);
         return g;
       },
       () => {

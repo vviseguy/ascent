@@ -105,19 +105,33 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
   const withOpening = (wt: WallType): Cell[] =>
     grid((c, x, y) => {
       if (y === 2) c.wallN = 'wall';
-      if (x === 2 && y === 2) { c.corner = 'air'; c.wallType = wt; }
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = wt; }
     });
 
-  it('is live only for a walk-through type on an `air` corner with wall either side', () => {
-    expect(openingAt(withOpening('door'), W, H, 2, 2, 'H')).toBe(true);
-    expect(openingAt(withOpening('window'), W, H, 2, 2, 'H')).toBe(false); // not walk-through
-    const solidCorner = grid((c, x, y) => { if (y === 2) c.wallN = 'wall'; if (x === 2 && y === 2) c.wallType = 'door'; });
-    expect(openingAt(solidCorner, W, H, 2, 2, 'H')).toBe(false);           // corner is not air
+  it('is live for a WALK-THROUGH type with wall either side — the corner has no say', () => {
+    // an opening needs two things and only two: a type you can walk through, and a wall run either
+    // side for it to replace. What stands at the point is a separate question.
+    const openTypes: WallType[] = ['door', 'arch'];
+    for (const t of openTypes) {
+      for (const corner of ['none', 'column', 'balcony'] as const) {
+        const cs = grid((c, x, y) => {
+          if (x === 1 && y === 1) { c.wallType = t; c.corner = corner; c.wallN = 'wall'; }
+          if (x === 0 && y === 1) c.wallN = 'wall';
+        });
+        expect(openingAt(cs, W, H, 1, 1, 'H')).toBe(true);
+      }
+    }
+    // a solid type is never an opening
+    const shut = grid((c, x, y) => {
+      if (x === 1 && y === 1) { c.wallType = 'solid'; c.wallN = 'wall'; }
+      if (x === 0 && y === 1) c.wallN = 'wall';
+    });
+    expect(openingAt(shut, W, H, 1, 1, 'H')).toBe(false);
   });
 
   it('draws ONE arch and suppresses BOTH wall halves — including the neighbour\'s', () => {
     const cs = withOpening('door');
-    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_arched']); // the arch, no wall_half
+    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_open_scaffold']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
     expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half']);   // beyond the span, unaffected
   });
@@ -126,7 +140,7 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
     expect(openingAxis(withOpening('door'), W, H, 2, 2)).toBe('H');
     const vertical = grid((c, x, y) => {
       if (x === 2) c.wallW = 'wall';
-      if (x === 2 && y === 2) { c.corner = 'air'; c.wallType = 'arch'; }
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'arch'; }
     });
     expect(openingAxis(vertical, W, H, 2, 2)).toBe('V');
     expect(openingAxis(grid(), W, H, 2, 2)).toBeNull();

@@ -45,7 +45,7 @@ const WALL: Mask = segs('wall');
 const NONE: Mask = segs('none');
 const POROUS: Mask = segs('none', 'wall');
 const STONE: Mask = floors('stone');
-const SOLID_CORNER: Mask = corners('solid');
+const SOLID_CORNER: Mask = corners('none');
 const SOLID_TYPE: Mask = wallTypes('solid');
 const ROCK: Mask = floors('rock');
 
@@ -507,6 +507,7 @@ function finishStorey(
           floor: settleMask(f.floor, 'floor'),
           corner: settleMask(f.corner, 'corner'),
           wallType: settleMask(f.wallType, 'wallType'),
+          torch: settleMask(f.torch, 'torch'),
         }));
       }
     }
