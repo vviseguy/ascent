@@ -46,8 +46,23 @@ export interface FaceSelectOpts {
   render: () => void;
 }
 
+/**
+ * How a hover spreads.
+ *
+ * - `planar` — one cone about the seed normal. Gives the flat faces themselves.
+ * - `carve`  — the seed face PLUS the slants that roll down off it, stopping at the concave crease
+ *              where the neighbouring tile's slant comes back up. Gives a tile the way a mason
+ *              would think of one: the face and its own chamfers, fitted against the next tile.
+ *
+ * The difference is the SIGN of the fold, not its angle. On a KayKit floor tile the bevels off each
+ * paver (convex, 20-45°) and the rut bottoms between pavers (concave, 60-65°) are both just "edges"
+ * to an angle threshold; only convexity separates them.
+ */
+export type GrowMode = 'planar' | 'carve';
+
 export interface FaceSelectHandle {
   setEnabled: (on: boolean) => void;
+  setMode: (m: GrowMode) => void;
   setTolerance: (deg: number) => void;
   counts: () => { hover: number; preview: number; selected: number; hidden: number };
   hideSelected: () => void;
@@ -98,6 +113,8 @@ interface MeshInfo {
   verts: Float32Array;
   /** Unit normal per triangle, local space. */
   normals: Float32Array;
+  /** Centroid per triangle, local space — needed to tell a convex fold from a concave crease. */
+  cents: Float32Array;
   /** triangle -> up to 3 edge-adjacent triangles. */
   adj: Int32Array;
   adjCount: Uint8Array;
@@ -115,6 +132,7 @@ function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
   const tris = triCount(g);
   const verts = new Float32Array(tris * 9);
   const normals = new Float32Array(tris * 3);
+  const cents = new Float32Array(tris * 3);
 
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
   const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
@@ -129,6 +147,7 @@ function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
     n.crossVectors(ab, ac);
     if (n.lengthSq() > 1e-20) n.normalize(); else n.set(0, 1, 0); // degenerate tri: harmless filler
     normals.set([n.x, n.y, n.z], t * 3);
+    cents.set([(a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3, (a.z + b.z + c.z) / 3], t * 3);
   }
 
   // edge -> triangles, keyed by QUANTISED endpoint positions so UV/normal seams don't split it
@@ -159,7 +178,7 @@ function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
       }
     }
   }
-  return { mesh, index, source: g, tris, verts, normals, adj, adjCount };
+  return { mesh, index, source: g, tris, verts, normals, cents, adj, adjCount };
 }
 
 export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
@@ -174,6 +193,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
 
   let enabled = false;
   let tolCos = Math.cos(THREE.MathUtils.degToRad(15));
+  let mode: GrowMode = 'planar';
   let hoverMesh: MeshInfo | null = null;
   let hoverTri = -1;
   let preview: number[] = [];
@@ -235,6 +255,22 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
    *  tolerance OF THE SEED. Seed-relative rather than neighbour-relative on purpose: chaining
    *  neighbour-to-neighbour walks all the way around a curved surface a fraction of a degree at a
    *  time, which is never what you meant by "these faces are basically the same face". */
+  /** Is the edge between two triangles a convex fold (the surface rolling AWAY) or a concave crease
+   *  (the surface folding back on itself)? Convex when the neighbour's centroid sits BEHIND this
+   *  face's plane. This is the whole difference between "the bevel off the top of a paver" and "the
+   *  bottom of the rut where two pavers meet" — they sit at similar angles and only the sign
+   *  separates them. */
+  const isConvex = (info: MeshInfo, t: number, u: number): boolean => {
+    const dx = info.cents[u * 3]! - info.cents[t * 3]!;
+    const dy = info.cents[u * 3 + 1]! - info.cents[t * 3 + 1]!;
+    const dz = info.cents[u * 3 + 2]! - info.cents[t * 3 + 2]!;
+    return info.normals[t * 3]! * dx + info.normals[t * 3 + 1]! * dy + info.normals[t * 3 + 2]! * dz < 0;
+  };
+
+  /** Below this, two faces are "the same plane" and the convex/concave sign is meaningless noise —
+   *  the centroid offset is nearly in-plane, so its sign is arbitrary. Always join these. */
+  const FLAT_EPS_COS = Math.cos(THREE.MathUtils.degToRad(8));
+
   const grow = (info: MeshInfo, seed: number): number[] => {
     const sx = info.normals[seed * 3]!, sy = info.normals[seed * 3 + 1]!, sz = info.normals[seed * 3 + 2]!;
     const seen = new Uint8Array(info.tris);
@@ -247,8 +283,19 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       for (let k = 0; k < info.adjCount[t]!; k++) {
         const u = info.adj[t * 3 + k]!;
         if (u < 0 || seen[u]) continue;
-        const d = sx * info.normals[u * 3]! + sy * info.normals[u * 3 + 1]! + sz * info.normals[u * 3 + 2]!;
-        if (d < tolCos) continue;
+        const ux = info.normals[u * 3]!, uy = info.normals[u * 3 + 1]!, uz = info.normals[u * 3 + 2]!;
+        const dSeed = sx * ux + sy * uy + sz * uz;          // how far off the SEED plane
+        if (mode === 'carve') {
+          // CARVED-TILE mode: a tile is its flat top plus the slants that roll down off it, ending
+          // where the neighbouring tile's slant comes back up — that meeting is a concave crease.
+          // So: always cross a near-flat edge, otherwise cross only CONVEX folds, and never a
+          // crease. The seed cone still caps how far down a slant may go.
+          const dLocal = info.normals[t * 3]! * ux + info.normals[t * 3 + 1]! * uy + info.normals[t * 3 + 2]! * uz;
+          if (dLocal < FLAT_EPS_COS) {
+            if (!isConvex(info, t, u)) continue;            // concave crease — the rut bottom
+            if (dSeed < tolCos) continue;                   // rolled too far from the tile's face
+          }
+        } else if (dSeed < tolCos) continue;                // PLANAR mode: one cone about the seed
         seen[u] = 1;
         stack.push(u);
       }
@@ -520,6 +567,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       selOverlay.visible = on && selOverlay.visible;
       render();
     },
+    setMode: (m) => { mode = m; facetCache = null; paintGroups(); refreshPreview(); onChange(); render(); },
     setTolerance: (deg) => {
       tolCos = Math.cos(THREE.MathUtils.degToRad(deg));
       facetCache = null; // the tolerance IS the partition; it cannot survive a change to it

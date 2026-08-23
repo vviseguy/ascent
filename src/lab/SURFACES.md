@@ -53,6 +53,35 @@ Numbering topology off the filtered mesh while the stored indices number the ori
 whenever `rebuildObject` swaps the root (any texture change does), carrying the unsaved hidden set
 across by hand.
 
+## Two grow modes: `planar` and `carve`
+
+A flat face and "one carved tile" are different questions, not two settings of one.
+
+`planar` grows a single cone about the seed normal — what is FLAT with this face. `carve` grows
+the seed face PLUS the slants that roll down off it, and stops at the concave crease where the
+neighbouring tile’s slant comes back up. That gives a tile the way a mason would think of one:
+the face and its own chamfers, fitted against the next tile, with the boundary in the rut.
+
+**The difference is the SIGN of the fold, not its angle.** Measured on `floor_tile_large`:
+
+| angle | convex | concave | what it is |
+|---|---|---|---|
+| 0-5° | 16 | 100 | triangulation seams inside a face (sign is noise here) |
+| 20-45° | **104** | 0 | the bevels rolling down off each paver |
+| 60-65° | 0 | **28** | creases where two bevels meet — the rut bottoms |
+| 90-95° | 32 | 0 | tile perimeter, top meeting the outer side wall |
+
+Both the bevels and the ruts are just "edges" to an angle threshold, which is why `planar` can
+only ever give you tops-without-slants (15°, 73 facets) or the whole surface at once (45°, 5
+facets). Convexity separates them: `carve` at 50° gives **21** facets — one per paver, each
+carrying its slants. An edge is convex when the neighbour’s centroid sits BEHIND this face’s
+plane. Below ~8° the centroid offset is nearly in-plane so the sign is meaningless noise; those
+edges always join regardless.
+
+`carve` still honours the tolerance as a cone about the seed, which caps how far down a slant may
+roll before it stops belonging to the face. 50° is the useful setting for KayKit floor tiles; 75°
+starts merging across pavers.
+
 ## GROUPS — the partition, not just one hover
 
 A **facet** is a maximal run of edge-connected triangles within the angle tolerance: the same
