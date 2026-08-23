@@ -299,6 +299,7 @@ function paintable(node: SVGElement, run: (clear: boolean) => void): void {
 }
 
 function render(): void {
+  saveDraft();
   const svg = el('grid') as unknown as SVGSVGElement;
   svg.innerHTML = patternDefs(U);   // the hatch library, re-emitted with the grid it is sized for
   svg.setAttribute('width', String(PAD * 2 + W * U));
@@ -884,13 +885,18 @@ function buildPanel(): void {
     `Editing “${cur}” — Save overwrites it; Save as… leaves it alone and stores a copy.`));
 
   p.append(h('div', { id: 'ready' }));
-  p.append(h('div', { id: 'status' }));
+  p.append(h('div', { id: 'status' }, lastStatus));
   render();
 }
 
 /* ------------------------------- persistence -------------------------------- */
 
-const status = (m: string): void => { const s = document.getElementById('status'); if (s) s.textContent = m; };
+let lastStatus = '';
+const status = (m: string): void => {
+  lastStatus = m;
+  const s = document.getElementById('status');
+  if (s) s.textContent = m;
+};
 
 async function fetchStore(kind: string): Promise<Record<string, Stored>> {
   try {
@@ -1003,6 +1009,48 @@ async function clearAll(): Promise<void> {
   cells = blankGrid();
   loadedName = null;
   buildPanel();
+}
+
+/* ---------------------------------- draft ----------------------------------- */
+// A reload used to cost whatever was on the grid: a stray Ctrl+R, an HMR update, a closed tab. The
+// lattice is nothing but integer masks, so the whole of it is mirrored into localStorage on a short
+// delay and read back at boot.
+//
+// This is a DRAFT, not a save. The store under `/__lab/cell-structures` is still the only thing the
+// generator ever reads, and `loadedName` rides along so the Save button still names its target.
+
+const DRAFT_KEY = 'ascent:cell-editor:draft';
+let draftTimer: number | undefined;
+
+interface Draft { w: number; h: number; levels: number; level: number; name: string | null; cells: CellField[] }
+
+/** Debounced: painting fires per cell, and JSON of a big lattice is not free. */
+function saveDraft(): void {
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(() => {
+    const d: Draft = { w: W, h: H, levels: LEVELS, level: L, name: loadedName, cells };
+    // A grid past the storage quota simply goes un-drafted. Losing the draft is a nuisance; throwing
+    // in the middle of a brush stroke is not acceptable.
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch { /* over quota — skip */ }
+  }, 400);
+}
+
+/** True when a draft was found AND fit the lattice it claims. A malformed one is dropped, not fixed. */
+function restoreDraft(): boolean {
+  let d: Draft;
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return false;
+    d = JSON.parse(raw) as Draft;
+  } catch { return false; }
+  const ok = d && d.w > 0 && d.h > 0 && d.levels > 0 && Array.isArray(d.cells)
+    && d.cells.length === (d.w + 1) * (d.h + 1) * d.levels;
+  if (!ok) { localStorage.removeItem(DRAFT_KEY); return false; }
+  W = d.w; H = d.h; LEVELS = d.levels;
+  L = Math.min(Math.max(0, d.level | 0), LEVELS - 1);
+  cells = d.cells.map((f) => ({ ...f }));
+  loadedName = typeof d.name === 'string' ? d.name : null;
+  return true;
 }
 
 /* ----------------------------------- 3D ------------------------------------- */
@@ -1181,6 +1229,8 @@ el('hint').textContent =
   + 'the last row no south-running one, so those are not drawn — but the SOUTH and EAST borders are, '
   + 'and they are what the padding exists for.';
 cells = blankGrid();
+const restored = restoreDraft();
+if (restored) status(`restored your last grid${loadedName ? ` — “${loadedName}”` : ''}`);
 init3d();
 initSplit();
 buildPanel();   // draw immediately; the store fetch only fills the two lists
