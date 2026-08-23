@@ -45,14 +45,50 @@
       "savedAt": "2026-08-23T09:25:18.231Z"
     },
     "new brush": {
-      "w": 1,
-      "h": 1,
+      "w": 3,
+      "h": 7,
       "cells": [
         {
           "floor": 2,
           "wallN": 1,
-          "wallW": 2,
-          "corner": 3,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 2,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 2,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
           "wallType": 511,
           "open": 3,
           "torch": 3
@@ -69,9 +105,225 @@
         {
           "floor": 2,
           "wallN": 1,
-          "wallW": 2,
+          "wallW": 1,
           "corner": 1,
-          "wallType": 4,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
+          "open": 3,
+          "torch": 3
+        },
+        {
+          "floor": 2,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 511,
           "open": 3,
           "torch": 3
         },
@@ -85,7 +337,7 @@
           "torch": 3
         }
       ],
-      "savedAt": "2026-08-23T09:26:55.683Z"
+      "savedAt": "2026-08-23T09:39:44.088Z"
     }
   }
 }

@@ -13,6 +13,7 @@
 //   ?demo=<kind>               a synthetic subject, for checking a mesh choice in isolation
 //   ?structure=<name>          one authored structure, on its own
 //   ?floor=<w>x<h>&seed=<n>    a generated floor
+//   &level=<n>                 ONE storey of a multi-level structure (default: all, stacked)
 //   &turn=0..3 &flip=1         orient the structure first — the placement must survive all eight
 //   &angle=<deg> &pitch=<deg>  camera around / above
 //   &zoom=<f>                  distance multiplier
@@ -23,7 +24,7 @@
 import * as THREE from 'three';
 import { buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
 import { previewCell } from '../floor/cell-field.ts';
-import { getStructure, listStructures } from '../floor/cell-structures.ts';
+import { getStructure, levelsOf, listStructures } from '../floor/cell-structures.ts';
 import { orientStructure } from '../floor/cell-orient.ts';
 import { generateEmergent } from '../floor/cell-emergent.ts';
 import { resolveFloor } from '../floor/cell-defray.ts';
@@ -44,7 +45,11 @@ window.__CELL_NAMES = listStructures();
 const q = new URLSearchParams(location.search);
 const num = (k: string, d: number): number => { const v = Number(q.get(k)); return Number.isFinite(v) ? v : d; };
 
-interface Subject { cells: (Cell | null)[]; w: number; h: number; extent: { w: number; h: number }; label: string }
+interface Subject {
+  cells: (Cell | null)[]; w: number; h: number; extent: { w: number; h: number }; label: string;
+  /** Extra storeys to draw above this one, bottom-up. A multi-level structure IS a building. */
+  above?: (Cell | null)[][];
+}
 
 /** Synthetic subjects. For checking a placement rule that no authored structure happens to exercise —
  *  a bare flight with open flanks, say, when every structure in the store has walled ones. */
@@ -124,10 +129,28 @@ function subject(): Subject {
   const turn = num('turn', 0) as 0 | 1 | 2 | 3;
   const flip = q.get('flip') === '1';
   const st = turn === 0 && !flip ? base : orientStructure(base, { turn, flip });
+
+  /* ONE LATTICE PER STOREY, and slicing them apart is not optional. `cells` is
+     `levels * (w+1) * (h+1)` long, so handing the whole array over with `w+1` and `h+1` reads only
+     the first storey and silently drops the rest — a three-storey throne room drew as its ground
+     floor with nothing to say so. */
+  const lw = st.w + 1, lh = st.h + 1, size = lw * lh;
+  const levels = levelsOf(st);
+  const slice = (i: number): (Cell | null)[] =>
+    st.cells.slice(i * size, (i + 1) * size).map((f) => previewCell(f));
+
+  const only = q.get('level');
+  const pick = only === null ? null : Math.max(0, Math.min(levels - 1, Math.floor(Number(only))));
+  const shown = pick === null ? levels : 1;
+  const bottom = pick ?? 0;
+
   return {
     // the stored grid is the POINT LATTICE, so it is one wider and one taller than the floor extent
-    cells: st.cells.map((f) => previewCell(f)), w: st.w + 1, h: st.h + 1, extent: { w: st.w, h: st.h },
-    label: `${name}  ${st.w}x${st.h}${turn || flip ? `  turn ${turn}${flip ? ' flipped' : ''}` : ''}`,
+    cells: slice(bottom), w: lw, h: lh, extent: { w: st.w, h: st.h },
+    ...(shown > 1 ? { above: Array.from({ length: levels - 1 }, (_, i) => slice(i + 1)) } : {}),
+    label: `${name}  ${st.w}x${st.h}`
+      + (levels > 1 ? (pick === null ? `  ${levels} storeys` : `  storey ${pick + 1}/${levels}`) : '')
+      + (turn || flip ? `  turn ${turn}${flip ? ' flipped' : ''}` : ''),
   };
 }
 
@@ -148,6 +171,13 @@ async function main(): Promise<void> {
 
   const group = await buildGrid(s.cells, s.w, s.h, s.extent);
   scene.add(group);
+
+  // the structure's OWN upper storeys, one FLOOR_HEIGHT apart — the same spacing the tower uses
+  for (const [i, up] of (s.above ?? []).entries()) {
+    const g = await buildGrid(up, s.w, s.h, s.extent);
+    g.position.y = toFloat(FLOOR_HEIGHT) * (i + 1);
+    scene.add(g);
+  }
 
   /* STACK — the same deck repeated one storey up, which is the only way to SEE whether a staircase
      actually reaches the next floor or stops short in mid-air. */
