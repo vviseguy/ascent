@@ -292,6 +292,17 @@ export class Dungeon {
   }
 
   /** Build the dungeon geometry for all strata; each CELL gets its own group (for fog). */
+  /**
+   * PROPS AND TORCHES. Off makes a plain dungeon that builds far faster — on a 2u tower the dressing is
+   * thousands of extra meshes and point lights, one scatter roll per cell, and the cells are four times
+   * as many as the 4u tower it was tuned for. Nothing about the layout changes.
+   */
+  private dressing = true;
+  /** One torch every N walled cells. Tuned for 4u; a 2u grid has four times the cells for the same
+   *  floor, so the same number means four times the torches. */
+  private torchEvery = 11;
+  setDressing(on: boolean, torchEvery = 11): void { this.dressing = on; this.torchEvery = Math.max(1, torchEvery); }
+
   build(grids: StratumCellGrid[], stairs?: StairInfo[]): void {
     this.group.clear();
     this.strata = [];
@@ -325,7 +336,10 @@ export class Dungeon {
         const walkable = (c.type === 'ROOM' || c.type === 'CORRIDOR' || c.type === 'DOORWAY' || c.stair) && !c.hole;
         // ?bare: floor only on template (ROOM) cells so corridors read as empty and templates pop.
         // Floor mesh is chosen by the room's ROLE material (wood/dirt/stone) so rooms read distinctly.
-        if (walkable && (!this.bareTemplates || c.roomId >= 0)) this.placeRoleFloor(cg, c.roomRole, cx, sy, cz, scale, mats);
+        // ...unless the grid brought its own ground (see StratumCellGrid.providesFloors)
+        if (walkable && !grid.providesFloors && (!this.bareTemplates || c.roomId >= 0)) {
+          this.placeRoleFloor(cg, c.roomRole, cx, sy, cz, scale, mats);
+        }
         // (KayKit STAIRS are placed in a dedicated pass below from the sim's exact StairInfo,
         //  not per-cell — see placeStairsExact, so the model lines up with the collision.)
 
@@ -335,7 +349,7 @@ export class Dungeon {
         const m = c.wallMask;
 
         // a deterministic scatter of torches (emissive → lighting) on walled cells
-        if (m !== 0 && this.hash(c.col, c.row, 17) % 11 === 0) {
+        if (this.dressing && m !== 0 && this.hash(c.col, c.row, 17) % this.torchEvery === 0) {
           this.place(cg, 'torch', cx, sy + cs * 0.55, cz, 0, scale * 0.9, mats);
           if (lights < MAX_TORCH_LIGHTS) {
             const L = new THREE.PointLight(0xffa64d, 18, cs * 2.6, 2);
@@ -345,7 +359,7 @@ export class Dungeon {
         }
 
         // ROOM PERSONALITY (issue 5): furnish ROOM cells with a themed prop, deterministically.
-        if (c.type === 'ROOM' && !c.stair && !c.hole) {
+        if (this.dressing && c.type === 'ROOM' && !c.stair && !c.hole) {
           this.decorateRoomCell(cg, c, grid, byRC, isFloor, cx, sy, cz, scale, h, mats);
         }
 

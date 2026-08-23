@@ -195,41 +195,6 @@ function emitFlightSolids(solids: AABB[], f: StairFlight, w: number, h: number, 
   }
 }
 
-/**
- * `StairInfo` for the route proof — but ONLY for a flight that climbs toward +Z.
- *
- * The type describes a straight stair running purely in Z (`dirX: 0`, `dirZ: 1`), which is all the 4u
- * compiler ever produced because it synthesised them. An authored flight can climb any of four ways,
- * and rather than widen a type the proofs depend on, a flight that does not fit simply contributes no
- * metadata. Its COLLIDERS are emitted either way, so the stair is real and climbable regardless —
- * only the proof's convenience record is missing.
- */
-function flightInfo(f: StairFlight, w: number, h: number, idx: number, baseY: Fixed): StairInfo | null {
-  if (f.up !== 'S') return null; // +Z is south in this grid; anything else the type cannot describe
-  const c0 = cellCentre2u(w, h, f.y * w + f.x);
-  const half = mul(CELL_SIZE_2U, fromFloatConst(0.5));
-  const x0 = sub(c0.x, half), z0 = sub(c0.z, half);
-  const x1 = add(x0, mul(CELL_SIZE_2U, fromInt(f.bw)));
-  const z1 = add(z0, mul(CELL_SIZE_2U, fromInt(f.bh)));
-  const centerX = mul(add(x0, x1), fromFloatConst(0.5));
-  const width = mul(CELL_SIZE_2U, fromInt(f.bw));
-  const run = sub(z1, z0);
-  return {
-    stratum: idx,
-    cols: [f.x, f.x + f.bw - 1],
-    dirX: 0, dirZ: 1,
-    centerX: toRaw(centerX),
-    entryZ: toRaw(z0), topZ: toRaw(z1),
-    width: toRaw(width), run: toRaw(run),
-    rise: toRaw(FLOOR_HEIGHT),
-    treadCount: STAIR_STEPS,
-    treadRise: toRaw(mul(FLOOR_HEIGHT, fromFloatConst(1 / STAIR_STEPS))),
-    originX: toRaw(sub(centerX, mul(width, fromFloatConst(0.5)))),
-    originY: toRaw(baseY), originZ: toRaw(z0),
-    baseY: toRaw(baseY), topY: toRaw(add(baseY, FLOOR_HEIGHT)),
-  };
-}
-
 export interface CellTowerResult extends CompiledTower {
   /** Storeys that have no flight, so no way up. Empty once every floor carries a stairwell — which is
    *  what multi-storey structures are for. See the note at the top of this file. */
@@ -247,7 +212,7 @@ export function compileCellTower(
   const solids: AABB[] = [];
   const stratumBaseY: number[] = [];
   const entryXZ: { x: number; z: number }[] = [];
-  const stairs: StairInfo[] = [];
+  const stairs: StairInfo[] = []; // always empty here — see the note by `strataWithoutStairs`
   const cellGrid: StratumCellGrid[] = [];
   const strataWithoutStairs: number[] = [];
   const ceilingSealedFlights: CellTowerResult['ceilingSealedFlights'] = [];
@@ -303,6 +268,7 @@ export function compileCellTower(
       stratum: idx, width: f.width, height: f.height,
       cellSize: toRaw(CELL_SIZE_2U), surfaceY: toRaw(baseY),
       cells,
+      providesFloors: true,   // this compiler lays the ground itself; see the field's note
       // the slot lattice has no meaning here — `wallMask` is read straight off the 2u walls above,
       // which is what it was ever used for
       wallGrid: { width: f.width, height: f.height, vEdges: [], hEdges: [], posts: [] } as unknown as StratumCellGrid['wallGrid'],
@@ -336,14 +302,15 @@ export function compileCellTower(
       }
     }
 
+    /* NO `StairInfo`, deliberately. It describes a SYNTHETIC straight staircase — the one the 4u
+       compiler invents — and the renderer draws a scaled, unrotated stair model from it
+       (`dungeon.ts:placeStairsExact`, which assumes local +Z ascends). This tower's staircases are
+       real authored meshes already in `wallPlacements`, so handing over a StairInfo makes the renderer
+       draw a SECOND staircase on top of the first, facing whichever way its own assumption points.
+       That is exactly the "stairs render backwards but the hitbox is right" symptom: the hitbox came
+       from the real flight, the wrong-looking mesh from this. */
     const isTop = s === floors.length - 1;
-    if (!isTop) {
-      if (flights.length === 0) strataWithoutStairs.push(idx);
-      for (const fl of flights) {
-        const info = flightInfo(fl, f.width, f.height, idx, baseY);
-        if (info) { stairs.push(info); break; }
-      }
-    }
+    if (!isTop && flights.length === 0) strataWithoutStairs.push(idx);
 
     const ec = cellCentre2u(f.width, f.height, f.entry);
     entryXZ[idx] = { x: toRaw(ec.x), z: toRaw(ec.z) };

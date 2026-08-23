@@ -22,7 +22,7 @@ import { generateFloor } from '../floor/generate.ts';
 import { compileTower, FLOOR_HEIGHT, GAME_GRID_SIZE } from './tower.ts';
 import { compileCellTower, type CellFloor } from './cell-tower.ts';
 import { generateEmergentTower } from '../floor/cell-emergent.ts';
-import { resolveGrid } from '../floor/cell-grid.ts';
+import { resolveFloor } from '../floor/cell-defray.ts';
 
 export interface SceneHandle {
   sim: Sim;
@@ -183,7 +183,7 @@ export function buildTower(opts: {
        every flight climb into a ceiling. */
     const stack = generateEmergentTower({ width: cw, height: ch, seed, levels: numStrata });
     const cellFloors: CellFloor[] = stack.floors.map((f) => ({
-      cells: resolveGrid(f.grid), width: cw, height: ch, entry: f.entry, exit: f.exit,
+      cells: resolveFloor(f.grid), width: cw, height: ch, entry: f.entry, exit: f.exit,
     }));
     const t = compileCellTower(cellFloors, 0, { groundY, killPlaneY });
     // said out loud rather than silently producing a tower you cannot climb

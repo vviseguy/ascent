@@ -33,6 +33,7 @@ const u = (f: string): string => `${PACK}/${f}.gltf.glb`;
 export const PIECE = {
   half: u('wall_half'),
   corner: u('wall_corner'),
+  endcap: u('wall_endcap'),
   barrier: u('barrier'),
   barrierCorner: u('barrier_corner'),
   halfCap: u('wall_half_endcap'),
@@ -546,9 +547,11 @@ export function cellPlacements(
  * the pieces are.
  */
 type WallFamily = 'wall' | 'barrier';
-const FAMILY: Record<WallFamily, { full: string; half: string; corner: string }> = {
-  wall: { full: PIECE.wall, half: PIECE.half, corner: PIECE.corner },
-  barrier: { full: PIECE.barrier, half: PIECE.barrierHalf, corner: PIECE.barrierCorner },
+const FAMILY: Record<WallFamily, { full: string; half: string; corner: string; cap: string | null }> = {
+  // `cap` is the SHORT stub the kit ends a wall with — a run that just stops mid-air looks sheared off
+  // otherwise. The barrier family has no cap of its own, so a barrier run simply ends.
+  wall: { full: PIECE.wall, half: PIECE.half, corner: PIECE.corner, cap: PIECE.endcap },
+  barrier: { full: PIECE.barrier, half: PIECE.barrierHalf, corner: PIECE.barrierCorner, cap: null },
 };
 /** `sloped` has no mesh of its own and stands in as wall, exactly as `wallPiece` has it. */
 const familyOf = (seg: Seg): WallFamily | null =>
@@ -627,14 +630,25 @@ export function wallEdgePlacements(
   }
 
   /* ---- 2. RUNS ---- */
+  /** How many wall segments meet at a lattice point — a run that ends where nothing else does is
+   *  loose, and gets a cap rather than a sheared-off face. */
+  const armsAt = (px: number, py: number): number => {
+    let n = 0;
+    if (edge(px, py, 'E')) n++;
+    if (px > 0 && edge(px - 1, py, 'E')) n++;
+    if (edge(px, py, 'S')) n++;
+    if (py > 0 && edge(px, py - 1, 'S')) n++;
+    return n;
+  };
+
   const layRun = (sx: number, sy: number, dir: 'E' | 'S', fam: WallFamily, len: number): void => {
     const stepX = dir === 'E' ? 1 : 0, stepY = dir === 'E' ? 0 : 1;
     const turn = dir === 'E' ? TURN.E : TURN.S;
+    const ox = NEG_ONE, oz = NEG_ONE;
     let i = 0;
     while (i < len) {
       const px = sx + stepX * i, py = sy + stepY * i;
       // offsets are cell-local half-cell units, and one edge is TWO of them
-      const ox = NEG_ONE, oz = NEG_ONE;
       if (len - i >= 2) {
         // a 4u piece is CENTRED, so it sits one edge along from the point it starts at
         const mid = fromInt(2);
@@ -645,6 +659,20 @@ export function wallEdgePlacements(
         push(px, py, at(FAMILY[fam].half, turn, ox, oz));
         i += 1;
       }
+    }
+
+    /* CAPS on a loose end. `wall_endcap` is a short +X-native stub, so the low end takes it facing
+       back along the run and the high end takes it facing forward — a nub on the outside of the last
+       piece, not a replacement for it. */
+    const cap = FAMILY[fam].cap;
+    if (!cap) return;
+    const ex = sx + stepX * len, ey = sy + stepY * len;
+    if (armsAt(sx, sy) === 1) {
+      push(sx, sy, at(cap, dir === 'E' ? TURN.W : TURN.N, ox, oz));
+    }
+    if (armsAt(ex, ey) === 1) {
+      const along = fromInt(2 * len);
+      push(sx, sy, at(cap, turn, dir === 'E' ? add(ox, along) : ox, dir === 'E' ? oz : add(oz, along)));
     }
   };
 

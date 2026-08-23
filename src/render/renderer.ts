@@ -429,9 +429,14 @@ export class Renderer {
    * real dungeon tiles (floors/walls/doorways/torches). Await before the loop. View-only:
    * collision is still the sim's AABB terrain underneath. Call AFTER buildTerrain.
    */
-  async buildDungeon(grids: StratumCellGrid[], stairs?: import('../game/tower.ts').StairInfo[]): Promise<void> {
+  async buildDungeon(
+    grids: StratumCellGrid[],
+    stairs?: import('../game/tower.ts').StairInfo[],
+    opts?: { dressing?: boolean; torchEvery?: number },
+  ): Promise<void> {
     const d = new Dungeon();
     await d.load();
+    if (opts) d.setDressing(opts.dressing ?? true, opts.torchEvery ?? 11);
     d.build(grids, stairs);
     this.scene.add(d.group);
     this.dungeon = d;

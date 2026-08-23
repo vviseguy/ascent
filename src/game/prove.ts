@@ -40,7 +40,7 @@ import { clone, restoreInto } from '../sim/world/snapshot.ts';
 import { buildTower } from './scene.ts';
 import { compileCellTower } from './cell-tower.ts';
 import { generateEmergentTower } from '../floor/cell-emergent.ts';
-import { resolveGrid } from '../floor/cell-grid.ts';
+import { resolveFloor } from '../floor/cell-defray.ts';
 import { drawOffer, boonById } from './boons.ts';
 import { generateFloor } from '../floor/generate.ts';
 import { compileTower, CELL_SIZE, GAME_GRID_SIZE } from './tower.ts';
@@ -242,7 +242,7 @@ const CELL_W = GAME_GRID_SIZE * 2, CELL_H = GAME_GRID_SIZE * 2;
 const compileCellForSeed = (seed: bigint, numStrata = 5) => {
   const stack = generateEmergentTower({ width: CELL_W, height: CELL_H, seed, levels: numStrata });
   const floors = stack.floors.map((f) => ({
-    cells: resolveGrid(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
+    cells: resolveFloor(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
   }));
   return { stack, tower: compileCellTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) }) };
 };
@@ -423,7 +423,7 @@ console.log('[9] THE 2u TOWER — compiled route, then a real Anchor walking it'
   {
     const stack = generateEmergentTower({ width: CELL_W, height: CELL_H, seed: 1000n, levels: 5 });
     const floors = stack.floors.map((f) => ({
-      cells: resolveGrid(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
+      cells: resolveFloor(f.grid), width: CELL_W, height: CELL_H, entry: f.entry, exit: f.exit,
     }));
     for (const f of floors) for (const c of f.cells) if (c && c.floor === 'none') c.floor = 'stone';
     const sealed = compileCellTower(floors, 0, { groundY: fromInt(0), killPlaneY: fromInt(-10) });

@@ -14,7 +14,8 @@ const grid = (mut: (c: Cell, x: number, y: number) => void = () => {}): Cell[] =
  *  renderer and the collision compiler read. */
 const urls = (cs: Cell[], x: number, y: number): string[] =>
   (gridPlacements(cs, W, H).find((e) => e.x === x && e.y === y)?.placements ?? [])
-    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''))
+    .filter((u) => u !== 'wall_endcap');   // caps are dressing on a loose end; see their own test
 /** Every piece on the whole grid — for asserting about walls, which no longer belong to one cell. */
 const allUrls = (cs: Cell[], w = W, h = H): string[] =>
   gridPlacements(cs, w, h).flatMap((e) => e.placements)
@@ -33,6 +34,15 @@ describe('cell-place — one piece per thing the cell owns', () => {
   it('a lone wall segment is one 2u piece', () => {
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }), 1, 1))
       .toEqual(['floor_tile_large', 'wall_half']);
+  });
+
+  it('a run that stops in mid-air is CAPPED at each loose end', () => {
+    // a lone segment is loose at both ends
+    const lone = allUrls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }));
+    expect(lone.filter((u) => u === 'wall_endcap')).toHaveLength(2);
+    // a full row runs into the map edge at both ends — nothing to cap
+    const spanning = allUrls(grid((c, x, y) => { if (y === 1) c.wallN = 'wall'; }));
+    expect(spanning.filter((u) => u === 'wall_endcap')).toHaveLength(2); // a bare grid has no border wall to meet
   });
 
   it('TWO PERPENDICULAR segments become one mitered corner, not two slabs at right angles', () => {

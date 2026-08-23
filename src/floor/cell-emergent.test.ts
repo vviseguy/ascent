@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateEmergent, resolveEmergent } from './cell-emergent.ts';
-import { buildCellGraph, reachableFrom, nodeId } from './cell-graph.ts';
+import { buildCellGraph, reachableFrom, reachableFromSet, nodeId } from './cell-graph.ts';
+import { resolveGrid } from './cell-grid.ts';
 import { hasConflict, domainSize, FIELD_KEYS, previewCell, settleMask, fullField, template, floors } from './cell-field.ts';
 import { listStructures, getStructure } from './cell-structures.ts';
 import { planMaze, mazeEdges, MAZE_KINDS, type MazeKind } from './cell-maze.ts';
@@ -212,12 +213,30 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
     expect(g.adj[nodeId(3, 1, 0)]).toHaveLength(0);
   });
 
-  it('doors are DISCOVERED — some perimeter walls refuse to seal', () => {
+  it('SEAL only touches walls the author drew — it does not invent them', () => {
+    /* The perimeter used to be marked porous wholesale: both sides of every edge cell, drawn or not.
+       SEAL then stamped a wall into each, and wherever the author had merely ABSTAINED the stamp
+       succeeded — inventing walls nobody drew. Those invented segments were the nubs sprouting off
+       every structure. On this store it was 241 seals against 80 real ones. */
     for (const seed of SEEDS) {
       const s = run(seed).stats;
-      expect(s.ringSealed).toBeGreaterThan(0); // most of the ring closes…
-      expect(s.doorsKept).toBeGreaterThan(0);  // …and what refuses is the way in
+      // whatever porosity opened, seal accounts for: it closed it, or kept it as a door
+      expect(s.ringSealed + s.doorsKept).toBeGreaterThan(0);
+      // and the count is now bounded by the walls the structures actually carry on their edges
+      expect(s.ringSealed).toBeLessThan(200);
     }
+  });
+
+  it('a door appears where one is NEEDED — the porous ring is a safety valve, not decoration', () => {
+    /* With authored openings the ring seals completely and no door is discovered, which is right: the
+       author said where the way in is. The mechanism still has to work when they did not — a structure
+       whose only entrance is a wall the router must cross keeps that wall open. */
+    const g = generateEmergent({ width: 30, height: 24, seed: 4n });
+    const cells = resolveGrid(g.grid);
+    // every placed structure's middle must be reachable from the entry, however it got in
+    const graph = buildCellGraph(cells, 30, 24);
+    const seen = reachableFromSet(graph, [g.entry]);
+    for (const p of g.placed) expect(seen[p.centre]).toBe(true);
   });
 });
 

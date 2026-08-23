@@ -132,7 +132,12 @@ const overlaps = (a: Region, b: Region): boolean =>
  */
 function structureStamp(
   name: string, porousPerimeter: boolean, o: Orientation, level = 0, src: StructureSource = AUTHORED,
-): { stamp: (lx: number, ly: number) => CellField; w: number; h: number; levels: number } | null {
+): {
+  stamp: (lx: number, ly: number) => CellField;
+  /** Which slots this stamp actually LOOSENED — the ones SEAL is entitled to close again. */
+  opened: (lx: number, ly: number) => { n: boolean; w: boolean };
+  w: number; h: number; levels: number;
+} | null {
   const base = src.get(name);
   if (!base) return null;
   const st = orientStructure(base, o); // 4 turns x mirrored = 8 placements per authored piece
@@ -163,10 +168,21 @@ function structureStamp(
   const assertAir = (m: Mask): Mask => ((m & NONE) !== 0 ? NONE : m);
   const sw = st.w + 1; // the stored grid is the POINT lattice, one larger than the floor extent
   const lvBase = level * (st.w + 1) * (st.h + 1); // levels are stored one lattice after another
+  const onEdgeAt = (lx: number, ly: number): boolean =>
+    lx === 0 || ly === 0 || lx === st.w || ly === st.h;
   return {
     w: sw,
     h: st.h + 1,
     levels: nLevels,
+    /* A slot is porous only where the author DREW A WALL and `loosen` widened it. Anywhere else on the
+       perimeter the author either drew something specific (which stands) or said nothing at all (which
+       must stay nothing) — and treating "said nothing" as porous is how SEAL ended up stamping walls
+       around every structure that the author never drew. */
+    opened: (lx, ly) => {
+      const f = st.cells[lvBase + ly * sw + lx];
+      if (!f || !onEdgeAt(lx, ly) || !porousPerimeter) return { n: false, w: false };
+      return { n: f.wallN === WALL, w: f.wallW === WALL };
+    },
     stamp: (lx, ly) => {
       const f = st.cells[lvBase + ly * sw + lx]!;
       const onEdge = lx === 0 || ly === 0 || lx === st.w || ly === st.h;
@@ -257,11 +273,16 @@ function placeStructures(
         name, orientation: o, region,
         centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
       });
+      /* ONLY THE SLOTS THIS STRUCTURE ACTUALLY OPENED. Pushing the whole perimeter ring here — both
+         sides of every edge cell, drawn or not — let SEAL stamp a wall wherever the author had merely
+         abstained, and those invented segments are the nubs sprouting off every structure. SEAL exists
+         to close what porosity opened, not to add walls of its own. */
+      const sk = structureStamp(name, true, o, lv - b, src)!;
       for (let ly = 0; ly < region.h; ly++) {
         for (let lx = 0; lx < region.w; lx++) {
-          if (!(lx === 0 || ly === 0 || lx === region.w - 1 || ly === region.h - 1)) continue;
-          storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
-          storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
+          const op = sk.opened(lx, ly);
+          if (op.n) storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'N' });
+          if (op.w) storeys[lv]!.porousWalls.push({ x: region.x + lx, y: region.y + ly, side: 'W' });
         }
       }
     }

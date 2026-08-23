@@ -26,7 +26,7 @@ import { previewCell } from '../floor/cell-field.ts';
 import { getStructure, listStructures } from '../floor/cell-structures.ts';
 import { orientStructure } from '../floor/cell-orient.ts';
 import { generateEmergent } from '../floor/cell-emergent.ts';
-import { resolveGrid } from '../floor/cell-grid.ts';
+import { resolveFloor } from '../floor/cell-defray.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
 import type { Cell } from '../floor/cell.ts';
@@ -80,7 +80,7 @@ function subject(): Subject {
     const w = Number(m[1]), h = Number(m[2]);
     const r = generateEmergent({ width: w, height: h, seed: BigInt(num('seed', 1)) });
     return {
-      cells: resolveGrid(r.grid), w, h, extent: { w, h },
+      cells: resolveFloor(r.grid), w, h, extent: { w, h },
       label: `floor ${w}x${h} seed ${num('seed', 1)} — ${r.stats.structuresPlaced} structures`,
     };
   }

@@ -342,6 +342,15 @@ export interface StratumCellGrid {
    * WorldPlacement.
    */
   wallPlacements: WorldPlacement[];
+  /**
+   * Does `wallPlacements` already include the GROUND?
+   *
+   * The 4u compiler leaves floors out and the renderer lays one per cell from the room's role. The 2u
+   * one puts them in, because it knows each cell's actual material and can merge four cells into one
+   * 4u mesh — so the renderer must not lay its own on top. It was doing exactly that: every floor
+   * drawn twice, some eighteen thousand duplicate meshes on a five-storey tower, z-fighting included.
+   */
+  providesFloors?: boolean;
 }
 
 export interface CompiledTower {

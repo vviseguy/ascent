@@ -103,7 +103,14 @@ async function boot(): Promise<void> {
     else if (MODELS[modelName]) await renderer.preloadModels(MODELS[modelName]!.url, MODELS[modelName]!.opts ?? {});
     else await renderer.preloadModelSet(KAYKIT_CREW);
     // KAYKIT DUNGEON environment (default on; `?dungeon=off` keeps the abstract tower view).
-    if (scene.cellGrid && params.get('dungeon') !== 'off') await renderer.buildDungeon(scene.cellGrid, scene.stairs);
+    /* PROPS: on by default, `?props=off` for a plain dungeon that builds much faster. A 2u grid has
+       four times the cells of the 4u one the torch density was tuned for, so it gets a proportionally
+       sparser scatter rather than four times as many torches. */
+    const dressing = params.get('props') !== 'off';
+    const torchEvery = substrate === '4u' ? 11 : 40;
+    if (scene.cellGrid && params.get('dungeon') !== 'off') {
+      await renderer.buildDungeon(scene.cellGrid, scene.stairs, { dressing, torchEvery });
+    }
   } catch (e) {
     console.warn('[ascent] preload failed', e);
   }
