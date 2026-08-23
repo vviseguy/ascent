@@ -29,7 +29,10 @@
 // Deterministic: seeded sub-streams per phase, index-sorted iteration, integer hashes, no float.
 
 import { makeGrid, begin, stamp, commit, rollback, txConflicts, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
-import { previewCell, template, settleMask, segs, floors, corners, wallTypes, type Mask, type CellField } from './cell-field.ts';
+import {
+  previewCell, template, settleMask, segs, floors, corners, wallTypes, torches, domainSize,
+  type Mask, type CellField,
+} from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
 import {
   gridAt, txAt, findRoute, pinRouteOpen, routeGuaranteed, reachSet, keepsReach, stillConnected,
@@ -40,6 +43,7 @@ import { getStructure, levelsOf, listStructures, type CellStructure } from './ce
 import { orientStructure, ORIENTATIONS, type Orientation } from './cell-orient.ts';
 import { makeRng, subStream, nextInt, mixSeeds, type Rng } from './rng.ts';
 import { isStairFloor, type Cell } from './cell.ts';
+import { torchFacings } from './cell-place.ts';
 
 const WALL: Mask = segs('wall');
 const NONE: Mask = segs('none');
@@ -48,9 +52,14 @@ const STONE: Mask = floors('stone');
 const SOLID_CORNER: Mask = corners('none');
 const SOLID_TYPE: Mask = wallTypes('solid');
 const ROCK: Mask = floors('rock');
+const TORCH_YES: Mask = torches('yes');
+/** Roughly one lit point per this many candidates, before spacing thins them further. */
+const TORCH_EVERY = 7;
+/** No two torches closer than this, in cells — a hash alone clumps. */
+const TORCH_SPACING = 5;
 
 /** Sub-stream tags — stable, so adding a phase never shifts an earlier one's output. */
-const STREAM = { structures: 1, maze: 2, pick: 3 } as const;
+const STREAM = { structures: 1, maze: 2, pick: 3, torches: 4 } as const;
 
 export interface EmergentConfig {
   width: number;
@@ -111,6 +120,8 @@ export interface EmergentResult {
     reachableCells: number;
     /** Cells the maze sealed off, marked as solid rock rather than left as unreachable room. */
     cellsFilled: number;
+    /** Points the TORCH phase lit. */
+    torchesPlaced: number;
   };
 }
 
@@ -370,7 +381,7 @@ export function generateEmergentTower(cfg: EmergentConfig & { levels?: number })
   const levels = Math.max(1, cfg.levels ?? 1);
   const base = makeRng(seed);
   const stats: EmergentResult['stats'] = {
-    structuresPlaced: 0, structuresSkippedMultiLevel: 0, storeysWithoutStairwell: 0,
+    structuresPlaced: 0, structuresSkippedMultiLevel: 0, storeysWithoutStairwell: 0, torchesPlaced: 0,
     structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
     ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
@@ -488,7 +499,53 @@ function finishStorey(
     if (!commit(tx)) throw new Error('emergent: fill emptied a domain — impossible, rock was checked to be available');
   }
 
-  /* ---- 6. SETTLE the WHOLE cell. Anything still wide gets decided by the collapse pick otherwise,
+  /* ---- 6. TORCHES. Light, placed as a phase rather than sprinkled by the renderer.
+     ---------------------------------------------------------------------------------------------
+     The renderer used to scatter these with a per-cell hash, which is why a 2u floor came up with
+     four times as many as the 4u grid it was tuned for: the density was written in CELLS, and cells
+     got smaller. Placing them here fixes that, and buys two things the renderer could not do.
+
+     IT PICKS PLACES, NOT CELLS. A torch has to hang on something and light somewhere a body can
+     stand, and `torchFacings` already answers that from the walls. Only points that pass are
+     considered, so a torch never ends up inside a wall or facing solid rock.
+
+     COLUMNS ALWAYS GET ONE, and get one on EVERY open side — up to four. A free-standing pillar is a
+     landmark, and lighting all of its faces is what makes it read as one.
+
+     SPACING IS ENFORCED, NOT HOPED FOR. A hash alone clumps: it will happily light four points in a
+     row and leave the next corridor black. So a candidate is rejected if another torch is already
+     within TORCH_SPACING, which turns "one in eleven cells" into "about one every eleven cells".
+
+     AN AUTHOR ALWAYS WINS. A structure that pinned `torch` — either way — has already decided, and
+     is skipped: this only fills in points that ABSTAIN. ---- */
+  {
+    const tRng: Rng = subStream(base, STREAM.torches);
+    const cells = resolveGrid(grid);
+    const placed: { x: number; y: number }[] = [];
+    const farEnough = (x: number, y: number): boolean =>
+      placed.every((q) => Math.max(Math.abs(q.x - x), Math.abs(q.y - y)) >= TORCH_SPACING);
+
+    const tx = begin(grid);
+    // fixed index order, so which points get torches is a property of the seed and not of the loop
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const f = grid.cells[y * w + x]!;
+        if (domainSize(f.torch) < 2) continue;              // the author already decided
+        if (!torchFacings(cells, w, h, x, y).length) continue;
+
+        const onColumn = cells[y * w + x]?.corner !== 'none';
+        if (!onColumn && (nextInt(tRng, TORCH_EVERY) !== 0 || !farEnough(x, y))) continue;
+        if (onColumn && !farEnough(x, y)) continue;
+
+        stamp(tx, { x, y, w: 1, h: 1 }, template({ torch: TORCH_YES }));
+        placed.push({ x, y });
+      }
+    }
+    if (commit(tx)) stats.torchesPlaced = placed.length;
+    else rollback(tx);
+  }
+
+  /* ---- 7. SETTLE the WHOLE cell. Anything still wide gets decided by the collapse pick otherwise,
      which shows up as speckled floors and walls nobody asked for. Defaults: walls open, ground stone,
      junction solid, no opening. Opening can only ADD reachability, so this needs no gate.
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFault, stairFaultText, stairFlight, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
@@ -14,12 +14,12 @@ const grid = (mut: (c: Cell, x: number, y: number) => void = () => {}): Cell[] =
  *  renderer and the collision compiler read. */
 const urls = (cs: Cell[], x: number, y: number): string[] =>
   (gridPlacements(cs, W, H).find((e) => e.x === x && e.y === y)?.placements ?? [])
-    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''))
+    .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''))
     .filter((u) => u !== 'wall_endcap');   // caps are dressing on a loose end; see their own test
 /** Every piece on the whole grid — for asserting about walls, which no longer belong to one cell. */
 const allUrls = (cs: Cell[], w = W, h = H): string[] =>
   gridPlacements(cs, w, h).flatMap((e) => e.placements)
-    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+    .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''));
 
 describe('cell-place — one piece per thing the cell owns', () => {
   it('an open cell is just its floor', () => {
@@ -131,7 +131,7 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
 
   it('draws ONE arch and suppresses BOTH wall halves — including the neighbour\'s', () => {
     const cs = withOpening('door');
-    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_open_scaffold']); // the arch, no wall_half
+    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
     expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half']);   // beyond the span, unaffected
   });
@@ -200,7 +200,7 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
     const EDGES: Record<string, number> = { wall: 2, wall_corner: 2, wall_half: 1, barrier: 2, barrier_corner: 2, barrier_half: 1 };
     const walls = (fx?: { w: number; h: number }): number =>
       gridPlacements(cs, sw, sh, fx).flatMap((e) => e.placements)
-        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace('.gltf.glb', '')] ?? 0), 0);
+        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, '')] ?? 0), 0);
 
     // every point has both walls set, so without a floor extent every one is drawn
     expect(walls()).toBe(sw * sh * 2);
@@ -220,7 +220,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
   };
   const drew = (cs: Cell[], x: number, y: number): string[] =>
     (gridPlacements(cs, SW, SH).find((e) => e.x === x && e.y === y)?.placements ?? [])
-      .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+      .map((p) => p.url.split('/').pop()!.replace(/.(gltf.)?glb$/, ''));
   /** Only the GROUND a cell lays — its own walls are a separate question from whose flight it is in. */
   const ground = (cs: Cell[], x: number, y: number): string[] =>
     drew(cs, x, y).filter((u) => u.includes('floor') || u.includes('stairs'));
@@ -428,5 +428,52 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
       if ((y === 1 || y === 2) && x === 3) c.wallW = 'wall';   // the EAST end is closed
     });
     expect(stairFlight(eastward, SW, SH, 1, 1)).toMatchObject({ up: 'E', width: 2 });
+  });
+});
+
+describe('cell-place — a torch is hung by SENSING, never by storage', () => {
+  const TW = 6, TH = 6;
+  const mk = (mut: (c: Cell, x: number, y: number) => void): Cell[] => {
+    const out: Cell[] = [];
+    for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) { const c = openCell(); mut(c, x, y); out.push(c); }
+    return out;
+  };
+
+  it('a FREE-STANDING COLUMN carries one on every side — four of them', () => {
+    const cs = mk((c, x, y) => { if (x === 2 && y === 2) { c.corner = 'column'; c.torch = 'yes'; } });
+    expect(torchFacings(cs, TW, TH, 2, 2).sort()).toEqual(['E', 'N', 'S', 'W']);
+    const drawn = cellPlacements(cs, TW, TH, 2, 2).filter((p) => p.url.includes('torch'));
+    expect(drawn).toHaveLength(4);
+    expect(new Set(drawn.map((p) => p.turn)).size).toBe(4); // each one faces a different way
+  });
+
+  it('a column against a wall only lights the sides it can be seen from', () => {
+    const cs = mk((c, x, y) => {
+      if (x === 2 && y === 2) { c.corner = 'column'; c.torch = 'yes'; }
+      if (y === 2 && x === 2) c.wallN = 'wall';   // the arm running EAST
+      if (y === 2 && x === 1) c.wallN = 'wall';   // the arm running WEST
+    });
+    expect(torchFacings(cs, TW, TH, 2, 2).sort()).toEqual(['N', 'S']);
+  });
+
+  it('a point in a WALL takes exactly one — two faces of the same wall reads as a mistake', () => {
+    const cs = mk((c, x, y) => {
+      if (y === 2 && (x === 1 || x === 2)) c.wallN = 'wall';
+      if (x === 2 && y === 2) c.torch = 'yes';
+    });
+    expect(torchFacings(cs, TW, TH, 2, 2)).toHaveLength(1);
+  });
+
+  it('nothing to hang it on, or nowhere worth lighting, and there is no torch', () => {
+    const bare = mk((c, x, y) => { if (x === 2 && y === 2) c.torch = 'yes'; });
+    expect(torchFacings(bare, TW, TH, 2, 2)).toEqual([]);          // open floor: nothing to mount on
+
+    const walledIn = mk((c, x, y) => {
+      if (x === 2 && y === 2) { c.corner = 'column'; c.torch = 'yes'; }
+      for (const [cx, cy] of [[1, 1], [2, 1], [1, 2], [2, 2]] as const) {
+        if (x === cx && y === cy) c.floor = 'rock';                 // solid fill all round it
+      }
+    });
+    expect(torchFacings(walledIn, TW, TH, 2, 2)).toEqual([]);
   });
 });

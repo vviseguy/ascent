@@ -164,6 +164,15 @@ export function buildTower(opts: {
    * they meet at is `StratumCellGrid.wallPlacements`.
    */
   substrate?: '2u' | '4u';
+  /**
+   * The eight BREAKABLE crates near the entry. OFF by default.
+   *
+   * They are SIM bodies, not decoration, which is why turning the renderer's dressing off never
+   * removed them and they kept appearing in a supposedly bare tower. They exist so the Breaker has
+   * something to smash, and they belong to a scene that has decided what it is testing — not to every
+   * tower that gets built.
+   */
+  props?: boolean;
 } = {}): SceneHandle {
   const crewSize = Math.max(1, opts.crewSize ?? 3);
   const numStrata = Math.max(2, opts.numStrata ?? 5);
@@ -227,8 +236,8 @@ export function buildTower(opts: {
     crewId: 0, role: Role.Anchor,
   }));
 
-  // BREAKABLE props (crates/pots/barrels): ~8 destructibles scattered across
-  // stratum 0's floor near the entry, for the Breaker to smash into item drops.
+  // BREAKABLE props (crates/pots/barrels): ~8 destructibles near the entry, for the Breaker to
+  // smash into item drops. OFF unless `props` asks for them — see the option.
   // A 3×3-ish grid (minus the center cell, kept clear for the spawn cluster), each
   // just above the slab so it settles onto the floor. Heavy mass = solid obstacle;
   // low integrity (BREAKABLE_INTEGRITY) so a shove/rush/throw clears it. Positions
@@ -236,7 +245,7 @@ export function buildTower(opts: {
   const propHalf = fromFloatConst(0.4);
   const dropY = add(spawnY, fromFloatConst(0.5)); // base ~rests on the slab
   let placed = 0;
-  for (let gx = -1; gx <= 1 && placed < 8; gx++) {
+  for (let gx = -1; gx <= 1 && placed < 8 && (opts.props ?? false); gx++) {
     for (let gz = -1; gz <= 1 && placed < 8; gz++) {
       if (gx === 0 && gz === 0) continue; // leave the center clear (crew spawns there)
       spawnBody(w, {

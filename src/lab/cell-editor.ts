@@ -450,16 +450,25 @@ function render(): void {
           }));
         });
       }
+      /* A GENEROUS HIT TARGET, drawn first so it sits under the dot. The corner is the smallest thing
+         on the board and carries three of the five brushes (corner, opening, torch), so hitting it
+         exactly was the fiddliest part of authoring. The target is much larger than the mark — you
+         aim at the junction, not at the disc. */
+      const hit = svgEl('circle', {
+        cx: X(px), cy: Y(py), r: 16, fill: 'transparent', cursor: 'pointer',
+      });
+      paintable(hit, (clear) => {
+        if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
+        else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
+        else if (brush.mode === 'torch') applyAt(px, py, 'torch', clear);
+      });
+      svg.append(hit);
+
       const dot = svgEl('circle', {
         cx: X(px), cy: Y(py), r: domainSize(f.corner) === 1 ? 8 : 6,
         fill: f.corner === 0 ? CONFLICT : cornerInk(f.corner),
         opacity: f.corner === 0 ? 1 : cornerStrength(f.corner),
-        stroke: '#12161c', 'stroke-width': 2, cursor: 'pointer',
-      });
-      paintable(dot, (clear) => {
-        if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
-        else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
-        else if (brush.mode === 'torch') applyAt(px, py, 'torch', clear);
+        stroke: '#12161c', 'stroke-width': 2, 'pointer-events': 'none',
       });
       svg.append(dot);
 

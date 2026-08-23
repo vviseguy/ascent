@@ -25,6 +25,7 @@
 //   7. KAYKIT STAIRS — the stairs model placed on stair cells, scaled to rise one floor.
 // ============================================================================
 
+import { openDoorLeaves } from '../lab/cell-preview.ts';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat, fromRaw } from '../sim/fixed/fixed.ts';
@@ -205,6 +206,7 @@ export class Dungeon {
     const loader = new GLTFLoader();
     const loaded = await Promise.all(Object.entries(TILES).map(async ([k, file]) => {
       const g = await loader.loadAsync(DIR + file);
+      openDoorLeaves(g.scene);
       await this.themeTemplate(k, file, g.scene);
       return [k, g.scene] as const;
     }));
@@ -219,6 +221,7 @@ export class Dungeon {
     const unitUrls = [...new Set(Object.values(PIECE))];
     const unitLoaded = await Promise.all(unitUrls.map(async (url) => {
       const g = await loader.loadAsync(url);
+      openDoorLeaves(g.scene);
       if (!this.rawColoring && !this.classicShell) applyRecolor(g.scene, url, 'position');
       g.scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
       return [url, g.scene] as const;

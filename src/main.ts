@@ -78,8 +78,12 @@ async function boot(): Promise<void> {
   // The tower is built from the CELL model by default — authored structures, real staircases the
   // author drew. `?substrate=4u` selects the older tile lattice; see buildTower's note.
   const substrate = params.get('substrate') === '4u' ? '4u' as const : undefined;
+  /* `?props=on` restores BOTH the scattered furniture (a render-layer scatter) and the breakable
+     crates (real sim bodies). They were two separate switches, which is how a "bare" tower kept
+     coming up with eight crates around the spawn. */
+  const props = params.get('props') === 'on';
   const scene = buildTower({
-    crewSize: 3, numStrata: 5, seed,
+    crewSize: 3, numStrata: 5, seed, props,
     ...(gridSize ? { gridSize } : {}),
     ...(substrate ? { substrate } : {}),
   });
@@ -108,7 +112,7 @@ async function boot(): Promise<void> {
        one it strews four times as much of it across a floor with four times the cells. Until placement
        is something a structure ASKS for rather than something sprinkled over the map, off is the
        honest default. */
-    const dressing = params.get('props') === 'on';
+    const dressing = props;
     const torchEvery = substrate === '4u' ? 11 : 40;
     if (scene.cellGrid && params.get('dungeon') !== 'off') {
       await renderer.buildDungeon(scene.cellGrid, scene.stairs, { dressing, torchEvery });

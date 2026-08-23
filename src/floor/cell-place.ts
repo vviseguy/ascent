@@ -28,6 +28,9 @@ import {
 
 const PACK = 'models/kaykit_dungeon_remastered';
 const u = (f: string): string => `${PACK}/${f}.gltf.glb`;
+/** A few files in the pack ship as plain `.glb` rather than `.gltf.glb`. Not a mistake to normalise —
+ *  the filenames are what they are, and guessing the suffix is how a 404 becomes a red placeholder. */
+const u1 = (f: string): string => `${PACK}/${f}.glb`;
 
 /** The KayKit piece registry — the only place mesh urls are named. */
 export const PIECE = {
@@ -47,11 +50,13 @@ export const PIECE = {
      BLIND arch: it looks like a deep opening from either side and is solid. Using it for a type the
      graph calls walk-through is render disagreeing with sim, which is the one thing this pipeline is
      built not to do.
-     `wall_open_scaffold` is the only 4u piece that is genuinely passable as loaded — a post-and-lintel
-     frame with 3.40 clear. `wall_doorway` has a real 2.00 x 2.70 arched aperture too, but its door
-     LEAF ships as a separate node (620 of 1068 triangles) and has to be hidden at load; until that
-     exists, the open frame is the honest mesh for an opening you can walk through. */
-  arch: u('wall_open_scaffold'),
+     `wall_doorway` is the one that LOOKS like an arch: a 2.00 x 2.70 stone aperture. It measures as
+     100% solid as shipped, because its door LEAF is a separate node filling the hole — so the view
+     layer strips it (`openDoorLeaves`) and the opening is real. `wall_open_scaffold` is also genuinely
+     passable and wider (3.40 clear), but it is a TIMBER frame and reads as scaffolding, which turned
+     every doorway on the floor into a building site. Kept as `archScaffold` for when that is wanted. */
+  arch: u1('wall_doorway'),      // its door LEAF is stripped at load — see `openDoorLeaves`
+  archScaffold: u('wall_open_scaffold'),
   archBlind: u('wall_arched'),   // the decorative one — solid, for a wall that only looks arched
   /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
   stairsNarrow: u('stairs_narrow'),
@@ -472,14 +477,17 @@ const TORCH_ORDER: readonly Dir[] = ['S', 'E', 'N', 'W'];
  *
  * A torch needs something to hang on and somewhere to shine. It mounts on whatever is standing at the
  * point — a pillar, or one of the walls meeting there — and faces a cardinal direction that is NOT a
- * wall and NOT solid rock, so it lights a space someone can actually stand in. With nothing to mount
- * on, or nowhere to face, there is no torch: `null`.
+ * wall and NOT solid rock, so it lights a space someone can actually stand in.
+ *
+ * A FREE-STANDING COLUMN CARRIES UP TO FOUR, one per open side, because every side of it is a face
+ * someone can walk past. A point in a wall carries ONE: both sides of the same wall would read as a
+ * mistake rather than as two torches. With nothing to mount on, or nowhere to face, there are none.
  */
-export function torchFacing(
+export function torchFacings(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
-): Dir | null {
+): Dir[] {
   const c = cellAt(cells, w, h, x, y);
-  if (!c) return null;
+  if (!c) return [];
 
   /** The wall running `d` from this point, if any. */
   const arm = (d: Dir): Seg => {
@@ -488,14 +496,15 @@ export function torchFacing(
     if (d === 'S') return cellAt(cells, w, h, x, y)?.wallW ?? 'none';
     return cellAt(cells, w, h, x, y - 1)?.wallW ?? 'none';
   };
-  const standing = c.corner !== 'none' || TORCH_ORDER.some((d) => blocks(arm(d)));
-  if (!standing) return null; // nothing here to hang it on
+  const onColumn = c.corner !== 'none';
+  if (!onColumn && !TORCH_ORDER.some((d) => blocks(arm(d)))) return []; // nothing to hang it on
 
   /** Ground you can stand on — `none` is a hole and `rock` is solid fill. */
   const open = (cx: number, cy: number): boolean => {
     const n = cellAt(cells, w, h, cx, cy);
     return !!n && n.floor !== 'none' && n.floor !== 'rock';
   };
+  const out: Dir[] = [];
   for (const d of TORCH_ORDER) {
     if (blocks(arm(d))) continue;                      // it would be inside the wall
     // the two cells either side of that direction; one of them being real ground is enough
@@ -503,10 +512,20 @@ export function torchFacing(
       : d === 'W' ? [[x - 1, y - 1], [x - 1, y]]
         : d === 'S' ? [[x - 1, y], [x, y]]
           : [[x - 1, y - 1], [x, y - 1]];
-    if (pair.some(([cx, cy]) => open(cx, cy))) return d;
+    if (!pair.some(([cx, cy]) => open(cx, cy))) continue;
+    out.push(d);
+    // A COLUMN is free-standing and can carry one on every open side — up to four. A wall point is
+    // a face, so it takes ONE: a bracket on each side of the same wall reads as a mistake, not as
+    // two torches.
+    if (!onColumn) break;
   }
-  return null;
+  return out;
 }
+
+/** The first facing, or null. Kept because most callers only ask whether there IS one. */
+export const torchFacing = (
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+): Dir | null => torchFacings(cells, w, h, x, y)[0] ?? null;
 
 /* --------------------------------- placement --------------------------------- */
 
@@ -585,8 +604,9 @@ export function cellPlacements(
 
   // TORCH — hung on whatever stands here, facing somewhere worth lighting. See `torchFacing`.
   if (c.torch === 'yes') {
-    const d = torchFacing(cells, w, h, x, y);
-    if (d) out.push(at(PIECE.torchMounted, TORCH_TURN[d], CX, CZ, ONE, TORCH_Y));
+    for (const d of torchFacings(cells, w, h, x, y)) {
+      out.push(at(PIECE.torchMounted, TORCH_TURN[d], CX, CZ, ONE, TORCH_Y));
+    }
   }
 
   return out;

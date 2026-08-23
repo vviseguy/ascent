@@ -18,6 +18,23 @@ const TURN_RAD = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 /** World size of one cell. The sim's cell is 2u and the meshes are authored to match. */
 export const CELL = 2;
 
+/**
+ * OPEN THE DOORWAY. `wall_doorway` ships with its door LEAF as a separate node — 620 of the file's
+ * 1068 triangles, a hinged panel filling the aperture — so a loader that keeps every node produces a
+ * SOLID wall from a mesh whose whole point is the hole in it. Measured: 0% open as shipped, 32.9% and
+ * a 2.00 x 2.30 floor-rooted opening with the leaf gone.
+ *
+ * We draw it only for wall types the graph calls walk-through, so the leaf is a lie about passability
+ * and has to go. Hiding it is the blunt version; the nicer one is to swing it open on its hinge, which
+ * needs the view layer to own a little state and is worth doing when doors become interactive.
+ */
+export function openDoorLeaves(root: THREE.Object3D): THREE.Object3D {
+  const doomed: THREE.Object3D[] = [];
+  root.traverse((o) => { if (/_door$/i.test(o.name)) doomed.push(o); });
+  for (const o of doomed) o.removeFromParent();
+  return root;
+}
+
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<THREE.Object3D>>();
 
@@ -34,7 +51,7 @@ export const loadFailures = (): { url: string; why: string }[] =>
 function template(url: string): Promise<THREE.Object3D> {
   let p = cache.get(url);
   if (!p) {
-    p = loader.loadAsync(url).then((g) => g.scene, (e: unknown) => {
+    p = loader.loadAsync(url).then((g) => openDoorLeaves(g.scene), (e: unknown) => {
       failures.set(url, e instanceof Error ? e.message : String(e));
       throw e instanceof Error ? e : new Error(String(e));
     });
