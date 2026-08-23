@@ -50,7 +50,13 @@ export interface TileUnit {
 /** A tile piece's mesh url → its approved-assets object id (idOf: `kk-<pack>-<slug>`). Tile pieces are
  *  all the remastered dungeon pack, so the pack segment is fixed. */
 export function objIdOf(url: string): string {
-  const file = (url.split('/').pop() ?? '').replace(/\.gltf\.glb$/i, '').replace(/\.glb$/i, '');
+  // A `#fragment` selects a VARIANT of the same file — `wall_doorway.glb#open` is that mesh with its
+  // door leaf hidden. It is a view instruction, not part of the asset's identity, and leaving it on
+  // produced a key nothing could ever match, so every open doorway silently lost its collision boxes.
+  // Both loaders already strip it (`cell-preview.ts`, `dungeon.ts`); this is the third place that must.
+  const file = (url.split('/').pop() ?? '')
+    .replace(/#.*$/, '')
+    .replace(/\.gltf\.glb$/i, '').replace(/\.glb$/i, '');
   return `kk-dungeon_remastered-${file}`;
 }
 
@@ -60,7 +66,11 @@ const F = fromFloatConst; // frozen-JSON float → Fixed at the seam (determinis
 // (0.5 for dungeon_remastered — `world-object.ts` wraps the mesh in an `inner` group at 0.5 and box-fit
 // voxelises root-local, INCLUDING that scale). The game renders the GLB at NATIVE (cs/NATIVE_CELL = 1),
 // so a footprint is HALF-size and must be doubled to match the rendered mesh. (= 1 / pack-scale 0.5.)
-const FOOTPRINT_SCALE = fromFloatConst(2);
+/** The lab box-fits at the pack's display scale (0.5); the game renders native. Approved footprints
+ *  are therefore HALF world size and every consumer must double them. Exported as a plain number so a
+ *  footprint expressed in WORLD units can undo it explicitly rather than hard-coding a 2. */
+export const FOOTPRINT_SCALE_NUM = 2;
+const FOOTPRINT_SCALE = fromFloatConst(FOOTPRINT_SCALE_NUM);
 
 /** Rotate a tile-local (x,z) by `turn` quarter-turns CCW about +Y — the same Three.js Y-rotation the
  *  renderer applies, so collider and mesh agree. (x,z) → 0:(x,z) 1:(z,−x) 2:(−x,−z) 3:(−z,x). */

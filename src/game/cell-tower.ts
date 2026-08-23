@@ -37,8 +37,8 @@ import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../si
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
 import { blocks, isStairFloor, type Cell } from '../floor/cell.ts';
 import { gridPlacements, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
-import { objIdOf, transformBox, type FixedBox } from './tile-units.ts';
-import { getApproved } from './approved-assets.ts';
+import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
+import { getApproved, type ApprovedBox } from './approved-assets.ts';
 import {
   FLOOR_HEIGHT, type CellTile, type CompiledTower, type StairInfo, type StratumCellGrid,
   type TowerParams, type WorldPlacement,
@@ -91,10 +91,57 @@ const isGroundPiece = (url: string): boolean => url.includes('floor_') || url.in
  * frozen collider boxes and its material recipe. The SINGLE producer for this substrate, exactly as
  * `tileWallPlacements` is for the 4u one.
  */
+/**
+ * A MEASURED FALLBACK FOOTPRINT, for a wall mesh nobody has box-fit yet.
+ *
+ * Collision comes only from `getApproved(...)?.footprint.boxes`, so a mesh with no approval renders
+ * with nothing to walk into. That is survivable for ground (the slab collides) and for dressing (a
+ * torch should not block), and it is a bug for anything wall-shaped: the piece is visibly there and
+ * you pass straight through it. Eleven wall types became drawable before any of them had a footprint.
+ *
+ * THE DEPTH IS 0.50, NOT THE BOUNDING BOX'S 1.00. Every straight wall in the kit measures 1.00 deep
+ * only because its plinth (below y 0.35) and cornice (above y 3.45) flare out; the body a player walks
+ * into is 0.50 (z +/- 0.25). Using the bbox would double every wall's thickness at body height.
+ *
+ * An approval always wins — this is the floor under the feature, not a replacement for box-fitting.
+ */
+const WALL_FALLBACK: Record<string, { w: number; d: number; h: number; gap?: number }> = {
+  // `gap` = a clear aperture through the middle, so the piece collides as two JAMBS rather than a slab.
+  // Measured: wall_doorway is 2.00 clear of its 4.00, wall_open_scaffold 3.40 clear.
+  wall_doorway: { w: 4, d: 0.5, h: 4, gap: 2.0 },
+  wall_doorway_scaffold: { w: 4, d: 0.5, h: 4, gap: 2.0 },
+  wall_open_scaffold: { w: 4, d: 0.5, h: 4, gap: 3.4 },
+  wall: { w: 4, d: 0.5, h: 4 },
+  wall_half: { w: 2, d: 0.5, h: 4 },
+  wall_half_endcap: { w: 2, d: 0.5, h: 4 },
+  wall_endcap: { w: 1.07, d: 0.5, h: 4 },
+  wall_cracked: { w: 4, d: 0.5, h: 4 },
+  wall_scaffold: { w: 4, d: 0.5, h: 4 },
+  wall_shelves: { w: 4, d: 0.5, h: 4 },
+  wall_pillar: { w: 4, d: 0.5, h: 4 },
+  wall_window_closed: { w: 4, d: 0.5, h: 4 },
+  wall_window_open: { w: 4, d: 0.5, h: 4 },        // a window is see-through, not walk-through
+  wall_archedwindow_open: { w: 4, d: 0.5, h: 4 },
+  wall_archedwindow_gated: { w: 4, d: 0.5, h: 4 },
+  wall_gated: { w: 4, d: 0.5, h: 4 },
+  wall_arched: { w: 4, d: 0.5, h: 4 },             // measured SOLID: a blind arch, 0.10 web and no hole
+  wall_broken: { w: 4, d: 0.5, h: 4 },             // breach pinches to 0.10 — nothing fits through
+  pillar: { w: 1.5, d: 1.5, h: 4 },
+  column: { w: 0.7, d: 0.7, h: 1.4 },
+  barrier: { w: 4, d: 0.5, h: 1.1 },
+  barrier_half: { w: 2, d: 0.5, h: 1.1 },
+  barrier_column: { w: 4, d: 0.7, h: 1.4 },
+};
+
+/** The bare mesh name behind a url, fragment and extension stripped. */
+const meshNameOf = (url: string): string =>
+  (url.split('/').pop() ?? '').replace(/#.*$/, '').replace(/\.gltf\.glb$/i, '').replace(/\.glb$/i, '');
+
 export function cellWorldPlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
 ): WorldPlacement[] {
   const out: WorldPlacement[] = [];
+  let fallbacks = 0;   // pieces collided from the measured table because nothing has box-fit them
 
   /* GROUND IS DRAWN IN 4u BLOCKS WHERE IT CAN BE.
      A floor mesh is natively 4u and the 2u path draws it at half scale, once per cell — four draws
@@ -131,9 +178,29 @@ export function cellWorldPlacements(
       // a cell-local offset is in half-cells; the box transform wants tile-local world units
       const local: CellPlacement = { ...p, x: mul(p.x, HALF_CELL), z: mul(p.z, HALF_CELL) };
       const a = getApproved(objIdOf(p.url));
+      const approved = a?.footprint.boxes ?? [];
+      const fb = approved.length === 0 ? WALL_FALLBACK[meshNameOf(p.url)] : undefined;
+      if (fb) fallbacks++;
+      /* The table is in WORLD units, but `transformBox` doubles every footprint (the lab box-fits at
+         the pack's 0.5 display scale). Undo that here rather than pre-halving the table, so the
+         numbers above stay the ones you can measure off the mesh. */
+      const k = FOOTPRINT_SCALE_NUM;
+      const jamb = fb?.gap ? (fb.w - fb.gap) / 2 : 0;
+      const raw: ApprovedBox[] = approved.length > 0 ? approved
+        : !fb ? []
+          : jamb > 0
+            // two jambs, so you can walk through the middle of a doorway but not through its sides
+            ? [-1, 1].map((sgn) => ({
+              cx: (sgn * (fb.gap! + jamb) / 2) / k, cy: fb.h / 2 / k, cz: 0,
+              hx: (jamb / 2) / k, hy: fb.h / 2 / k, hz: fb.d / 2 / k,
+            }))
+            : [{
+              cx: 0, cy: fb.h / 2 / k, cz: 0,
+              hx: fb.w / 2 / k, hy: fb.h / 2 / k, hz: fb.d / 2 / k,
+            }];
       const boxes: FixedBox[] = isGroundPiece(p.url)
         ? []
-        : (a?.footprint.boxes ?? [])
+        : raw
           .map((b) => transformBox(b, { url: local.url, x: local.x, z: local.z, turn: local.turn, scale: local.scale }))
           .map((b) => ({ ...b, cx: add(ccx, b.cx), cz: add(ccz, b.cz) }));
       out.push({
@@ -142,8 +209,17 @@ export function cellWorldPlacements(
       });
     }
   }
+  if (fallbacks > 0) {
+    // Not a warning — the fallback is doing its job. But an unapproved wall is an APPROXIMATE wall,
+    // and that should be a number someone can see rather than something the build quietly absorbs.
+    lastFallbackCount = fallbacks;
+  }
   return out;
 }
+
+/** How many pieces the LAST `cellWorldPlacements` call collided from the fallback table. */
+export let lastFallbackCount = 0;
+
 
 /**
  * The four sides of a cell that face something you cannot walk through — the renderer's fog BFS and
@@ -199,6 +275,62 @@ function emitFlightSolids(solids: AABB[], f: StairFlight, w: number, h: number, 
     const hi = add(lo, step);
     const top = add(baseY, mul(rise, fromInt(k + 1)));
     solids.push(vertical ? makeBox(x0, baseY, lo, x1, top, hi) : makeBox(lo, baseY, z0, hi, top, z1));
+  }
+}
+
+/**
+ * THE OUTER WALL. Every storey is ringed, and without it the tower has no edge: you walk off the last
+ * cell into a drop to the kill plane, which reads as the map having failed rather than as a boundary.
+ * The 4u compiler has had this since the beginning ("a FLOOR_HEIGHT-tall wall ring hugs each stratum's
+ * exterior"); the 2u one never grew one.
+ *
+ * COLLISION IS FOUR LONG BOXES, not one per cell. A ring of 2u segments would be ~120 boxes a storey
+ * for the same shape a rectangle describes exactly, and the broadphase pays for every one.
+ *
+ * The MESH ring is per-4u-piece because that is the size the art comes in — those are drawn, not
+ * collided, so they cost draw calls rather than physics.
+ */
+function emitPerimeter(
+  solids: AABB[], out: WorldPlacement[], w: number, h: number, baseY: Fixed,
+): void {
+  const top = add(baseY, FLOOR_HEIGHT);
+  // the floor's outer edge: cell centres run from cellCentre2u(0) to (w-1), each cell 2u across
+  const c0 = cellCentre2u(w, h, 0);
+  const cN = cellCentre2u(w, h, w * h - 1);
+  const half = fromInt(1);                       // half a 2u cell
+  const x0 = sub(c0.x, half), x1 = add(cN.x, half);
+  const z0 = sub(c0.z, half), z1 = add(cN.z, half);
+  const t = fromFloatConst(0.25);                // the wall body is 0.50 thick; see WALL_FALLBACK
+
+  // four boxes, each spanning the FULL side so the corners are covered twice rather than left open
+  solids.push(makeBox(sub(x0, t), baseY, sub(z0, t), add(x1, t), top, add(z0, t)));   // north
+  solids.push(makeBox(sub(x0, t), baseY, sub(z1, t), add(x1, t), top, add(z1, t)));   // south
+  solids.push(makeBox(sub(x0, t), baseY, sub(z0, t), add(x0, t), top, add(z1, t)));   // west
+  solids.push(makeBox(sub(x1, t), baseY, sub(z0, t), add(x1, t), top, add(z1, t)));   // east
+
+  /* The visible ring. `wall` is 4u and native along X, so a side takes ceil(span / 4) of them, each
+     centred on its own 4u slice — the last one may overhang the corner, which is what makes the
+     corners look closed instead of showing a seam. */
+  const piece = PIECE.wall;
+  const spanX = 2 * w, spanZ = 2 * h;
+  const nX = Math.ceil(spanX / 4), nZ = Math.ceil(spanZ / 4);
+  const place = (x: Fixed, z: Fixed, turn: number): void => {
+    // collision is the four boxes above, so the mesh carries none — otherwise every ring piece would
+    // add a redundant box the broadphase has to test
+    out.push({
+      x: toRaw(x), z: toRaw(z),
+      unit: { url: piece, y: Z, turn, scale: ONE, boxes: [], materials: getApproved(objIdOf(piece))?.materials },
+    });
+  };
+  for (let i = 0; i < nX; i++) {
+    const cx = add(x0, fromFloatConst(Math.min(i * 4 + 2, spanX - 2)));
+    place(cx, z0, 0);          // native +X run, on the north edge
+    place(cx, z1, 0);
+  }
+  for (let i = 0; i < nZ; i++) {
+    const cz = add(z0, fromFloatConst(Math.min(i * 4 + 2, spanZ - 2)));
+    place(x0, cz, 1);          // turned a quarter to run along Z
+    place(x1, cz, 1);
   }
 }
 
@@ -271,6 +403,7 @@ export function compileCellTower(
     }
 
     const wallPlacements = cellWorldPlacements(f.cells, f.width, f.height);
+    emitPerimeter(solids, wallPlacements, f.width, f.height, baseY);
     const grid: StratumCellGrid = {
       stratum: idx, width: f.width, height: f.height,
       cellSize: toRaw(CELL_SIZE_2U), surfaceY: toRaw(baseY),

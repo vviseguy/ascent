@@ -611,7 +611,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -701,7 +701,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -809,7 +809,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -899,7 +899,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1007,7 +1007,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1097,7 +1097,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1205,7 +1205,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1295,7 +1295,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1403,7 +1403,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1493,7 +1493,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1601,7 +1601,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1691,7 +1691,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1817,7 +1817,7 @@
           "wallW": 7,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1871,7 +1871,7 @@
           "wallW": 7,
           "corner": 1,
           "wallType": 4,
-          "open": 2,
+          "open": 3,
           "torch": 3
         },
         {
@@ -1992,7 +1992,7 @@
           "torch": 3
         }
       ],
-      "savedAt": "2026-08-23T04:33:20.015Z"
+      "savedAt": "2026-08-23T09:15:36.851Z"
     },
     "treasure room": {
       "w": 12,
