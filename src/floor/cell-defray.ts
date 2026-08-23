@@ -24,6 +24,9 @@
 
 import { blocks, isStairFloor, type Cell } from './cell.ts';
 import { resolveGrid, type CellGrid } from './cell-grid.ts';
+import { segs } from './cell-field.ts';
+import { getStructure } from './cell-structures.ts';
+import { orientStructure, type Orientation } from './cell-orient.ts';
 
 export interface DefrayStats {
   /** Segments removed, per pass. */
@@ -79,6 +82,66 @@ const holdsStair = (
   return (!!here && isStairFloor(here.floor)) || (!!other && isStairFloor(other.floor));
 };
 
+/** A segment somebody MEANT — never fraying, however loose it looks. */
+export type KeepWall = (x: number, y: number, side: 'N' | 'W') => boolean;
+
+/** Where a structure was put, and how it was turned. Structurally typed so this file does not have to
+ *  import the generator — only the shape it produces. */
+export interface PlacedLike {
+  name: string;
+  orientation: Orientation;
+  region: { x: number; y: number };
+}
+
+const NONE_SEG = segs('none');
+
+/**
+ * PROTECT WHAT AN AUTHOR DREW.
+ *
+ * This is the third exemption in this file and they are all the same shape: something that looks loose
+ * but is not fraying. The map border was the first, a staircase's head wall the second, and an
+ * authored wall is the third — and the most important, because the note at the top of this file says
+ * the fraying "is worst exactly where it matters most: around the structures", and the cure was
+ * removing the structures' own walls along with the nubs. Measured before this: of 974 walls the
+ * structures asserted, 181 were gone by the time the floor rendered, and `odd wall section` — a piece
+ * that is nothing BUT a wall — lost 42% of itself.
+ *
+ * A segment counts as authored when the structure's stored domain EXCLUDES `none`: the author said
+ * something is certainly there. A perimeter wall the generator deliberately widened to {none, wall} so
+ * SEAL could cut a door through it is NOT protected, which is right — that one is meant to be openable,
+ * and if SEAL closed it the closure asserts it again anyway.
+ *
+ * LEVELS ARE UNIONED. A placement does not record which storey of a multi-level structure it is, so a
+ * segment is protected if ANY level asserts it. That over-protects slightly, and deliberately in this
+ * direction: the failure it prevents is losing authored geometry, and the failure it risks is keeping
+ * one nub that a different storey would have shed.
+ */
+export function structureWalls(placed: readonly PlacedLike[]): KeepWall {
+  const keep = new Set<number>();
+  for (const p of placed) {
+    const base = getStructure(p.name);
+    if (!base) continue;
+    const st = orientStructure(base, p.orientation);
+    const sw = st.w + 1, sh = st.h + 1, size = sw * sh;
+    const levels = Math.max(1, Math.floor(st.cells.length / size));
+    for (let lv = 0; lv < levels; lv++) {
+      for (let ly = 0; ly < sh; ly++) {
+        for (let lx = 0; lx < sw; lx++) {
+          const f = st.cells[lv * size + ly * sw + lx];
+          if (!f) continue;
+          const gx = p.region.x + lx, gy = p.region.y + ly;
+          // the padding column owns no east-running edge; the padding row no south-running one
+          if (lx < st.w && (f.wallN & NONE_SEG) === 0) keep.add((gy * 4096 + gx) * 2);
+          if (ly < st.h && (f.wallW & NONE_SEG) === 0) keep.add((gy * 4096 + gx) * 2 + 1);
+        }
+      }
+    }
+  }
+  return (x, y, side) => keep.has((y * 4096 + x) * 2 + (side === 'N' ? 0 : 1));
+}
+
+const KEEP_NOTHING: KeepWall = () => false;
+
 /**
  * Remove wall segments that end in mid-air. Mutates `cells` and reports what it took.
  *
@@ -86,7 +149,7 @@ const holdsStair = (
  * still a nub, and one loose at both was floating on its own.
  */
 export function defray(
-  cells: (Cell | null)[], w: number, h: number, passes = 2,
+  cells: (Cell | null)[], w: number, h: number, passes = 2, keep: KeepWall = KEEP_NOTHING,
 ): DefrayStats {
   const removed: number[] = [];
   for (let pass = 0; pass < passes; pass++) {
@@ -95,11 +158,11 @@ export function defray(
     const doomed: { x: number; y: number; side: 'N' | 'W' }[] = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (eastOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'N')
+        if (eastOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'N') && !keep(x, y, 'N')
           && (armsAt(cells, w, h, x, y) < 2 || armsAt(cells, w, h, x + 1, y) < 2)) {
           doomed.push({ x, y, side: 'N' });
         }
-        if (southOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'W')
+        if (southOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'W') && !keep(x, y, 'W')
           && (armsAt(cells, w, h, x, y) < 2 || armsAt(cells, w, h, x, y + 1) < 2)) {
           doomed.push({ x, y, side: 'W' });
         }
@@ -117,9 +180,9 @@ export function defray(
   let remaining = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (eastOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'N')
+      if (eastOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'N') && !keep(x, y, 'N')
         && (armsAt(cells, w, h, x, y) < 2 || armsAt(cells, w, h, x + 1, y) < 2)) remaining++;
-      if (southOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'W')
+      if (southOf(cells, w, h, x, y) && !holdsStair(cells, w, h, x, y, 'W') && !keep(x, y, 'W')
         && (armsAt(cells, w, h, x, y) < 2 || armsAt(cells, w, h, x, y + 1) < 2)) remaining++;
     }
   }
@@ -130,11 +193,18 @@ export function defray(
  * Collapse a generated floor and take its loose ends off — the one call every consumer should use, so
  * the renderer, the collision compiler and the previews are all looking at the same floor.
  *
+ * TAKES THE FLOOR, NOT THE GRID, on purpose. De-fraying needs to know which walls an author drew, and
+ * a bare grid cannot say — every domain is a singleton by the time it is settled. Passing the floor
+ * makes that an enforced contract rather than a convention a call site can forget: there is no way to
+ * ask for a resolved floor without also handing over what was placed on it.
+ *
  * ONE pass by default. Each further pass takes more nubs but opens the floor out, and a floor of wide
  * empty rooms is its own problem; see the note at the top of this file.
  */
-export function resolveFloor(grid: CellGrid, passes = 1): (Cell | null)[] {
-  const cells = resolveGrid(grid);
-  defray(cells, grid.w, grid.h, passes);
+export function resolveFloor(
+  floor: { grid: CellGrid; placed: readonly PlacedLike[] }, passes = 1,
+): (Cell | null)[] {
+  const cells = resolveGrid(floor.grid);
+  defray(cells, floor.grid.w, floor.grid.h, passes, structureWalls(floor.placed));
   return cells;
 }
