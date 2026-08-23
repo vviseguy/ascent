@@ -41,6 +41,7 @@ import { applyRecolor, ensureTilingTextures, cloneMaterial } from '../lab/recolo
 // `WorldPlacement.unit`. PIECE is the sim-side registry naming those urls (pure string data) — the
 // renderer preloads them as templates keyed by url and clones them through the same recolor path.
 import { PIECE } from '../floor/tile-place.ts';
+import { PIECE as CELL_PIECE } from '../floor/cell-place.ts';
 
 const DIR = 'models/kaykit_dungeon/';
 /** The KayKit tiles we use (CC0, downloaded to public/models/kaykit_dungeon/). */
@@ -228,7 +229,12 @@ export class Dungeon {
     // same pure-function coloring the shell uses; applying the FROZEN `unit.materials` recipe (which
     // box-fit/approve already saved) is the follow-up (docs/16 §10: "the renderer applies, not
     // re-derives"). A url that fails recolor keeps its original atlas (still visible), never untextured.
-    const unitUrls = [...new Set(Object.values(PIECE))];
+    /* BOTH CATALOGUES. This preloaded only the 4u `tile-place` pieces, and `placeUnit` drops a
+       placement whose url has no template with a bare `return` — so every mesh that exists only in the
+       2u catalogue was silently absent from the world. Measured on a 40x40x3 tower: 415 of 2,761
+       placements, which was every staircase, every torch, every scaffold and every doorway.
+       The IR is produced by two compilers and the renderer serves both, so it has to know both. */
+    const unitUrls = [...new Set([...Object.values(PIECE), ...Object.values(CELL_PIECE)])];
     const unitLoaded = await Promise.all(unitUrls.map(async (url) => {
       const g = await loader.loadAsync(stripFragment(url));
       if (wantsOpen(url)) openDoorLeaves(g.scene);
@@ -317,6 +323,12 @@ export class Dungeon {
    * is exactly the condition under which a silent drop stays invisible until it isn't.
    */
   private hostless = 0;
+  /**
+   * Urls the IR asked for that no template was loaded for. A missing template used to be a bare
+   * `return` and that is how fifteen percent of the world went missing without a word — the compiler
+   * emitted it, the renderer had never heard of it, and nothing anywhere said so.
+   */
+  private readonly noTemplate = new Set<string>();
   /** One torch every N walled cells. Tuned for 4u; a 2u grid has four times the cells for the same
    *  floor, so the same number means four times the torches. */
   private torchEvery = 11;
@@ -324,6 +336,7 @@ export class Dungeon {
 
   build(grids: StratumCellGrid[], stairs?: StairInfo[]): void {
     this.hostless = 0;
+    this.noTemplate.clear();
     this.group.clear();
     this.strata = [];
     this.cells = [];
@@ -442,6 +455,10 @@ export class Dungeon {
     /* A piece dropped for want of a host cell is invisible geometry, and this is the only path that
        makes geometry. Say so rather than returning quietly — it reads 0 today, which is precisely
        when a silent drop can start firing without anyone finding out. */
+    if (this.noTemplate.size > 0) {
+      console.warn(`[dungeon] no template for ${this.noTemplate.size} url(s) — those pieces are NOT in `
+        + `the world: ${[...this.noTemplate].map((u) => u.split('/').pop()).join(', ')}`);
+    }
     if (this.hostless > 0) {
       console.warn(`[dungeon] ${this.hostless} piece(s) dropped: no walkable cell to host them`);
     }
@@ -474,7 +491,7 @@ export class Dungeon {
   private placeUnit(grid: StratumCellGrid, wp: WorldPlacement, sy: number): void {
     const u = wp.unit!;
     const t = this.unitTpl.get(u.url);
-    if (!t) return;
+    if (!t) { this.noTemplate.add(u.url); return; }   // never silently: see `noTemplate`
     const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
     const host = this.placementHost(grid, x, z);
     if (!host) { this.hostless++; return; } // a VOID seam with no walkable cell to host/reveal it
