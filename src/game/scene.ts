@@ -192,7 +192,7 @@ export function buildTower(opts: {
        every flight climb into a ceiling. */
     const stack = generateEmergentTower({ width: cw, height: ch, seed, levels: numStrata });
     const cellFloors: CellFloor[] = stack.floors.map((f) => ({
-      cells: resolveFloor(f.grid), width: cw, height: ch, entry: f.entry, exit: f.exit,
+      cells: resolveFloor(f), width: cw, height: ch, entry: f.entry, exit: f.exit,
     }));
     const t = compileCellTower(cellFloors, 0, { groundY, killPlaneY });
     // said out loud rather than silently producing a tower you cannot climb
