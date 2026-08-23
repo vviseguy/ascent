@@ -114,11 +114,14 @@ export function orientStructure(raw: CellStructure, o: Orientation): CellStructu
         if (home.side === 'N') dest.wallN = mask; else dest.wallW = mask;
       }
 
-      // CORNER + WALLTYPE — properties of the POINT, so they travel with it
+      // CORNER, WALLTYPE, OPEN, TORCH — properties of the POINT, so they travel with it.
+      // Miss one and `orient(identity)` stops being the identity, which is how this is caught.
       if (from.x >= 0 && from.x <= nw && from.y >= 0 && from.y <= nh) {
         const dest = cells[lv * dstLevel + from.y * dstStride + from.x]!;
         dest.corner = f.corner;
         dest.wallType = f.wallType;
+        dest.open = f.open;
+        dest.torch = f.torch;
       }
     }
   }

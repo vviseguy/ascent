@@ -67,7 +67,7 @@ describe('structure-migrate — the centre becomes the corner', () => {
       edge: { N: segs('none'), W: segs('wall') },
       inner: { N: segs('none'), E: segs('wall'), S: segs('none'), W: segs('wall') },
       centre: segs('none'),
-      wallType: wallTypes('door'),
+      wallType: wallTypes('doorway'),
     };
     expect(certainOpening(t)).toBe(true);
   });
@@ -78,7 +78,7 @@ describe('structure-migrate — the centre becomes the corner', () => {
       edge: { N: segs('none'), W: segs('none') },
       inner: { N: segs('wall'), E: segs('wall'), S: segs('none'), W: segs('none') }, // an L
       centre: segs('none'),
-      wallType: wallTypes('door'),
+      wallType: wallTypes('doorway'),
     };
     expect(certainOpening(t)).toBe(false);
   });

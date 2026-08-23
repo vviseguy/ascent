@@ -22,8 +22,8 @@
 // `pick` is the only entropy seam; the default is the canonical lowest surviving option.
 
 import {
-  SEGS, FLOOR_MATERIALS, WALL_TYPES, CORNERS, TORCHES,
-  type Cell, type Seg, type FloorMaterial, type WallType, type Corner, type Torch,
+  SEGS, FLOOR_MATERIALS, WALL_TYPES, CORNERS, TORCHES, OPENS,
+  type Cell, type Seg, type FloorMaterial, type WallType, type Corner, type Torch, type Open,
 } from './cell.ts';
 
 /** A domain over one enum, as a bitmask (bit i set = the i-th value is allowed). */
@@ -40,6 +40,7 @@ export const floors = (...allowed: FloorMaterial[]): Mask => maskOf(FLOOR_MATERI
 export const wallTypes = (...allowed: WallType[]): Mask => maskOf(WALL_TYPES, allowed);
 export const corners = (...allowed: Corner[]): Mask => maskOf(CORNERS, allowed);
 export const torches = (...v: Torch[]): Mask => maskOf(TORCHES, v);
+export const opens = (...v: Open[]): Mask => maskOf(OPENS, v);
 
 /** How many values a domain still allows. 0 = conflict, 1 = decided. */
 // `>>>`, not `>>`: a signed shift on a value with bit 31 set sign-extends forever.
@@ -58,10 +59,11 @@ export interface CellField {
   wallW: Mask;
   corner: Mask;
   wallType: Mask;
+  open: Mask;
   torch: Mask;
 }
 
-export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'torch'] as const;
+export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'open', 'torch'] as const;
 
 /**
  * THE BIT LAYOUT — for a packed representation, with room left over ON PURPOSE.
@@ -102,15 +104,13 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'tor
  * pays a zero-extend). A second representation would buy nothing and add a second thing that can
  * disagree with the first — which is exactly the class of bug that cost us an evening.
  */
-export const BIT_WORD: Record<FieldKey, number> =
-  { floor: 0, wallN: 0, wallW: 0, corner: 0, torch: 0, wallType: 1 };
 export const BIT_OFFSETS: Record<FieldKey, number> =
-  { floor: 0, wallN: 8, wallW: 13, corner: 18, torch: 22, wallType: 0 };
+  { floor: 0, wallN: 7, wallW: 11, corner: 15, wallType: 18, open: 27, torch: 29 };
 export const BIT_SLOTS: Record<FieldKey, number> =
-  { floor: 8, wallN: 5, wallW: 5, corner: 4, torch: 2, wallType: 20 };
+  { floor: 7, wallN: 4, wallW: 4, corner: 3, wallType: 9, open: 2, torch: 2 };
 /** Usable bits per word — 31, not 32; see the note on bit 31 above. */
 export const BITS_PER_WORD = 31;
-export const TOTAL_WORDS = 2;
+export const TOTAL_WORDS = 1;
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
 /** Every field allows everything — a cell nothing has claimed. */
@@ -120,6 +120,7 @@ export const fullField = (): CellField => ({
   wallW: full(SEGS),
   corner: full(CORNERS),
   wallType: full(WALL_TYPES),
+  open: full(OPENS),
   torch: full(TORCHES),
 });
 
@@ -130,6 +131,7 @@ export const fromCell = (c: Cell): CellField => ({
   wallW: bitOf(SEGS, c.wallW),
   corner: bitOf(CORNERS, c.corner),
   wallType: bitOf(WALL_TYPES, c.wallType),
+  open: bitOf(OPENS, c.open),
   torch: bitOf(TORCHES, c.torch),
 });
 
@@ -149,6 +151,7 @@ export const andGate = (a: CellField, b: CellField): CellField => ({
   wallW: a.wallW & b.wallW,
   corner: a.corner & b.corner,
   wallType: a.wallType & b.wallType,
+  open: a.open & b.open,
   torch: a.torch & b.torch,
 });
 
@@ -177,6 +180,7 @@ export const SETTLE_DEFAULTS: Record<FieldKey, Mask> = {
   floor: maskOf(FLOOR_MATERIALS, ['stone']),
   corner: maskOf(CORNERS, ['none']),
   wallType: maskOf(WALL_TYPES, ['solid']),
+  open: maskOf(OPENS, ['closed']),
   torch: maskOf(TORCHES, ['no']),
 };
 
@@ -195,6 +199,7 @@ export const settleField = (f: CellField): CellField => ({
   wallW: settleMask(f.wallW, 'wallW'),
   corner: settleMask(f.corner, 'corner'),
   wallType: settleMask(f.wallType, 'wallType'),
+  open: settleMask(f.open, 'open'),
   torch: settleMask(f.torch, 'torch'),
 });
 
@@ -223,6 +228,7 @@ export function collapse(f: CellField, pick?: Pick): Cell | null {
     wallW: choose('wallW', SEGS, f.wallW),
     corner: choose('corner', CORNERS, f.corner),
     wallType: choose('wallType', WALL_TYPES, f.wallType),
+    open: choose('open', OPENS, f.open),
     torch: choose('torch', TORCHES, f.torch),
   };
 }

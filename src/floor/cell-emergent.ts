@@ -564,6 +564,7 @@ function finishStorey(
           floor: settleMask(f.floor, 'floor'),
           corner: settleMask(f.corner, 'corner'),
           wallType: settleMask(f.wallType, 'wallType'),
+          open: settleMask(f.open, 'open'),
           torch: settleMask(f.torch, 'torch'),
         }));
       }

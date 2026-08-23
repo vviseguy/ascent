@@ -35,9 +35,9 @@
 //
 // Deterministic and pure: mask arithmetic over fixed value orders.
 
-import { type Mask, segs, floors, corners, wallTypes, template, type CellField } from './cell-field.ts';
+import { type Mask, segs, floors, corners, wallTypes, opens, template, type CellField } from './cell-field.ts';
 import { makeGrid, type CellGrid } from './cell-grid.ts';
-import type { Seg as CellSeg, Corner } from './cell.ts';
+import type { Seg as CellSeg, Corner, Open, WallType } from './cell.ts';
 
 /* ------------------------- the 4u shapes we are reading ------------------------- */
 // Declared locally so the migration does not depend on the old modules surviving.
@@ -92,11 +92,27 @@ export const floorDomain = (m: Mask): Mask => {
   return out;
 };
 
-/** Old wallType and new wallType share a value order too. */
-export const wallTypeDomain = (m: Mask): Mask => {
-  let out = 0;
-  for (const t of valuesOf(OLD_WALLTYPES, m)) out |= wallTypes(t);
-  return out;
+/**
+ * The 4u model had one wallType enum where the 2u model now has a KIND and a STATE. Each old value
+ * carries both halves — `door` was a doorway that is open, `low_gate` a gate that is not — so the
+ * conversion returns a pair rather than a renamed mask.
+ */
+const OLD_TO_NEW: Record<(typeof OLD_WALLTYPES)[number], { kind: WallType; open: Open }> = {
+  solid: { kind: 'solid', open: 'closed' },
+  door: { kind: 'doorway', open: 'open' },
+  window: { kind: 'window', open: 'open' },
+  hole: { kind: 'cracked', open: 'open' },
+  arch: { kind: 'arch', open: 'open' },
+  low_gate: { kind: 'gate', open: 'closed' },
+};
+export const wallTypeDomain = (m: Mask): { wallType: Mask; open: Mask } => {
+  let kind = 0, open = 0;
+  for (const t of valuesOf(OLD_WALLTYPES, m)) {
+    const n = OLD_TO_NEW[t];
+    kind |= wallTypes(n.kind);
+    open |= opens(n.open);
+  }
+  return { wallType: kind || wallTypes('solid'), open: open || opens('closed') };
 };
 
 /**
@@ -194,7 +210,7 @@ export function migrateStructure(s: OldStructure, border: BorderPolicy = 'abstai
         wallN: armDomain(t.inner.E, edgeE), // E arm — horizontal, between B and D
         wallW: armDomain(t.inner.S, edgeS), // S arm — vertical, between C and D
         corner: cornerDomainFor(t),
-        wallType: wallTypeDomain(t.wallType),
+        ...wallTypeDomain(t.wallType),
       }));
     }
   }

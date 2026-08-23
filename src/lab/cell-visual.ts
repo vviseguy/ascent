@@ -29,8 +29,8 @@
 //            solid/door/window, the outer hole/arch/low_gate. Six independent bits shown in the space
 //            of a corner, and a plain `solid` corner draws no ring at all so the board stays quiet.
 
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, isOpenType } from '../floor/cell.ts';
-import type { Seg, FloorMaterial, Corner, WallType, Torch } from '../floor/cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, OPENS } from '../floor/cell.ts';
+import type { Seg, FloorMaterial, Corner, WallType, Torch, Open } from '../floor/cell.ts';
 import type { Mask } from '../floor/cell-field.ts';
 
 /* ---------------------------------- channels --------------------------------- */
@@ -176,8 +176,9 @@ export const cornerStrength = (m: Mask): number => certainty(maskValues(m, CORNE
 /** SIX values do not fit three channels, so they are split across two rings drawn tight around the
  *  corner — the corner's own boundary, in effect. Inner is the ordinary three, outer the rarer three. */
 export const OPENING_RING: readonly (readonly WallType[])[] = [
-  ['door', 'arch', 'arch_scaffold'],            // inner: you can WALK through
-  ['window', 'window_arched', 'window_barred'], // outer: you can SEE through
+  ['solid', 'doorway', 'arch'],          // the ordinary three
+  ['window', 'arch_window', 'scaffold'], // the see-through and the timbered
+  ['cracked', 'gate', 'pillar'],         // the rest
 ];
 
 /**
@@ -285,6 +286,8 @@ export const WALLTYPE_SWATCH: Record<WallType, string> = Object.fromEntries(
     return [v, j >= 0 ? channelColor(j as Channel) : '#5b6470'];
   }),
 ) as Record<WallType, string>;
+/** `closed` is the quiet default; `open` is the claim, so it gets the bright half. */
+export const OPEN_SWATCH: Record<Open, string> = { closed: rgb([false, false, false]), open: channelColor(1) };
 export const TORCH_SWATCH: Record<Torch, string> = { no: rgb([false, false, false]), yes: TORCH_MARK };
 
 /* ---------------------------------- legend ----------------------------------- */
@@ -316,6 +319,11 @@ export function legend(): { title: string; note: string; rows: LegendRow[] }[] {
       title: 'corner',
       note: 'what STANDS at the junction. It no longer decides passability — the opening type does.',
       rows: CORNERS.map((v) => ({ label: v, color: ch(CORNER_CHANNEL[v]) })),
+    },
+    {
+      title: 'open',
+      note: 'whether the module has a hole. NOT the same as passable — an open window is chest-high.',
+      rows: OPENS.map((v) => ({ label: v, color: OPEN_SWATCH[v] })),
     },
     {
       title: 'torch',

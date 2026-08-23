@@ -103,10 +103,8 @@ export const floorSolid = (f: FloorMaterial): boolean => f === 'rock';
 
 /** What a 4u opening looks like. `solid` means there is no opening here. */
 export type WallType =
-  | 'solid' | 'door' | 'window' | 'hole' | 'arch' | 'low_gate'
-  | 'arch_blind' | 'arch_scaffold'
-  | 'cracked' | 'scaffold' | 'shelves' | 'engaged_pillar'
-  | 'window_closed' | 'window_arched' | 'window_barred';
+  | 'solid' | 'doorway' | 'arch' | 'window' | 'arch_window'
+  | 'scaffold' | 'cracked' | 'gate' | 'pillar';
 /**
  * APPEND-ONLY, and the order is the storage format. A domain is a bitmask indexed by POSITION, so a
  * value appended at the end costs one bit and shifts nothing; inserting one silently rewrites the
@@ -116,24 +114,47 @@ export type WallType =
  * it was listed (see the asset audit) — several of the kit's names promise a hole that is not there.
  */
 export const WALL_TYPES: readonly WallType[] = [
-  // ---- the original six; do not reorder ----
-  'solid', 'door', 'window', 'hole', 'arch', 'low_gate',
-  // ---- appended ----
-  'arch_blind',      // a deep arch cut into BOTH faces with a 0.10 web left between: solid, and opaque
-  'arch_scaffold',   // a timber post-and-lintel frame — walk through, 3.40 clear
-  'cracked', 'scaffold', 'shelves', 'engaged_pillar',   // solid walls that look like something
-  'window_closed', 'window_arched', 'window_barred',    // see-through to varying degrees, none passable
+  'solid',        // no module at all — the run system lays a plain wall
+  'doorway',      // a framed opening: a leaf when closed, a 2.00 x 2.70 arch when open
+  'arch',         // stone arch: a blind relief when closed, the same aperture when open
+  'window',       // 1.40 x 1.30 at sill 1.30
+  'arch_window',  // 2.00 x 1.60 at sill 1.05 — barred when closed
+  'scaffold',     // timber trim; the open form is a bare post-and-lintel frame, 3.40 clear
+  'cracked',      // damaged masonry; the open form is a ragged breach
+  'gate',         // a portcullis on a 0.75 sill
+  'pillar',       // an engaged pillar standing proud of the wall
 ];
 
-/** The only wall types you can actually walk through. A window is too high, a broken wall is rubble
- *  and a low_gate is barred — those are cosmetic variants of a solid wall, not passages. */
 /**
- * THE ONES YOU CAN ACTUALLY WALK THROUGH — measured, not inferred from the name. Everything else is
- * solid, including several that look like openings: `arch_blind` is sealed by a 0.10 membrane,
- * `window*` are above waist height, and `low_gate` has a portcullis on a 0.75 sill.
+ * IS THERE A HOLE IN IT — separately from what it is.
+ *
+ * The catalogue used to spend a value on each half of a pair: `window` and `window_closed`,
+ * `cracked` and `hole`, `scaffold` and `arch_scaffold`, `arch` and `arch_blind`. Every one of those
+ * pairs is the SAME feature in two states, and encoding them as unrelated enum entries meant the
+ * relationship existed only as a naming convention — nothing could ask "the closed form of this", and
+ * nothing stopped a tenth entry breaking the pattern.
+ *
+ * `shelves` went too: it is a plain wall with a shelf on it, and `shelf_large` / `shelf_small` /
+ * `shelf_small_candles` are all standalone props. A wall type that is a wall plus a prop we already
+ * have is a duplicate of both.
+ *
+ * Nine kinds and two states describe more of the kit than fifteen kinds did, and the whole cell fits
+ * in 31 bits again: 7 + 4 + 4 + 3 + 9 + 2 + 2.
  */
-export const OPEN_WALL_TYPES: readonly WallType[] = ['door', 'arch', 'arch_scaffold'];
-export const isOpenType = (wt: WallType): boolean => OPEN_WALL_TYPES.includes(wt);
+export type Open = 'closed' | 'open';
+export const OPENS: readonly Open[] = ['closed', 'open'];
+
+/**
+ * THE KINDS THAT ACTUALLY LET YOU THROUGH WHEN OPEN — measured, not inferred from the name.
+ *
+ * Being open is not the same as being passable. An open window is a hole at sill height 1.30; an open
+ * `arch_window` sits at 1.05; an open `cracked` is a ragged breach that pinches to 0.10. You can see
+ * through all three and walk through none of them. Only these three are floor-rooted and body-wide.
+ */
+export const PASSABLE_KINDS: readonly WallType[] = ['doorway', 'arch', 'scaffold'];
+/** Can a body walk through this wall? BOTH halves have to agree — the kind and the state. */
+export const isOpenType = (wt: WallType, open: Open): boolean =>
+  open === 'open' && PASSABLE_KINDS.includes(wt);
 
 /** What stands at a lattice point where walls meet. `air` is a hole — the precondition for a door. */
 /**
@@ -180,16 +201,17 @@ export interface Cell {
   /** What STANDS at this cell's NW corner point — nothing, a pillar, or a balcony post. It says
    *  nothing about passability; see `Corner`. */
   corner: Corner;
-  /** Which 4u module is drawn at that corner, and the ONLY thing that decides whether you can walk
-   *  through it (`isOpenType`). */
+  /** Which 4u module is drawn at that corner — WHAT it is, not whether it has a hole. */
   wallType: WallType;
+  /** Whether that module has a hole in it. With `wallType`, decides passability (`isOpenType`). */
+  open: Open;
   /** A torch bracket at this point. See `Torch`. */
   torch: Torch;
 }
 
 /** A plain open cell: stone ground, no walls, no openings. */
 export const openCell = (floor: FloorMaterial = 'stone'): Cell => ({
-  floor, wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', torch: 'no',
+  floor, wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
 });
 
 /** Does this wall segment stop a body? `wall` and `sloped` do; `barrier` is surmountable and `none`
@@ -215,7 +237,7 @@ export const opposite = (d: Dir): Dir => (d === 'N' ? 'S' : d === 'S' ? 'N' : d 
 /** Is there a hole at this cell's corner that a body can actually get through? Both fields are on
  *  THIS cell — the local half of the test. The axis still has to be derived from the walls. */
 /** Is there a walk-through opening here? The WALL TYPE says so, and nothing else needs to agree. */
-export const cornerIsOpen = (c: Cell): boolean => isOpenType(c.wallType);
+export const cornerIsOpen = (c: Cell): boolean => isOpenType(c.wallType, c.open);
 
 /**
  * The four cells around the lattice point owned by cell (x,y) — its NW corner — split into the two

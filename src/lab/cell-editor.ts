@@ -25,12 +25,12 @@
 // so leaving a field open is a real choice, not a blank. Right-click abstains.
 
 import {
-  SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES,
+  SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, OPENS,
   isStairFloor,
-  type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Cell,
+  type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Open, type Cell,
 } from '../floor/cell.ts';
 import {
-  fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches,
+  fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches, opens,
   type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
@@ -39,7 +39,7 @@ import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-s
 import {
   CASING, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend,
   openingIsPlain, openingRings, patternDefs, segInk, segValueColor,
-  CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH, TORCH_SWATCH, TORCH_MARK, torchState,
+  CORNER_SWATCH, FLOOR_SWATCH, SEG_SWATCH, WALLTYPE_SWATCH, OPEN_SWATCH, TORCH_SWATCH, TORCH_MARK, torchState,
 } from './cell-visual.ts';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -78,7 +78,7 @@ let cells: CellField[] = [];
 const undoStack: string[] = [];
 let showReach = false;
 
-type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'torch' | 'select' | 'stamp';
+type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch' | 'select' | 'stamp';
 /** How the PREVIEW resolves a field that is still undecided. `generator` is what actually ships. */
 type Ambiguity = 'generator' | 'none' | 'wall' | 'random';
 
@@ -88,6 +88,7 @@ const brush = {
   floor: new Set<FloorMaterial>(['stone']),
   corner: new Set<Corner>(['column']),
   wallType: new Set<WallType>(['solid']),
+  open: new Set<Open>(['open']),
   torch: new Set<Torch>(['yes']),
 };
 let ambiguity: Ambiguity = 'generator';
@@ -182,7 +183,7 @@ function resolvedAll(): (Cell | null)[] {
 
 /* --------------------------------- painting --------------------------------- */
 
-type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType' | 'torch';
+type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch';
 
 function applyAt(px: number, py: number, what: Paintable, clear: boolean): void {
   const f = cells[base() + py * stride() + px];
@@ -192,6 +193,7 @@ function applyAt(px: number, py: number, what: Paintable, clear: boolean): void 
     if (what === 'floor') return brush.floor.size ? floors(...brush.floor) : null;
     if (what === 'corner') return brush.corner.size ? corners(...brush.corner) : null;
     if (what === 'torch') return brush.torch.size ? torches(...brush.torch) : null;
+    if (what === 'open') return brush.open.size ? opens(...brush.open) : null;
     return brush.wallType.size ? wallTypes(...brush.wallType) : null;
   };
   const m = clear ? fullField()[what as FieldKey] : pick();
@@ -461,6 +463,7 @@ function render(): void {
         if (brush.mode === 'corner') applyAt(px, py, 'corner', clear);
         else if (brush.mode === 'wallType') applyAt(px, py, 'wallType', clear);
         else if (brush.mode === 'torch') applyAt(px, py, 'torch', clear);
+        else if (brush.mode === 'open') applyAt(px, py, 'open', clear);
       });
       svg.append(hit);
 
@@ -799,7 +802,7 @@ function buildPanel(): void {
   p.append(h('h2', {}, 'Brush'));
   const modes: [BrushMode, string][] = [
     ['wall', 'Wall'], ['floor', 'Floor'], ['corner', 'Corner'], ['wallType', 'Opening'],
-    ['torch', 'Torch'], ['select', 'Select'], ['stamp', 'Stamp'],
+    ['open', 'Open'], ['torch', 'Torch'], ['select', 'Select'], ['stamp', 'Stamp'],
   ];
   p.append(h('div', { class: 'row' }, ...modes.map(([m, label]) =>
     h('div', { class: `chip${brush.mode === m ? ' on' : ''}`, onclick: () => { brush.mode = m; buildPanel(); } }, label))));
@@ -807,6 +810,15 @@ function buildPanel(): void {
   if (brush.mode === 'wall') { p.append(h('h2', {}, 'wall — a SET')); p.append(chipRow(SEGS, brush.seg, SEG_SWATCH)); }
   else if (brush.mode === 'floor') { p.append(h('h2', {}, 'floor — a SET')); p.append(chipRow(FLOOR_MATERIALS, brush.floor, FLOOR_SWATCH)); }
   else if (brush.mode === 'corner') { p.append(h('h2', {}, 'corner — a SET')); p.append(chipRow(CORNERS, brush.corner, CORNER_SWATCH)); }
+  else if (brush.mode === 'open') {
+    p.append(h('h2', {}, 'open — a SET'));
+    p.append(chipRow(OPENS, brush.open, OPEN_SWATCH));
+    p.append(h('div', { class: 'hint' },
+      'Whether the module at this point has a HOLE in it, separately from what it is. A doorway is a '
+      + 'leaf when closed and an arch when open; a window is infilled or not. Open is not the same as '
+      + 'passable — an open window is a hole at chest height — so only doorway, arch and scaffold let '
+      + 'a body through, and only when open.'));
+  }
   else if (brush.mode === 'torch') {
     p.append(h('h2', {}, 'torch — a SET'));
     p.append(chipRow(TORCHES, brush.torch, TORCH_SWATCH));

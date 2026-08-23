@@ -7,10 +7,8 @@ import {
   CORNER_CHANNEL, FLOOR_CHANNEL, SEG_CHANNEL,
 } from './cell-visual.ts';
 import { floors, segs, corners, wallTypes, fullField } from '../floor/cell-field.ts';
-import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, isOpenType, type WallType } from '../floor/cell.ts';
+import { SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES } from '../floor/cell.ts';
 
-/** Ringed on the OUTER ring: see through, walk into. */
-const SEE_THROUGH: readonly WallType[] = ['window', 'window_arched', 'window_barred'];
 
 describe('cell-visual — channels ADD, and a mixture decodes', () => {
   it('one value is its own channel, two are the sum, three are white', () => {
@@ -80,30 +78,35 @@ describe('cell-visual — CERTAINTY is intensity', () => {
 });
 
 describe('cell-visual — openings ride as two rings', () => {
-  it('inner ring = walk through, outer = see through', () => {
-    // `door` is the first of the walkable three, `window` the first of the see-through three
-    expect(openingRings(wallTypes('door'))[0]).toBe(rgb([true, false, false]));
-    expect(openingRings(wallTypes('door'))[1]).toBeNull();
-    expect(openingRings(wallTypes('window'))[0]).toBeNull();
-    expect(openingRings(wallTypes('window'))[1]).toBe(rgb([true, false, false]));
-    // one from each ring lights both
-    const both = openingRings(wallTypes('door', 'window'));
+  it('nine kinds split across three rings of three, every one decodable', () => {
+    // the rings group by KIND now, not by passability — passability moved to `open`, and a ring that
+    // encoded it would be showing one field while claiming to show another
+    const ringOf = (v: (typeof WALL_TYPES)[number]): number =>
+      openingRings(wallTypes(v)).findIndex(Boolean);
+    for (const v of WALL_TYPES) expect(ringOf(v)).toBeGreaterThanOrEqual(0);
+    // each ring carries exactly three, on three distinct channels
+    for (let r = 0; r < 3; r++) {
+      const inRing = WALL_TYPES.filter((v) => ringOf(v) === r);
+      expect(inRing.length).toBe(3);
+      expect(new Set(inRing.map((v) => openingRings(wallTypes(v))[r])).size).toBe(3);
+    }
+    // one from each of two rings lights both
+    const both = openingRings(wallTypes('doorway', 'window'));
     expect(both[0]).not.toBeNull();
     expect(both[1]).not.toBeNull();
-    // and the three walkable types are three distinct channels
-    const walk = ['door', 'arch', 'arch_scaffold'] as const;
-    expect(new Set(walk.map((v) => openingRings(wallTypes(v))[0])).size).toBe(3);
   });
 
   it('draws nothing for plain solid OR for abstaining — a ring is a claim', () => {
     expect(openingIsPlain(wallTypes('solid'))).toBe(true);
     expect(openingIsPlain(wallTypes(...WALL_TYPES))).toBe(true);
-    expect(openingIsPlain(wallTypes('door'))).toBe(false);
+    expect(openingIsPlain(wallTypes('doorway'))).toBe(false);
   });
 
-  it('a solid variant wears no ring — it changes the look, not the map', () => {
-    for (const v of ['cracked', 'scaffold', 'shelves', 'engaged_pillar', 'arch_blind'] as const) {
-      expect(openingRings(wallTypes(v)).some(Boolean)).toBe(false);
+  it('EVERY kind wears a ring now — a ring says what it is, not whether you fit through', () => {
+    // it used to mean "walk-through", so the solid-looking variants deliberately wore none. Passability
+    // has moved to `open`, so a ring encoding it would be showing one field while labelled another.
+    for (const v of WALL_TYPES) {
+      expect(openingRings(wallTypes(v)).some(Boolean)).toBe(true);
     }
   });
 });
@@ -135,10 +138,9 @@ describe('cell-visual — the layers stay apart', () => {
     }
     // A ring means you can get through, so only those types need one — see `OPENING_RING`. A solid
     // variant with a ring would be the real gap, so check that direction too.
+    // EVERY kind must land on a ring — an appended one with no ring is the silent gap this guards
     for (const v of WALL_TYPES) {
-      const ringed = openingRings(wallTypes(v)).some(Boolean);
-      if (isOpenType(v) && !ringed) missing.push(`walkable with no ring: ${v}`);
-      if (ringed && !isOpenType(v) && !SEE_THROUGH.includes(v)) missing.push(`solid but ringed: ${v}`);
+      if (!openingRings(wallTypes(v)).some(Boolean)) missing.push(`kind with no ring: ${v}`);
     }
     expect(missing).toEqual([]);
   });

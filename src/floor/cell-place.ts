@@ -23,7 +23,7 @@
 import { type Fixed, add, fromInt, fromFloatConst, mul, neg } from '../sim/fixed/fixed.ts';
 import {
   blocks, isOpenType, isStairFloor,
-  type Axis, type Cell, type Dir, type FloorMaterial, type Seg, type WallType,
+  type Axis, type Cell, type Dir, type FloorMaterial, type Open, type Seg, type WallType,
 } from './cell.ts';
 
 const PACK = 'models/kaykit_dungeon_remastered';
@@ -58,6 +58,7 @@ export const PIECE = {
   /* THE OPENING FAMILY. `#open` marks the url for leaf-stripping and gives it its own cache slot, so
      the same file serves an open arch and (one day) a shut door. */
   archOpen: `${u1('wall_doorway')}#open`,
+  doorwayShut: u1('wall_doorway'),   // the same mesh WITH its leaf node — the closed state
   archScaffold: u('wall_open_scaffold'),
   archBlind: u('wall_arched'),
   windowArched: u('wall_archedwindow_open'),
@@ -65,7 +66,6 @@ export const PIECE = {
   windowClosed: u('wall_window_closed'),
   cracked: u('wall_cracked'),
   scaffold: u('wall_scaffold'),
-  shelves: u('wall_shelves'),
   wallPillar: u('wall_pillar'),
   /* The stair family, chosen by SENSING — see `STAIR_MESHES` for the measured footprints. */
   stairsNarrow: u('stairs_narrow'),
@@ -118,24 +118,33 @@ const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'sta
  * strips the door leaf from any url carrying it (`openDoorLeaves`), which is how one GLB serves both
  * an open arch and a shut door without shipping two copies.
  */
-const WALLTYPE_URL: Record<WallType, string> = {
-  solid: PIECE.wall,
-  door: PIECE.archOpen,             // wall_doorway, leaf stripped — 2.00 x 2.70, PASSABLE
-  arch: PIECE.archOpen,             // the same stone opening; a separate name an author can reach for
-  arch_scaffold: PIECE.archScaffold, // timber frame, 3.40 clear, PASSABLE
-  arch_blind: PIECE.archBlind,      // wall_arched — looks like a deep arch, sealed by a 0.10 web
-  window: PIECE.window,             // 1.40 x 1.30 at sill 1.30
-  window_arched: PIECE.windowArched, // 2.00 x 1.60 at sill 1.05
-  window_barred: PIECE.windowBarred, // the same envelope, 18 bars of 0.40
-  window_closed: PIECE.windowClosed, // the same envelope as `window`, infilled
-  low_gate: PIECE.gate,             // portcullis on a 0.75 sill
-  hole: PIECE.broken,               // a ragged breach that pinches to 0.10 — see through, not walk
-  cracked: PIECE.cracked,
-  scaffold: PIECE.scaffold,
-  shelves: PIECE.shelves,
-  engaged_pillar: PIECE.wallPillar,
+/**
+ * WHAT EACH KIND LOOKS LIKE, CLOSED AND OPEN.
+ *
+ * The pairing is the point. `window`/`window_closed`, `cracked`/`hole`, `scaffold`/`arch_scaffold`,
+ * `arch`/`arch_blind` used to be unrelated enum entries that happened to be named as pairs — so the
+ * relationship lived in the naming and nothing could ask for "the other state of this". Here it is a
+ * column of the table, which is also why a kind with no open form (`gate`, `pillar`) can simply say so
+ * by repeating itself rather than by an author knowing not to try.
+ *
+ * OPEN IS NOT PASSABLE. An open window is a hole at sill 1.30 and an open `cracked` pinches to 0.10 —
+ * you see through both and walk through neither. `PASSABLE_KINDS` in `cell.ts` names the three that
+ * are floor-rooted and body-wide, all measured (see the asset audit).
+ */
+const WALLTYPE_URL: Record<WallType, { closed: string; open: string }> = {
+  //             CLOSED                     OPEN
+  solid:       { closed: PIECE.wall,        open: PIECE.wall },          // no module; the run lays it
+  doorway:     { closed: PIECE.doorwayShut, open: PIECE.archOpen },      // leaf in, leaf out
+  arch:        { closed: PIECE.archBlind,   open: PIECE.archOpen },      // blind relief, or the aperture
+  window:      { closed: PIECE.windowClosed, open: PIECE.window },       // same envelope, infilled
+  arch_window: { closed: PIECE.windowBarred, open: PIECE.windowArched }, // same envelope, barred
+  scaffold:    { closed: PIECE.scaffold,    open: PIECE.archScaffold },  // trimmed wall, or bare frame
+  cracked:     { closed: PIECE.cracked,     open: PIECE.broken },        // damaged, or breached
+  gate:        { closed: PIECE.gate,        open: PIECE.gate },          // no open form in the kit
+  pillar:      { closed: PIECE.wallPillar,  open: PIECE.wallPillar },    // no open form in the kit
 };
-export const wallTypeUrl = (wt: WallType): string => WALLTYPE_URL[wt];
+export const wallTypeUrl = (wt: WallType, open: Open): string =>
+  WALLTYPE_URL[wt][open === 'open' ? 'open' : 'closed'];
 
 const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z): CellPlacement =>
   ({ url, x, y, z, turn, scale });
@@ -217,7 +226,7 @@ export function openingAt(
   cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number, axis: Axis,
 ): boolean {
   const c = cellAt(cells, w, h, px, py);
-  return !!c && isOpenType(c.wallType) && moduleAt(cells, w, h, px, py, axis);
+  return !!c && isOpenType(c.wallType, c.open) && moduleAt(cells, w, h, px, py, axis);
 }
 
 /** The axis a walk-through opening runs along, or null. */
@@ -645,7 +654,7 @@ export function cellPlacements(
   // REPLACES both of them, including the one the neighbour owns (see the header). Any non-`solid`
   // type draws one, not only the walk-through ones — see `moduleAt`.
   const axis = moduleAxis(cells, w, h, x, y);
-  if (axis) out.push(at(wallTypeUrl(c.wallType), axis === 'H' ? TURN.E : TURN.S, CX, CZ));
+  if (axis) out.push(at(wallTypeUrl(c.wallType, c.open), axis === 'H' ? TURN.E : TURN.S, CX, CZ));
 
   // WALLS — this cell owns the edge running east (wallN) and the edge running south (wallW) from its
   // corner. Each is skipped when an opening already covers it: the one centred here, or the one

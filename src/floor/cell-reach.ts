@@ -27,7 +27,7 @@
 // Pure + deterministic — integer masks, fixed enumeration order, BFS over dense arrays.
 
 import { SEGS, BLOCKING_SEGS, wallOwner, type Dir } from './cell.ts';
-import { segs, corners, wallTypes, floors, template, type CellField, type Mask } from './cell-field.ts';
+import { segs, corners, wallTypes, floors, template, type CellField, type Mask, opens } from './cell-field.ts';
 import {
   type CellGrid, type Tx, cellIndex, inBounds, stamp,
 } from './cell-grid.ts';
@@ -46,7 +46,10 @@ const PERIMETER: Mask = segs('wall');
  *  place a body can occupy, so it contributes no edges — the one way `floor` reaches passability. */
 const ROCK_ONLY: Mask = floors('rock');
 export const isSolid = (f: CellField): boolean => f.floor !== 0 && (f.floor & ~ROCK_ONLY) === 0;
-const OPEN_TYPES: Mask = wallTypes('door', 'arch');
+/** The kinds that let a body through when OPEN. Being open is not enough on its own — a window
+ *  is a hole you cannot walk through — so certainty needs both halves. */
+const PASSABLE_KINDS_MASK: Mask = wallTypes('doorway', 'arch', 'scaffold');
+const OPEN_STATE: Mask = opens('open');
 
 export type Polarity =
   /** optimistic — "could this still be open?" Asks whether a goal is still ACHIEVABLE. */
@@ -105,7 +108,10 @@ export function openingCertain(at: FieldAt, x: number, y: number): boolean {
   if (!f) return false;
   // CERTAIN when every type still on the table walks through. The corner used to have to agree
   // as well, which meant an opening's passability lived in two fields that could disagree.
-  return f.wallType !== 0 && (f.wallType & ~OPEN_TYPES) === 0;
+  // CERTAIN when every kind still on the table is passable AND it can only be open. Either field
+  // left undecided means the opening might not be one, and under-claiming is the safe direction.
+  return f.wallType !== 0 && (f.wallType & ~PASSABLE_KINDS_MASK) === 0
+    && f.open !== 0 && (f.open & ~OPEN_STATE) === 0;
 }
 
 /* ------------------------------- the ONE enumeration ------------------------------- */

@@ -107,20 +107,21 @@ describe('cell-place — one piece per thing the cell owns', () => {
 
 describe('cell-place — a 4u opening replaces the two segments it spans', () => {
   /** A horizontal wall run along y=2, with the point (2,2) opened. */
+  /** A wall run with one module in it, OPEN — passability needs the kind and the state to agree. */
   const withOpening = (wt: WallType): Cell[] =>
     grid((c, x, y) => {
       if (y === 2) c.wallN = 'wall';
-      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = wt; }
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = wt; c.open = 'open'; }
     });
 
   it('is live for a WALK-THROUGH type with wall either side — the corner has no say', () => {
     // an opening needs two things and only two: a type you can walk through, and a wall run either
     // side for it to replace. What stands at the point is a separate question.
-    const openTypes: WallType[] = ['door', 'arch'];
+    const openTypes: WallType[] = ['doorway', 'arch'];
     for (const t of openTypes) {
       for (const corner of ['none', 'column', 'balcony'] as const) {
         const cs = grid((c, x, y) => {
-          if (x === 1 && y === 1) { c.wallType = t; c.corner = corner; c.wallN = 'wall'; }
+          if (x === 1 && y === 1) { c.wallType = t; c.open = 'open'; c.corner = corner; c.wallN = 'wall'; }
           if (x === 0 && y === 1) c.wallN = 'wall';
         });
         expect(openingAt(cs, W, H, 1, 1, 'H')).toBe(true);
@@ -135,7 +136,7 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
   });
 
   it('draws ONE arch and suppresses BOTH wall halves — including the neighbour\'s', () => {
-    const cs = withOpening('door');
+    const cs = withOpening('doorway');
     expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
     // beyond the span: a half, and ONE cap at its far end. The near end is not loose — the doorway
@@ -144,18 +145,18 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
   });
 
   it('the axis is derived from which run actually exists', () => {
-    expect(openingAxis(withOpening('door'), W, H, 2, 2)).toBe('H');
+    expect(openingAxis(withOpening('doorway'), W, H, 2, 2)).toBe('H');
     const vertical = grid((c, x, y) => {
       if (x === 2) c.wallW = 'wall';
-      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'arch'; }
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'arch'; c.open = 'open'; }
     });
     expect(openingAxis(vertical, W, H, 2, 2)).toBe('V');
     expect(openingAxis(grid(), W, H, 2, 2)).toBeNull();
   });
 
   it('every wall type maps to a mesh', () => {
-    for (const wt of ['solid', 'door', 'window', 'hole', 'arch', 'low_gate'] as WallType[]) {
-      expect(wallTypeUrl(wt)).toContain(PIECE.wall.split('/')[0]!);
+    for (const wt of ['solid', 'doorway', 'window', 'cracked', 'arch', 'gate'] as WallType[]) {
+      expect(wallTypeUrl(wt, 'open')).toContain(PIECE.wall.split('/')[0]!);
     }
   });
 });

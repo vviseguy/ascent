@@ -7,17 +7,17 @@
 // full-height stub stood in the doorway. Both tests here assert on GEOMETRY, not on filtered names.
 import { describe, it, expect } from 'vitest';
 import { gridPlacements, moduleAt, moduleAxis, openingAt, wallTypeUrl } from './cell-place.ts';
-import { openCell, WALL_TYPES, isOpenType, type Cell, type WallType } from './cell.ts';
+import { openCell, WALL_TYPES, OPENS, PASSABLE_KINDS, type Cell, type WallType, type Open } from './cell.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
 
 const W = 5, H = 3;
 /** A three-edge wall run along row 1, with `wt` at the middle lattice point. */
-const run = (wt: WallType, floor: 'stone' | 'rock' = 'stone'): Cell[] => {
+const run = (wt: WallType, floor: 'stone' | 'rock' = 'stone', open: Open = 'closed'): Cell[] => {
   const cs: Cell[] = [];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = openCell();
     if (y === 1 && x <= 3) c.wallN = 'wall';
-    if (y === 1 && x === 2) { c.wallType = wt; c.floor = floor; }
+    if (y === 1 && x === 2) { c.wallType = wt; c.floor = floor; c.open = open; }
     cs.push(c);
   }
   return cs;
@@ -27,10 +27,12 @@ const names = (cs: Cell[]): string[] =>
     .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''));
 
 describe('every wall type an author can paint actually draws its own mesh', () => {
-  it.each(WALL_TYPES.filter((t) => t !== 'solid'))('%s draws its mesh, not a blank wall', (wt) => {
-    const want = wallTypeUrl(wt).split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '');
-    expect(names(run(wt))).toContain(want);
-  });
+  const kinds = WALL_TYPES.filter((t) => t !== 'solid');
+  it.each(kinds.flatMap((wt) => OPENS.map((o) => [wt, o] as const)))(
+    '%s (%s) draws its own mesh, not a blank wall', (wt, o) => {
+      const want = wallTypeUrl(wt, o).split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '');
+      expect(names(run(wt, 'stone', o))).toContain(want);
+    });
 
   it('`solid` draws no module — it is the run system\'s job, and a module would double it', () => {
     expect(moduleAxis(run('solid'), W, H, 2, 1)).toBeNull();
@@ -38,19 +40,21 @@ describe('every wall type an author can paint actually draws its own mesh', () =
 
   it('a module is DRAWN for any variant, but only some are WALK-THROUGH', () => {
     // the distinction that conflating the two destroyed
-    for (const wt of ['window', 'cracked', 'arch_blind'] as const) {
-      expect(moduleAt(run(wt), W, H, 2, 1, 'H')).toBe(true);
-      expect(openingAt(run(wt), W, H, 2, 1, 'H')).toBe(false);
+    // OPEN IS NOT PASSABLE: an open window is a hole at sill height, an open crack pinches to 0.10
+    for (const wt of ['window', 'cracked', 'arch_window'] as const) {
+      expect(moduleAt(run(wt, 'stone', 'open'), W, H, 2, 1, 'H')).toBe(true);
+      expect(openingAt(run(wt, 'stone', 'open'), W, H, 2, 1, 'H')).toBe(false);
     }
-    for (const wt of WALL_TYPES.filter(isOpenType)) {
-      expect(openingAt(run(wt), W, H, 2, 1, 'H')).toBe(true);
+    for (const wt of PASSABLE_KINDS) {
+      expect(openingAt(run(wt, 'stone', 'open'), W, H, 2, 1, 'H')).toBe(true);
+      expect(openingAt(run(wt, 'stone', 'closed'), W, H, 2, 1, 'H')).toBe(false);
     }
   });
 
   it('ROCK cannot host a module — it would delete two wall halves and put back nothing', () => {
     // `cellPlacements` bails on rock before it would draw one, so suppression must agree
-    expect(moduleAt(run('door', 'rock'), W, H, 2, 1, 'H')).toBe(false);
-    const drawn = names(run('door', 'rock'));
+    expect(moduleAt(run('doorway', 'rock', 'open'), W, H, 2, 1, 'H')).toBe(false);
+    const drawn = names(run('doorway', 'rock', 'open'));
     expect(drawn.filter((n) => n.startsWith('wall')).length).toBeGreaterThan(0); // the run survives
   });
 });
@@ -75,7 +79,7 @@ describe('a run that meets a module does not cap itself into it', () => {
   };
 
   it('no endcap lands on a point where a module is drawn', () => {
-    expect(capPoints(run('door'))).toEqual([]);
+    expect(capPoints(run('doorway'))).toEqual([]);
   });
 
   it('...for every module type, not only the walk-through ones', () => {

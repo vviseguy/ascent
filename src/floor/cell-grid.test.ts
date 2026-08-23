@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   openCell, wallOwner, openingWalls, blocks, cornerIsOpen, SEGS,
-  type Cell, type Dir, type WallType, type Corner,
+  type Cell, type Dir, type WallType, type Corner, type Open,
 } from './cell.ts';
 import {
   fullField, template, andGate, collapse, conflicts, hasConflict, isOpen, fromCell,
@@ -114,7 +114,7 @@ describe('cell-field — abstain vs assert', () => {
   });
 
   it('round-trips a concrete cell', () => {
-    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', corner: 'none', wallType: 'door', torch: 'no' };
+    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', corner: 'none', wallType: 'doorway', open: 'closed', torch: 'no' };
     expect(collapse(fromCell(c))).toEqual(c);
     for (const k of ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as const) {
       expect(domainSize(fromCell(c)[k])).toBe(1);
@@ -198,15 +198,17 @@ describe('cell-graph — cells are the nodes', () => {
 describe('cell-graph — an opening is a CORNER that is air, plus a door', () => {
   const id = (x: number, y: number): number => nodeId(W, x, y);
   /** A full vertical wall column at x=2, with the corner at (2,oy) opened and typed `wt`. */
-  const column = (wt: WallType, corner: Corner, oy = 2): Cell[] =>
+  /** A wall with one module in it, in its OPEN state — passability is kind AND state, so a fixture
+   *  that only set the kind would be testing a shut door and calling it a doorway. */
+  const column = (wt: WallType, corner: Corner, oy = 2, open: Open = 'open'): Cell[] =>
     cells((c, x, y) => {
       if (x === 2) c.wallW = 'wall';
-      if (x === 2 && y === oy) { c.corner = corner; c.wallType = wt; }
+      if (x === 2 && y === oy) { c.corner = corner; c.wallType = wt; c.open = open; }
     });
 
   it.each<[WallType, boolean]>([
-    ['solid', false], ['door', true], ['arch', true],
-    ['window', false], ['hole', false], ['low_gate', false],
+    ['solid', false], ['doorway', true], ['arch', true],
+    ['window', false], ['cracked', false], ['gate', false],
   ])('%s → crosses the wall: %s', (wt, want) => {
     expect(reaches(buildCellGraph(column(wt, 'none'), W, H), id(0, 0), id(4, 4))).toBe(want);
   });
@@ -215,8 +217,15 @@ describe('cell-graph — an opening is a CORNER that is air, plus a door', () =>
     /* An opening used to need the CORNER to say `air` as well, so passability was written in two
        fields that could disagree — and did. A door is a door now whatever is standing at the point. */
     for (const corner of ['none', 'column', 'balcony'] as const) {
-      expect(openingActive(column('door', corner), W, 2, 2)).toBe(true);
-      expect(reaches(buildCellGraph(column('door', corner), W, H), id(0, 0), id(4, 4))).toBe(true);
+      expect(openingActive(column('doorway', corner), W, 2, 2)).toBe(true);
+      expect(reaches(buildCellGraph(column('doorway', corner), W, H), id(0, 0), id(4, 4))).toBe(true);
+    }
+  });
+
+  it('a passable kind that is CLOSED does not let you through — both halves have to agree', () => {
+    for (const wt of ['doorway', 'arch', 'scaffold'] as const) {
+      expect(openingActive(column(wt, 'none', 2, 'closed'), W, 2, 2)).toBe(false);
+      expect(reaches(buildCellGraph(column(wt, 'none', 2, 'closed'), W, H), id(0, 0), id(4, 4))).toBe(false);
     }
   });
 
@@ -230,7 +239,7 @@ describe('cell-graph — an opening is a CORNER that is air, plus a door', () =>
     const cs = cells((c, x, y) => {
       if (x === 2) c.wallW = 'wall';                 // vertical run
       if (y === 2) c.wallN = 'wall';                 // horizontal run, crossing at (2,2)
-      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'door'; }
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'doorway'; c.open = 'open'; }
     });
     expect(openingActive(cs, W, 2, 2)).toBe(true);
     const g = buildCellGraph(cs, W, H);
@@ -241,7 +250,7 @@ describe('cell-graph — an opening is a CORNER that is air, plus a door', () =>
 
   it('needs no neighbour lookup at all — the whole test is two fields on one cell', () => {
     const cs = cells((c, x, y) => {
-      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'arch'; } // no walls anywhere
+      if (x === 2 && y === 2) { c.corner = 'none'; c.wallType = 'arch'; c.open = 'open'; } // no walls anywhere
     });
     expect(openingActive(cs, W, 2, 2)).toBe(true); // redundant here, never wrong
   });
