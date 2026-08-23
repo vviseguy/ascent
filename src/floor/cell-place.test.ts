@@ -485,3 +485,94 @@ describe('cell-place — a torch is hung by SENSING, never by storage', () => {
     expect(torchFacings(walledIn, TW, TH, 2, 2)).toEqual([]);
   });
 });
+
+describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
+  /*
+   * The bug this exists for: a wall run that stopped because a doorway continued the wall counted its
+   * arms with a function that answers "does the RUN LAYER draw this edge", got `null` for the opening,
+   * concluded it was ending in mid-air, and planted a full-height endcap inside the doorway. A quarter
+   * of every floor's openings had geometry in them.
+   *
+   * It survived because the assertion helper filtered `wall_endcap` out of every comparison. So this
+   * test does not compare URL lists at all — it computes WORLD BOXES from measured mesh extents and
+   * asks whether anything overlaps the clear span of an opening. A piece cannot hide from that by
+   * being unfamiliar.
+   */
+
+  /** Measured footprints, in world units, for the pieces a wall run can emit. */
+  const FOOTPRINT: Record<string, { along: number; from: number }> = {
+    // `from` is the piece's own start along its axis, relative to its pivot
+    wall: { along: 4, from: -2 },
+    wall_half: { along: 2, from: 0 },
+    wall_half_endcap: { along: 2, from: -2 },
+    wall_endcap: { along: 1.07, from: 0 },
+  };
+  const APERTURE = 2.0;   // the clear span of wall_doorway, measured; the module itself is 4u
+
+  /** Every placement, as a world-space interval on its own axis plus the cross-axis it sits on. */
+  const boxes = (cs: Cell[], w: number, h: number): { name: string; ax: 'H' | 'V'; lo: number; hi: number; cross: number }[] => {
+    const out: { name: string; ax: 'H' | 'V'; lo: number; hi: number; cross: number }[] = [];
+    for (const { x, y, placements } of gridPlacements(cs, w, h)) {
+      for (const p of placements) {
+        const name = p.url.split('/').pop()!.replace('.gltf.glb', '').replace('.glb', '').replace('#open', '');
+        const fp = FOOTPRINT[name];
+        if (!fp) continue;                                   // floors, openings, stairs — not run pieces
+        // cell centre is (2x, 2y); placement offsets are in half-cells, so world = centre + offset
+        const cx = 2 * x + p.x / 65536, cz = 2 * y + p.z / 65536;
+        const along = p.turn === 0 || p.turn === 2 ? 'H' : 'V';
+        const dir = p.turn === 0 || p.turn === 1 ? 1 : -1;    // turns 2/3 face back along the axis
+        const base = along === 'H' ? cx : cz;
+        const a = base + dir * fp.from, b = a + dir * fp.along;
+        out.push({ name, ax: along, lo: Math.min(a, b), hi: Math.max(a, b), cross: along === 'H' ? cz : cx });
+      }
+    }
+    return out;
+  };
+
+  /** A horizontal doorway at lattice point (px,py) with wall either side of it. */
+  const withDoor = (W: number, H: number, px: number, py: number, extra?: (c: Cell, x: number, y: number) => void): Cell[] => {
+    const cs: Cell[] = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const c = openCell();
+        if (y === py && x >= px - 2 && x <= px + 1) c.wallN = 'wall';
+        if (x === px && y === py) { c.wallType = 'arch'; c.open = 'open'; }
+        extra?.(c, x, y);
+        cs.push(c);
+      }
+    }
+    return cs;
+  };
+
+  const intruders = (cs: Cell[], W: number, H: number, px: number, py: number): string[] => {
+    // the module is centred on the lattice point, which is the cell's NW corner: world (2px-1, 2py-1)
+    const centre = 2 * px - 1, cross = 2 * py - 1;
+    const lo = centre - APERTURE / 2, hi = centre + APERTURE / 2;
+    return boxes(cs, W, H)
+      .filter((b) => b.ax === 'H' && Math.abs(b.cross - cross) < 0.01 && b.hi > lo + 1e-6 && b.lo < hi - 1e-6)
+      .map((b) => `${b.name} [${b.lo.toFixed(2)},${b.hi.toFixed(2)}]`);
+  };
+
+  it('a wall run that MEETS a doorway does not cap itself into it', () => {
+    expect(intruders(withDoor(7, 4, 3, 2), 7, 4, 3, 2)).toEqual([]);
+  });
+
+  it('...nor when a perpendicular wall arrives at the same point', () => {
+    const cs = withDoor(7, 5, 3, 2, (c, x, y) => { if (x === 3 && (y === 2 || y === 3)) c.wallW = 'wall'; });
+    // the perpendicular run's own last piece is a separate design question (see openingGroups); this
+    // asserts only that no CAP is driven into the aperture
+    expect(intruders(cs, 7, 5, 3, 2).filter((n) => n.startsWith('wall_endcap'))).toEqual([]);
+  });
+
+  it('a genuinely loose end STILL gets its cap — the fix must not remove all of them', () => {
+    const lone: Cell[] = [];
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 6; x++) {
+      const c = openCell();
+      if (y === 2 && (x === 2 || x === 3)) c.wallN = 'wall';   // a stub with both ends in open air
+      lone.push(c);
+    }
+    const caps = gridPlacements(lone, 6, 4).flatMap((e) => e.placements)
+      .filter((p) => p.url.includes('wall_endcap'));
+    expect(caps.length).toBe(2);
+  });
+});

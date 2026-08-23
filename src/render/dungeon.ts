@@ -311,12 +311,19 @@ export class Dungeon {
    * as many as the 4u tower it was tuned for. Nothing about the layout changes.
    */
   private dressing = true;
+  /**
+   * Pieces dropped for want of a host cell. This is the ONE path that turns the IR into geometry, and
+   * a bare `return` here is how a floor loses walls with nobody noticing — it measures 0 today, which
+   * is exactly the condition under which a silent drop stays invisible until it isn't.
+   */
+  private hostless = 0;
   /** One torch every N walled cells. Tuned for 4u; a 2u grid has four times the cells for the same
    *  floor, so the same number means four times the torches. */
   private torchEvery = 11;
   setDressing(on: boolean, torchEvery = 11): void { this.dressing = on; this.torchEvery = Math.max(1, torchEvery); }
 
   build(grids: StratumCellGrid[], stairs?: StairInfo[]): void {
+    this.hostless = 0;
     this.group.clear();
     this.strata = [];
     this.cells = [];
@@ -432,6 +439,12 @@ export class Dungeon {
       this.group.add(sub);
       this.strata.push({ surfaceY: sy, group: sub });
     }
+    /* A piece dropped for want of a host cell is invisible geometry, and this is the only path that
+       makes geometry. Say so rather than returning quietly — it reads 0 today, which is precisely
+       when a silent drop can start firing without anyone finding out. */
+    if (this.hostless > 0) {
+      console.warn(`[dungeon] ${this.hostless} piece(s) dropped: no walkable cell to host them`);
+    }
   }
 
   /**
@@ -464,7 +477,7 @@ export class Dungeon {
     if (!t) return;
     const x = toFloat(fromRaw(wp.x)), z = toFloat(fromRaw(wp.z));
     const host = this.placementHost(grid, x, z);
-    if (!host) return; // a tile beside a VOID seam with no walkable cell to host/reveal it.
+    if (!host) { this.hostless++; return; } // a VOID seam with no walkable cell to host/reveal it
     const o = t.clone(true);
     o.position.set(x, sy + toFloat(u.y), z);
     o.rotation.y = Dungeon.TURN_YAW[((u.turn % 4) + 4) % 4]!;
