@@ -71,6 +71,15 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   // Two different questions, not two settings of one. 'planar' asks what is FLAT with this face;
   // 'carve' asks what belongs to the same carved piece — the face plus the slants that roll off
   // it, stopping where the next piece's slant comes back up (a concave crease).
+  // The tolerance means something DIFFERENT in each mode, so each remembers its own value.
+  // In planar it is the whole boundary rule: how far off coplanar still counts as one face.
+  // In carve the concave creases draw the boundaries and the cone is only a cap on how far down
+  // a slant may roll before it stops belonging to its face — which is why it wants to be much
+  // higher. Measured on floor_tile_large, carve is FLAT at 17 facets from 65° to 89°; the wall
+  // agrees at 75°. Below ~60° the cone starts biting and orphaned slants reappear as slivers.
+  const TOL_FOR: Record<GrowMode, number> = { planar: 15, carve: 75 };
+  let curMode: GrowMode = 'planar';
+
   const modeRow = document.createElement('div');
   Object.assign(modeRow.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '6px 0 2px' } as Partial<CSSStyleDeclaration>);
   const modeLbl = document.createElement('span');
@@ -81,7 +90,21 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
   for (const [v, t] of [['planar', 'planar — flat faces'], ['carve', 'carved tile — face + its slants']]) {
     const o = document.createElement('option'); o.value = v!; o.textContent = t!; modeSel.appendChild(o);
   }
-  modeSel.addEventListener('change', () => { select()?.setMode(modeSel.value as GrowMode); sync(); renderGroups(); });
+  const applyTolText = (): void => {
+    tolVal.textContent = `${Number(tol.value).toFixed(1)}°`;
+    tolNote.textContent = curMode === 'carve'
+      ? 'how far a slant may roll off its face before it stops belonging to it'
+      : 'how far off coplanar a neighbour may be and still join';
+  };
+  modeSel.addEventListener('change', () => {
+    TOL_FOR[curMode] = Number(tol.value);          // remember where this mode was left
+    curMode = modeSel.value as GrowMode;
+    tol.value = String(TOL_FOR[curMode]);
+    const h = select();
+    h?.setMode(curMode);
+    h?.setTolerance(Number(tol.value));
+    applyTolText(); sync(); renderGroups();
+  });
   modeRow.append(modeLbl, modeSel);
   panel.appendChild(modeRow);
   const tolWrap = document.createElement('label');
@@ -198,7 +221,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
     enableTxt.style.color = cb.checked ? '#ffc76f' : '';
     sync();
   });
-  tol.addEventListener('input', () => { tolVal.textContent = `${Number(tol.value).toFixed(1)}°`; select()?.setTolerance(Number(tol.value)); sync(); renderGroups(); });
+  tol.addEventListener('input', () => { TOL_FOR[curMode] = Number(tol.value); applyTolText(); select()?.setTolerance(Number(tol.value)); sync(); renderGroups(); });
   bHide.addEventListener('click', () => { select()?.hideSelected(); sync(); refit(); say('hidden — Save to persist'); });
   bClear.addEventListener('click', () => { select()?.clearSelection(); sync(); });
   bUnhide.addEventListener('click', () => { select()?.unhideAll(); sync(); refit(); say('restored — Save to persist'); });
@@ -206,7 +229,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
     void save().then((r) => say(r.ok ? `saved ${select()?.counts().hidden ?? 0} hidden face(s)` : (r.error ?? 'save failed'), !r.ok));
   });
 
-  tolVal.textContent = '15.0°';
+  applyTolText();
   sync();
   renderGroups();
   container.appendChild(panel);
