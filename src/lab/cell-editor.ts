@@ -1167,6 +1167,14 @@ function initSplit(): void {
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('mouseup', () => { dragging = false; });
+// Ctrl/Cmd+S saves back to the loaded structure, or opens the name dialog when the grid came from
+// nowhere. The browser's own Save-page dialog is never what anyone wants on this screen.
+window.addEventListener('keydown', (ev) => {
+  if (ev.key !== 's' || !(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+  ev.preventDefault();
+  if (el('veil').classList.contains('on')) return;   // a dialog is already up — let it finish
+  void saveStructure(loadedName ?? undefined);
+});
 el('hint').textContent =
   'drag to paint · right-click ABSTAINS (restores the full domain) · dashed = undecided · '
   + 'the −/+ handles grow, shrink and slide the grid · the last column has no east-running edge and '

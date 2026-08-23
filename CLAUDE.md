@@ -120,7 +120,7 @@ somewhere the graph calls open, so PROOF 9 drives a real Anchor along the route 
 up the stairs. The 2u path is much heavier — ~12.5k meshes against 300, 43k solids against 5.7k — and
 instancing the walls is the open lever.
 
-A cell owns `{floor, wallN, wallW, corner, wallType, torch}`. **The stored grid is the lattice of POINTS**,
+A cell owns `{floor, wallN, wallW, corner, wallType, open, torch}`. **The stored grid is the lattice of POINTS**,
 not of cells: a w×h structure stores (w+1)×(h+1) entries **per STOREY**, so it owns all four of its
 borders and rotates losslessly. `levels` (absent = 1) stacks those lattices FLOOR_HEIGHT apart, which
 is how a staircase says there is a hole in the ceiling above it. `generateEmergentTower` builds the
@@ -136,6 +136,18 @@ it; only `floor` belongs to the cell south-east of it. **`corner` says only what
 (`none | column | balcony`) — passability comes from the wall type alone (`isOpenType`), because when
 both had a say they disagreed. `torch` is a flag whose FACING is sensed from the walls, never stored.
 
+`wallType` says WHAT A PIECE IS (arch, window, cracked…) and `open` says whether it has a hole, so
+the open/closed pairs the kit ships are one type plus a bit rather than two enum entries that happen
+to follow a convention.
+
+**DRAWN and WALK-THROUGH are different questions, and conflating them cost eleven wall types.**
+`moduleAt` asks whether a 4u module is drawn at a point — any non-`solid` type with wall either side
+and real ground under it. `openingAt` asks whether you can walk through it, and is what `cell-graph`,
+`cell-reach` and the verifier use. When one function answered both, `WALLTYPE_URL`'s only caller was
+gated on passability, so painting `cracked` or `window_barred` produced a blank wall. Emission and
+suppression must both ask `moduleAxis` — two hand-written conditions had already drifted apart on
+`rock` cells and on points live on both axes.
+
 **Three things are derived, never written down twice**: a stair flight's direction and mesh, an
 opening's axis, and a torch's facing. Each is read from the walls at draw time. Anything that is a
 fact about the walls belongs to the walls.
@@ -144,6 +156,10 @@ Two rules that keep biting if forgotten:
 - **Abstaining ≠ asserting.** A full domain says "no opinion" and every later phase reads it as
   "help yourself"; a pinned `none` says "this is air". A room must SAY its interior is air or the
   maze carves through it.
+- **"Is there a wall here?" ≠ "does THIS PASS draw it?"** `edgeDraw` returns who owns each edge —
+  `none` / `run` / `module` / `flight` — because when it returned a bare null for all four, `armsAt`
+  read a run that stopped at a doorway as a run stopping in mid-air and capped it into the aperture.
+  A quarter of every floor's openings had a full-height stub in them.
 - **`SETTLE_DEFAULTS` in `cell-field.ts` is shared** by the generator and the editor preview. Never
   preview with a bare `collapse` — it takes the canonical-lowest option, and the lowest floor
   material is `none`, so an unclaimed floor previews as a pit rather than the stone it becomes.

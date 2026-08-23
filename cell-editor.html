@@ -41,6 +41,9 @@
   .item { display: flex; align-items: center; gap: 6px; background: #1b1f25; border-radius: 6px;
           padding: 5px 8px; margin-bottom: 4px; }
   .item .nm { flex: 1; cursor: pointer; } .item .nm:hover { color: #7fc8a0; }
+  /* the piece the grid was loaded from — what the Save button will overwrite */
+  .item.cur { box-shadow: inset 0 0 0 1px #3b6ea5; }
+  .item.cur .nm { color: #7fc8a0; }
   #ready { margin-top: 10px; font-size: 11px; white-space: pre-line; }
   #status { margin-top: 8px; color: #8a939d; font-size: 11px; }
   .hint { color: #6f7780; font-size: 11px; margin-top: 12px; max-width: 60ch; }
