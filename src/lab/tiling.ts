@@ -204,6 +204,30 @@ export function ensureTilingTextures(): Promise<void> {
   return _building;
 }
 
+/**
+ * Clone a material WITHOUT losing its tiling shader.
+ *
+ * `THREE.Material.copy()` copies a fixed list of known properties, and `onBeforeCompile` /
+ * `customProgramCacheKey` are not on it — they are assigned as own properties by patchTilingDetail
+ * and a plain `.clone()` silently drops both. The clone then falls back to the prototype's empty
+ * `onBeforeCompile`, compiles the stock MeshStandardMaterial shader, and renders flat baked colour.
+ * Nothing errors; the surface just quietly stops being a surface.
+ *
+ * That is not hypothetical: the renderer clones every placed unit's material so the occlusion
+ * cutaway can fade one piece independently, which meant the whole dungeon rendered untiled while
+ * the templates it cloned FROM were patched correctly.
+ *
+ * Copying the function references is the right fix rather than re-patching: both are closures over
+ * this material's own uniform objects, so the clone shares the arrays and the slot table — which is
+ * exactly what should happen — while three still keeps uniform VALUES per material.
+ */
+export function cloneMaterial<T extends THREE.Material>(m: T): T {
+  const cl = m.clone() as T;
+  cl.onBeforeCompile = m.onBeforeCompile;
+  cl.customProgramCacheKey = m.customProgramCacheKey;
+  return cl;
+}
+
 /** Drop the arrays (frees GPU memory); the next ensure() rebuilds. */
 export function disposeTilingTextures(): void {
   _arrays?.diff.dispose();

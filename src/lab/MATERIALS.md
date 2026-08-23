@@ -260,3 +260,34 @@ auto-fit (box-fit, edge density auto-targets ≥95% fill) + recolor
   Its triplanar blend (3 samples, no hard switch at the dominant axis) is the one thing tiling.ts
   does NOT yet port — box-planar is exact for axis-aligned KayKit faces and cheaper.
 ```
+
+## Reaching the GAME, not just the lab
+
+`src/render/dungeon.ts` colours the tower through the same `applyRecolor`, so the shader is shared
+by construction. Two things have to hold for it to actually arrive, and BOTH failed silently until
+they were measured:
+
+1. **The arrays must exist before the first recolor.** `patchTilingDetail` returns early, without a
+   warning, when `ensureTilingTextures()` has not run. The lab always awaited it (world-object.ts,
+   alongside the GLB load); the game never did, so the tower rendered flat baked colour — no grain,
+   no relief, no roughness, no AO — and nothing errored.
+2. **A cloned material must keep its patch.** `THREE.Material.copy()` copies a fixed property list
+   that does NOT include `onBeforeCompile` or `customProgramCacheKey`, so a plain `.clone()` drops
+   the shader and falls back to stock MeshStandardMaterial. The renderer clones every placed unit
+   (so the occlusion cutaway can fade one piece alone), which meant the whole dungeon rendered
+   untiled while the templates it cloned from were patched correctly. Use `cloneMaterial()` from
+   tiling.ts anywhere a recolored material is copied.
+
+**Neither is visible in a screenshot you did not already have a baseline for**, which is why the
+check is mechanical rather than visual. Hook `WebGL2RenderingContext.prototype.shaderSource` and
+count how many compiled shaders contain `uTexArr`:
+
+```
+lab   —  8 shaders,  2 with uTexArr     (control: known good)
+game  — 48 shaders,  0 with uTexArr     before
+game  — 48 shaders,  1 with uTexArr     after
+```
+
+One is the correct number for the game: the shared cache key means every recolored material in the
+scene resolves to a single program. If that count is ever 0, the tower is not tiled no matter what
+the lab looks like.

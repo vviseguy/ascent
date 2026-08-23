@@ -40,10 +40,10 @@ import * as THREE from 'three';
 import { SWATCHES, type SwatchName, type SwatchRole } from './palette.ts';
 import { type Preset, getTypeSetting } from './texture-catalog.ts';
 import { dungeonCategory } from './object-category.ts';
-import { PRESET_SLOT as TILING_PRESET_SLOT, patchTilingDetail, ensureTilingTextures } from './tiling.ts';
+import { PRESET_SLOT as TILING_PRESET_SLOT, patchTilingDetail, ensureTilingTextures, cloneMaterial } from './tiling.ts';
 
 // Re-exported so world-object.ts keeps its single import from recolor.
-export { ensureTilingTextures };
+export { ensureTilingTextures, cloneMaterial };
 
 // The material TYPES + per-type texture/surface CONFIG live in texture-catalog.ts (shared with the
 // settings menu + URL). Re-export Preset so existing importers (recolor-legend) keep working.
