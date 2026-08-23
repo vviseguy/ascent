@@ -32,6 +32,9 @@ const u = (f: string): string => `${PACK}/${f}.gltf.glb`;
 /** The KayKit piece registry — the only place mesh urls are named. */
 export const PIECE = {
   half: u('wall_half'),
+  corner: u('wall_corner'),
+  barrier: u('barrier'),
+  barrierCorner: u('barrier_corner'),
   halfCap: u('wall_half_endcap'),
   pillar: u('pillar'),
   barrierHalf: u('barrier_half'),
@@ -499,16 +502,10 @@ export function cellPlacements(
      The last column's `wallN` and the last row's `wallW` point out of the structure entirely and are
      not part of it — drawing them added a phantom layer of wall around every piece. Note the two
      conditions are INDEPENDENT: the south border is `wallN` at py === fh, which is real. */
-  const coveredH = axis === 'H' || openingAt(cells, w, h, x + 1, y, 'H');
-  const coveredV = axis === 'V' || openingAt(cells, w, h, x, y + 1, 'V');
-  if (!coveredH && x < fw && !flightCoversWall(cells, w, h, x, y, 'N')) {
-    const p = wallPiece(c.wallN);
-    if (p) out.push(at(p, TURN.E, CX, CZ));
-  }
-  if (!coveredV && y < fh && !flightCoversWall(cells, w, h, x, y, 'W')) {
-    const p = wallPiece(c.wallW);
-    if (p) out.push(at(p, TURN.S, CX, CZ));
-  }
+  /* WALLS ARE NOT HERE. A wall segment is 2u, but the meshes that make walls look like walls are
+     bigger than that — a 4u straight, a mitered corner — and neither fits inside one cell. So they are
+     laid over the WHOLE GRID by `wallEdgePlacements`, which `gridPlacements` composes with this. See
+     the note there. */
 
   // CORNER — a pillar stands at the junction. `air` is a hole and draws nothing; `solid` is the
   // ordinary case where the wall runs simply meet.
@@ -522,14 +519,177 @@ export function cellPlacements(
 
 /** Every placement on the grid, in a fixed row-major order, each tagged with the cell it belongs to
  *  so a consumer can offset it to world space. */
+/* ---------------------------------- wall runs ---------------------------------- */
+
+/**
+ * WALLS ARE LAID OVER THE WHOLE GRID, not cell by cell.
+ *
+ * A wall segment is one 2u edge, and emitting a `wall_half` for each is correct but says nothing about
+ * what the wall IS. A corridor wall six cells long came out as six separate slabs butted end to end,
+ * and a corner came out as two of them overlapping at right angles — which is both more meshes than
+ * necessary and not what a wall looks like.
+ *
+ * The kit already has the right pieces, and they are already the right size: they were authored for
+ * the 4u tile, where each arm reaches 2.0 from the tile centre, which is EXACTLY one 2u edge. So
+ * `wall` spans two edges end to end, and `wall_corner` joins two perpendicular ones. Both families —
+ * wall and barrier — carry the same three shapes, so the rule is one rule.
+ *
+ * Two passes, greedy, in a fixed order so the result is deterministic:
+ *   1. CORNERS. A lattice point with exactly two incident edges, perpendicular, same family, becomes
+ *      one mitered piece and both edges are spent.
+ *   2. RUNS. Whatever is left is walked in maximal straight lines and tiled with 4u pieces, with a 2u
+ *      one for an odd last edge.
+ *
+ * Junctions of three or four arms are deliberately left to butt: `wall_Tsplit` and `wall_crossing`
+ * exist and would fit, but they consume arms that the runs through them also want, and getting that
+ * wrong leaves a gap in a wall rather than an ugly join. Straights and corners are where nearly all
+ * the pieces are.
+ */
+type WallFamily = 'wall' | 'barrier';
+const FAMILY: Record<WallFamily, { full: string; half: string; corner: string }> = {
+  wall: { full: PIECE.wall, half: PIECE.half, corner: PIECE.corner },
+  barrier: { full: PIECE.barrier, half: PIECE.barrierHalf, corner: PIECE.barrierCorner },
+};
+/** `sloped` has no mesh of its own and stands in as wall, exactly as `wallPiece` has it. */
+const familyOf = (seg: Seg): WallFamily | null =>
+  seg === 'barrier' ? 'barrier' : seg === 'wall' || seg === 'sloped' ? 'wall' : null;
+
+/** `wall_corner`'s legs sit on W+S at turn 0; each further quarter-turn rotates the pair. */
+const CORNER_TURN: Record<string, number> = { WS: 0, SE: 1, EN: 2, NW: 3 };
+
+/**
+ * Every wall edge the grid actually draws, laid out as whole pieces. Returned keyed by the cell each
+ * piece is attributed to, so `gridPlacements` can fold it in — a piece may reach beyond that cell,
+ * which is the whole point.
+ */
+export function wallEdgePlacements(
+  cells: readonly (Cell | null)[], w: number, h: number,
+  floorExtent?: { w: number; h: number },
+): Map<number, CellPlacement[]> {
+  const fw = floorExtent?.w ?? w, fh = floorExtent?.h ?? h;
+  const out = new Map<number, CellPlacement[]>();
+  const push = (cx: number, cy: number, p: CellPlacement): void => {
+    const k = cy * w + cx;
+    const list = out.get(k);
+    if (list) list.push(p); else out.set(k, [p]);
+  };
+
+  /** The family of the edge running `dir` from lattice point (px,py), or null if nothing is drawn. */
+  const edge = (px: number, py: number, dir: 'E' | 'S'): WallFamily | null => {
+    const c = cellAt(cells, w, h, px, py);
+    if (!c) return null;
+    if (dir === 'E') {
+      if (px >= fw) return null;                                     // no such edge on this lattice
+      if (openingAxis(cells, w, h, px, py) === 'H') return null;      // an opening spans it
+      if (openingAt(cells, w, h, px + 1, py, 'H')) return null;
+      if (flightCoversWall(cells, w, h, px, py, 'N')) return null;    // a walled flight draws it
+      return familyOf(c.wallN);
+    }
+    if (py >= fh) return null;
+    if (openingAxis(cells, w, h, px, py) === 'V') return null;
+    if (openingAt(cells, w, h, px, py + 1, 'V')) return null;
+    if (flightCoversWall(cells, w, h, px, py, 'W')) return null;
+    return familyOf(c.wallW);
+  };
+
+  // spent[k] marks an edge already covered by a piece; E and S are tracked separately
+  const spentE = new Uint8Array(w * h), spentS = new Uint8Array(w * h);
+  const isSpent = (px: number, py: number, dir: 'E' | 'S'): boolean =>
+    (dir === 'E' ? spentE : spentS)[py * w + px] === 1;
+  const spend = (px: number, py: number, dir: 'E' | 'S'): void => {
+    (dir === 'E' ? spentE : spentS)[py * w + px] = 1;
+  };
+
+  /* ---- 1. CORNERS ---- */
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      // the four arms meeting at this point, each one whole edge long
+      const arms: { d: string; px: number; py: number; dir: 'E' | 'S'; fam: WallFamily }[] = [];
+      const add = (d: string, ax: number, ay: number, dir: 'E' | 'S'): void => {
+        if (ax < 0 || ay < 0) return;
+        const f = edge(ax, ay, dir);
+        if (f && !isSpent(ax, ay, dir)) arms.push({ d, px: ax, py: ay, dir, fam: f });
+      };
+      add('E', px, py, 'E');
+      add('W', px - 1, py, 'E');
+      add('S', px, py, 'S');
+      add('N', px, py - 1, 'S');
+      if (arms.length !== 2) continue;
+      const [a, b] = arms as [typeof arms[0], typeof arms[0]];
+      if (a.fam !== b.fam) continue;
+      const key = (a.d + b.d) in CORNER_TURN ? a.d + b.d : b.d + a.d;
+      const turn = CORNER_TURN[key];
+      if (turn === undefined) continue;         // opposite arms: a straight, not a corner
+      push(px, py, at(FAMILY[a.fam].corner, turn, NEG_ONE, NEG_ONE));
+      spend(a.px, a.py, a.dir);
+      spend(b.px, b.py, b.dir);
+    }
+  }
+
+  /* ---- 2. RUNS ---- */
+  const layRun = (sx: number, sy: number, dir: 'E' | 'S', fam: WallFamily, len: number): void => {
+    const stepX = dir === 'E' ? 1 : 0, stepY = dir === 'E' ? 0 : 1;
+    const turn = dir === 'E' ? TURN.E : TURN.S;
+    let i = 0;
+    while (i < len) {
+      const px = sx + stepX * i, py = sy + stepY * i;
+      // offsets are cell-local half-cell units, and one edge is TWO of them
+      const ox = NEG_ONE, oz = NEG_ONE;
+      if (len - i >= 2) {
+        // a 4u piece is CENTRED, so it sits one edge along from the point it starts at
+        const mid = fromInt(2);
+        push(px, py, at(FAMILY[fam].full, turn,
+          dir === 'E' ? add(ox, mid) : ox, dir === 'E' ? oz : add(oz, mid)));
+        i += 2;
+      } else {
+        push(px, py, at(FAMILY[fam].half, turn, ox, oz));
+        i += 1;
+      }
+    }
+  };
+
+  for (const dir of ['E', 'S'] as const) {
+    const outer = dir === 'E' ? h : w;
+    const inner = dir === 'E' ? w : h;
+    for (let o = 0; o < outer; o++) {
+      let i = 0;
+      while (i < inner) {
+        const px = dir === 'E' ? i : o, py = dir === 'E' ? o : i;
+        const fam = edge(px, py, dir);
+        if (!fam || isSpent(px, py, dir)) { i++; continue; }
+        // how far does this run of the SAME family go before it stops or hits a spent edge?
+        let len = 0;
+        while (i + len < inner) {
+          const qx = dir === 'E' ? i + len : o, qy = dir === 'E' ? o : i + len;
+          if (edge(qx, qy, dir) !== fam || isSpent(qx, qy, dir)) break;
+          len++;
+        }
+        layRun(px, py, dir, fam, len);
+        for (let k = 0; k < len; k++) {
+          spend(dir === 'E' ? i + k : o, dir === 'E' ? o : i + k, dir);
+        }
+        i += len;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The whole grid: what each cell owns, plus the walls laid across it. This is THE producer — the
+ * renderer and the collision compiler both read it, so they agree by construction.
+ */
 export function gridPlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
   floorExtent?: { w: number; h: number },
 ): { x: number; y: number; placements: CellPlacement[] }[] {
+  const walls = wallEdgePlacements(cells, w, h, floorExtent);
   const out: { x: number; y: number; placements: CellPlacement[] }[] = [];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const placements = cellPlacements(cells, w, h, x, y, floorExtent);
+      const wp = walls.get(y * w + x);
+      if (wp) placements.push(...wp);
       if (placements.length) out.push({ x, y, placements });
     }
   }

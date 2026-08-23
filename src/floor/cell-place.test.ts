@@ -9,8 +9,16 @@ const grid = (mut: (c: Cell, x: number, y: number) => void = () => {}): Cell[] =
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = openCell(); mut(c, x, y); out.push(c); }
   return out;
 };
+/** What cell (x,y) draws, walls included. Walls come from the GRID pass — they are laid in whole
+ *  pieces that can span cells — so this goes through `gridPlacements`, which is the producer both the
+ *  renderer and the collision compiler read. */
 const urls = (cs: Cell[], x: number, y: number): string[] =>
-  cellPlacements(cs, W, H, x, y).map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+  (gridPlacements(cs, W, H).find((e) => e.x === x && e.y === y)?.placements ?? [])
+    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+/** Every piece on the whole grid — for asserting about walls, which no longer belong to one cell. */
+const allUrls = (cs: Cell[], w = W, h = H): string[] =>
+  gridPlacements(cs, w, h).flatMap((e) => e.placements)
+    .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
 
 describe('cell-place — one piece per thing the cell owns', () => {
   it('an open cell is just its floor', () => {
@@ -22,17 +30,40 @@ describe('cell-place — one piece per thing the cell owns', () => {
     expect(p.scale).toBe(32768); // 0.5 in Q16.16
   });
 
-  it('each owned wall adds exactly one 2u piece', () => {
+  it('a lone wall segment is one 2u piece', () => {
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }), 1, 1))
       .toEqual(['floor_tile_large', 'wall_half']);
-    expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.wallN = 'wall'; c.wallW = 'wall'; } }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_half', 'wall_half']);
   });
 
-  it('the two owned walls point along different axes', () => {
-    const ps = cellPlacements(grid((c, x, y) => { if (x === 1 && y === 1) { c.wallN = 'wall'; c.wallW = 'wall'; } }), W, H, 1, 1)
-      .filter((p) => p.url.includes('wall_half'));
-    expect(new Set(ps.map((p) => p.turn)).size).toBe(2);
+  it('TWO PERPENDICULAR segments become one mitered corner, not two slabs at right angles', () => {
+    // the kit's corner reaches a whole 2u edge down each leg, which is exactly what meets here
+    expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.wallN = 'wall'; c.wallW = 'wall'; } }), 1, 1))
+      .toEqual(['floor_tile_large', 'wall_corner']);
+  });
+
+  it('a straight RUN becomes 4u pieces — one mesh per two segments, not one per segment', () => {
+    // four segments in a line — the grid is 4 wide, so x 0..3 is a full row of edges
+    const cs = grid((c, x, y) => { if (y === 1) c.wallN = 'wall'; });
+    const walls = allUrls(cs).filter((u) => u.startsWith('wall'));
+    expect(walls.filter((u) => u === 'wall')).toHaveLength(2);
+    expect(walls.filter((u) => u === 'wall_half')).toHaveLength(0);
+  });
+
+  it('an ODD run finishes with a 2u piece', () => {
+    const cs = grid((c, x, y) => { if (y === 1 && x <= 2) c.wallN = 'wall'; });
+    const walls = allUrls(cs).filter((u) => u.startsWith('wall'));
+    expect(walls.filter((u) => u === 'wall')).toHaveLength(1);
+    expect(walls.filter((u) => u === 'wall_half')).toHaveLength(1);
+  });
+
+  it('a barrier run uses the BARRIER family, and never mixes with the wall one', () => {
+    const cs = grid((c, x, y) => {
+      if (y === 1 && x <= 1) c.wallN = 'barrier';
+      if (y === 3 && x <= 1) c.wallN = 'wall';
+    });
+    const u = allUrls(cs);
+    expect(u).toContain('barrier');   // the 4u barrier, not two halves
+    expect(u).toContain('wall');
   });
 
   it('a barrier gets the low piece, and a column the pillar', () => {
@@ -47,9 +78,10 @@ describe('cell-place — one piece per thing the cell owns', () => {
       .toContain('wall_half');
   });
 
-  it('a ROCK cell emits nothing at all — it is not a place', () => {
-    expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.floor = 'rock'; c.wallN = 'wall'; } }), 1, 1))
-      .toEqual([]);
+  it('a ROCK cell lays no ground of its own — it is not a place', () => {
+    // its WALL is still drawn; walls belong to the grid, not to the cell that happens to be solid
+    const out = urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.floor = 'rock'; c.wallN = 'wall'; } }), 1, 1);
+    expect(out.filter((u) => u.includes('floor'))).toEqual([]);
   });
 
   it('a PIT emits no ground but keeps its walls', () => {
@@ -138,9 +170,13 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
       c.wallW = 'wall';
       return c;
     });
+    /* Count EDGES covered, not pieces: the grid pass lays whole runs, so a 4u piece is two edges and
+       a mitered corner is two. What the padding rule is about is which edges EXIST, and that is the
+       quantity that must not change when pieces get bigger. */
+    const EDGES: Record<string, number> = { wall: 2, wall_corner: 2, wall_half: 1, barrier: 2, barrier_corner: 2, barrier_half: 1 };
     const walls = (fx?: { w: number; h: number }): number =>
       gridPlacements(cs, sw, sh, fx).flatMap((e) => e.placements)
-        .filter((p) => p.url.includes('wall_half')).length;
+        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace('.gltf.glb', '')] ?? 0), 0);
 
     // every point has both walls set, so without a floor extent every one is drawn
     expect(walls()).toBe(sw * sh * 2);
@@ -159,7 +195,8 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     return out;
   };
   const drew = (cs: Cell[], x: number, y: number): string[] =>
-    cellPlacements(cs, SW, SH, x, y).map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
+    (gridPlacements(cs, SW, SH).find((e) => e.x === x && e.y === y)?.placements ?? [])
+      .map((p) => p.url.split('/').pop()!.replace('.gltf.glb', ''));
   /** Only the GROUND a cell lays — its own walls are a separate question from whose flight it is in. */
   const ground = (cs: Cell[], x: number, y: number): string[] =>
     drew(cs, x, y).filter((u) => u.includes('floor') || u.includes('stairs'));
