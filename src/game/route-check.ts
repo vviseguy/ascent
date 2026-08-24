@@ -310,7 +310,9 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
       let hit = false;
       for (const bi of near) {
         const s2 = solids[bi]!;
-        if (F(s2.maxY) <= y0 || F(s2.minY) >= y1) continue;
+        // ignore anything that does not rise more than one STEP above the surface being stepped onto:
+        // that is the step itself, or the next tread — not something standing in the way
+        if (F(s2.maxY) <= y0 + probe.maxStep || F(s2.minY) >= y1) continue;
         if (x <= F(s2.minX) || x >= F(s2.maxX) || z <= F(s2.minZ) || z >= F(s2.maxZ)) continue;
         hit = true; break;
       }
@@ -408,14 +410,16 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
       if (b.top - a.top > probe.maxStep) continue; // too high to hop (drops are free)
       if (b.minX >= a.maxX + probe.reach || b.maxX <= a.minX - probe.reach) continue;
       if (b.minZ >= a.maxZ + probe.reach || b.maxZ <= a.minZ - probe.reach) continue;
-      // ONLY BETWEEN SURFACES AT THE SAME HEIGHT. Something standing above the seam between two
-      // level surfaces is a wall; between surfaces at different heights it is usually the STEP
-      // itself — a staircase's higher treads sit above its lower ones, which is what a staircase is.
-      // Telling those apart needs the swept-path model this check explicitly is not, so a hop is
-      // left to the input-driven climbs to falsify. (Applying it to hops rejected the 4u tower's own
-      // staircase, which PROOF 8 demonstrably walks.)
+      /* ASKED OF EVERY EDGE NOW, INCLUDING STEP-UPS — and the trick is telling a STEP from a WALL.
+         This used to be skipped whenever the two surfaces differed in height, because a staircase's
+         higher treads sit above its lower ones and reading them naively as obstructions rejected the
+         4u tower's own staircase. But skipping meant the check would happily step UP THROUGH A WALL,
+         and PROOF 9 caught exactly that: it routed onto a flight whose foot has a full-height wall
+         across it, and the body wedged there.
+         The distinction is HOW FAR an obstruction rises above the surface you are stepping onto. The
+         next tread of a staircase clears it by half a step; a wall clears it by metres. */
       lastGate = null;
-      if (Math.abs(b.top - a.top) < 0.05 && seamBlocked(a, b)) continue;
+      if (seamBlocked(a, b)) continue;
       if (lastGate) gateAt.set(`${ai}>${j}`, lastGate);
       visited[j] = true;
       prev[j] = ai;
