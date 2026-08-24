@@ -111,7 +111,33 @@ let brushes: Record<string, Stored> = {};
 // not (yet) any stored structure: a fresh page, or one that has been cleared.
 let loadedName: string | null = null;
 
-const blankGrid = (): CellField[] => Array.from({ length: (W + 1) * (H + 1) * LEVELS }, fullField);
+/**
+ * A BLANK CELL IS EMPTY, not undecided.
+ *
+ * It used to be `fullField()` — abstaining on everything — which previews through the generator's
+ * settle defaults and so came up as STONE GROUND. Starting an authoring session on a slab of floor
+ * means you are carving, not building, and you cannot see the shape of what you have drawn.
+ *
+ * These are PINNED, not abstaining, and that difference is the whole point: pinned `none` says "there
+ * is nothing here", which is a claim a structure makes about its own footprint. Right-click still
+ * abstains a field when you want to say "no opinion, generator's choice" instead — the existing
+ * structures use both deliberately.
+ *
+ * NOT the generator's `SETTLE_DEFAULTS`: unclaimed ground out in the world is stone because nothing
+ * stamps it, and flipping that default turns 73% of a floor into holes. This is the authoring
+ * surface's starting point and nothing else.
+ */
+const emptyField = (): CellField => ({
+  floor: floors('none'),
+  wallN: segs('none'),
+  wallW: segs('none'),
+  corner: corners('none'),
+  wallType: wallTypes('solid'),
+  open: opens('closed'),
+  torch: torches('no'),
+});
+
+const blankGrid = (): CellField[] => Array.from({ length: (W + 1) * (H + 1) * LEVELS }, emptyField);
 const el = (id: string): HTMLElement => document.getElementById(id)!;
 
 function h(tag: string, attrs: Record<string, unknown> = {}, ...kids: (Node | string)[]): HTMLElement {
@@ -351,7 +377,7 @@ function edge(side: 'N' | 'S' | 'E' | 'W', delta: 1 | -1): void {
   const shiftX = side === 'W' ? delta : 0;
   const shiftY = side === 'N' ? delta : 0;
   const oldLevel = levelSize(), newLevel = (nw + 1) * (nh + 1);
-  const next: CellField[] = Array.from({ length: newLevel * LEVELS }, fullField);
+  const next: CellField[] = Array.from({ length: newLevel * LEVELS }, emptyField);
   for (let lv = 0; lv < LEVELS; lv++) {           // every storey resizes together — they are one shape
     for (let py = 0; py <= H; py++) {
       for (let px = 0; px <= W; px++) {
@@ -370,7 +396,7 @@ function edge(side: 'N' | 'S' | 'E' | 'W', delta: 1 | -1): void {
 /** Add a storey ABOVE the current one, blank (abstaining), and move to it. */
 function addLevel(): void {
   pushUndo();
-  const blank = Array.from({ length: levelSize() }, fullField);
+  const blank = Array.from({ length: levelSize() }, emptyField);
   cells = [...cells, ...blank];
   LEVELS++;
   L = LEVELS - 1;
@@ -430,7 +456,7 @@ function moveLevel(dir: -1 | 1): void {
 /** Blank the current storey without disturbing the ones above or below it. */
 function clearLevel(): void {
   pushUndo();
-  cells = clearLevelAt(cells, levelSize(), L, fullField);
+  cells = clearLevelAt(cells, levelSize(), L, emptyField);
   buildPanel();
 }
 
@@ -1270,7 +1296,7 @@ async function saveBrush(): Promise<void> {
   const out: CellField[] = [];
   for (let y = y0; y <= y1 + 1; y++) {
     for (let x = x0; x <= x1 + 1; x++) {
-      out.push({ ...(norm[Math.min(y, H) * stride() + Math.min(x, W)] ?? fullField()) });
+      out.push({ ...(norm[Math.min(y, H) * stride() + Math.min(x, W)] ?? emptyField()) });
     }
   }
   if (await post('cell-brushes', name, { structure: { w: bw, h: bh, cells: out } })) {
