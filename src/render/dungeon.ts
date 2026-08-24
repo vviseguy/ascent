@@ -255,6 +255,8 @@ export class Dungeon {
     this.fogBoxes = params.get('fog') === 'boxes';
     const cut = Number(params.get('cut'));
     if (Number.isFinite(cut) && cut >= 0 && cut <= 1) this.cutRadiusFrac = cut;
+    const lift = Number(params.get('fogLift'));
+    if (Number.isFinite(lift) && lift >= 0 && lift <= 4) this.fogLift.value = lift;
     this.bareTemplates = params.get('bare') === '1';
 
     // THE TILING ARRAYS MUST EXIST BEFORE THE FIRST RECOLOR.
@@ -426,6 +428,8 @@ export class Dungeon {
   private readonly fogGridB = { value: new THREE.Vector4(0, 0, 0, 1) };
   /** 0 = draw everything (no clip); 1 = clip to the explored mask. */
   private readonly fogOn = { value: 0 };
+  /** How far above its deck the ink starts, so the floor slab beneath it still shows. `?fogLift=`. */
+  private readonly fogLift = { value: 0.14 };
   private readonly fogTexU: { value: THREE.Texture | null } = { value: null };
   /** `?fog=boxes` restores the old drawn-over cubes, for comparison. */
   private fogBoxes = false;
@@ -750,13 +754,15 @@ export class Dungeon {
       shader.uniforms['uFogA'] = this.fogGridA;
       shader.uniforms['uFogB'] = this.fogGridB;
       shader.uniforms['uFogOn'] = this.fogOn;
+      shader.uniforms['uFogLift'] = this.fogLift;
 
       shader.vertexShader = 'varying vec3 vFogWorld;\n' + shader.vertexShader.replace(
         '#include <begin_vertex>',
         '#include <begin_vertex>\n  vFogWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
       );
       shader.fragmentShader =
-        'uniform sampler2D uFogMask;\nuniform vec4 uFogA;\nuniform vec4 uFogB;\nuniform float uFogOn;\n'
+        'uniform sampler2D uFogMask;\nuniform vec4 uFogA;\nuniform vec4 uFogB;\n'
+        + 'uniform float uFogOn;\nuniform float uFogLift;\n'
         + 'varying vec3 vFogWorld;\n'
         + shader.fragmentShader.replace(
           'void main() {',
@@ -768,7 +774,13 @@ export class Dungeon {
             // lands one storey low
             float fst  = floor((vFogWorld.y - uFogB.z + 0.05) / uFogB.w);
             fst = clamp(fst, 0.0, uFogB.y - 1.0);
-            if (fcol >= 0.0 && fcol < uFogA.w && frow >= 0.0 && frow < uFogB.x) {
+            /* THE INK IS LIFTED off its own deck. Clipping the whole column took the floor slab with
+               it, so an unexplored cell was a hole right through the storey and you saw past the
+               ground rather than onto it. Starting the clip a little above the deck leaves the slab's
+               top surface showing, so the ground still reads as ground under the dark. */
+            float deck = uFogB.z + fst * uFogB.w;
+            if (vFogWorld.y > deck + uFogLift
+                && fcol >= 0.0 && fcol < uFogA.w && frow >= 0.0 && frow < uFogB.x) {
               float tx = (fcol + 0.5) / uFogA.w;
               float ty = (fst * uFogB.x + frow + 0.5) / (uFogB.x * uFogB.y);
               if (texture2D(uFogMask, vec2(tx, ty)).r < 0.5) discard;
