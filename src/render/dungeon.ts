@@ -732,11 +732,37 @@ export class Dungeon {
     if (!this.fogTex || !this.fogDirty) return;
     this.fogDirty = false;
     const w = this.fogGridA.value.w, h = this.fogGridB.value.x;
+    const n = this.fogGridB.value.y;
     this.fogData.fill(0);
+
+    /* VISIBILITY IS PER TILE, and a WALL BELONGS TO A FACE.
+       A tile is shown or not — one bit, no fuzz. But a wall stands on the boundary BETWEEN two tiles
+       and belongs to neither, so it has to show when EITHER of them does; otherwise the wall of the
+       room you are standing in disappears because its far face happens to lie in the dark.
+       That is done here, by DILATING the mask one tile in each direction, rather than in the shader.
+       The shader used to fudge it by sampling half a cell around each fragment, which cost five taps
+       and only approximately meant "my face" — this is one tap and says exactly what it means.
+       The cost is that a prop one tile into the dark shows too. That is a fair trade: the alternative
+       is walls vanishing, and seeing the near edge of the next room is how a lit room actually looks. */
+    const seen = new Uint8Array(this.fogData.length);
     for (const c of this.cells) {
       if (!c.explored) continue;
       const i = (c.stratum * h + c.row) * w + c.col;
-      if (i >= 0 && i < this.fogData.length) this.fogData[i] = 255;
+      if (i >= 0 && i < seen.length) seen[i] = 1;
+    }
+    for (let st = 0; st < n; st++) {
+      for (let r = 0; r < h; r++) {
+        for (let cl = 0; cl < w; cl++) {
+          const i = (st * h + r) * w + cl;
+          if (seen[i] === 1) { this.fogData[i] = 255; continue; }
+          // any FACE-adjacent tile seen means the wall on that face has to be drawn
+          const up = r > 0 && seen[(st * h + r - 1) * w + cl] === 1;
+          const dn = r + 1 < h && seen[(st * h + r + 1) * w + cl] === 1;
+          const lf = cl > 0 && seen[(st * h + r) * w + cl - 1] === 1;
+          const rt = cl + 1 < w && seen[(st * h + r) * w + cl + 1] === 1;
+          if (up || dn || lf || rt) this.fogData[i] = 255;
+        }
+      }
     }
     this.fogTex.needsUpdate = true;
   }
@@ -784,29 +810,14 @@ export class Dungeon {
             float deck = uFogB.z + fst * uFogB.w;
             if (vFogWorld.y > deck + uFogLift
                 && fcol >= 0.0 && fcol < uFogA.w && frow >= 0.0 && frow < uFogB.x) {
-              /* A WALL BELONGS TO A BOUNDARY, NOT TO A CELL. It straddles the line between two of
-                 them, so its two faces land in DIFFERENT cells — and a wall between explored and
-                 unexplored ground had exactly half of it clipped, which reads as the wall simply
-                 not being there.
-                 So a fragment asks about its own cell AND about anything within a hair under half a
-                 cell of it: near a boundary that reaches across into the neighbour, and a piece
-                 sitting in the MIDDLE of a cell cannot reach anything, so it still obeys its own
-                 cell. The visibility rule propagates to the walls without the walls needing to know
-                 whose they are. */
-              float e = uFogA.z * 0.45;
-              float vis = 0.0;
-              for (int i = 0; i < 5; i++) {
-                vec2 o = i == 0 ? vec2(0.0, 0.0)
-                       : i == 1 ? vec2( e, 0.0) : i == 2 ? vec2(-e, 0.0)
-                       : i == 3 ? vec2(0.0,  e) : vec2(0.0, -e);
-                float c2 = floor((vFogWorld.x + o.x - uFogA.x) / uFogA.z + 0.5);
-                float r2 = floor((vFogWorld.z + o.y - uFogA.y) / uFogA.z + 0.5);
-                if (c2 < 0.0 || c2 >= uFogA.w || r2 < 0.0 || r2 >= uFogB.x) continue;
-                float tx = (c2 + 0.5) / uFogA.w;
-                float ty = (fst * uFogB.x + r2 + 0.5) / (uFogB.x * uFogB.y);
-                vis = max(vis, texture2D(uFogMask, vec2(tx, ty)).r);
-              }
-              if (vis < 0.5) discard;
+              /* ONE TAP. The wall rule lives in the MASK now (see syncFogMask), which dilates it one
+                 tile so a face shows when either of its tiles does. This used to sample five times
+                 around the fragment to approximate the same thing.
+                 NO BACKTICKS IN HERE — this GLSL is a JS template literal, and a stray backtick ends
+                 the string mid-shader. */
+              float tx = (fcol + 0.5) / uFogA.w;
+              float ty = (fst * uFogB.x + frow + 0.5) / (uFogB.x * uFogB.y);
+              if (texture2D(uFogMask, vec2(tx, ty)).r < 0.5) discard;
             }
           }`,
         );
@@ -1190,7 +1201,10 @@ export class Dungeon {
     const seen = new Set<number>([this.cellKey(start.stratum, start.col, start.row)]);
     while (queue.length) {
       const { rec, depth } = queue.shift()!;
-      rec.explored = true;
+      // count it, or the mask never learns. `exploredCount` is what marks the texture dirty, and the
+      // flood used to set the flag straight — so a cell revealed ONLY by the flood stayed inked until
+      // some unrelated sight reveal happened to bump the counter.
+      if (!rec.explored) { rec.explored = true; this.exploredCount++; }
       if (depth >= FOG_BFS_DEPTH) continue;
       for (const [bit, dc, dr] of steps) {
         if ((rec.wallMask & bit) !== 0) continue; // a wall on this side blocks the flow
