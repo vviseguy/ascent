@@ -103,6 +103,13 @@ const FOG_BFS_DEPTH = 6;
 /** How far line of sight reaches. Sight is stopped by walls, so this is only a cap on the cost of
  *  the trace — a long hall reveals its whole length, a corridor reveals as far as its first turn. */
 const FOG_LOS_RANGE = 24;
+/** How big the hole is, as a fraction of the smaller screen dimension. */
+const CUT_RADIUS_FRAC = 0.10;
+/** Pulled toward the camera so the player's own cell and the ground they stand on are never cut. */
+const CUT_DEPTH_BIAS = 0.0008;
+/** Centre the hole on the player's CHEST rather than their feet, so it frames them. */
+const CUT_EYE_RAISE = 1.0;
+
 /** Occlusion cutaway: how fast a wall fades out/in when it (un)blocks the player (/s). */
 const OCCLUDE_FADE_RATE = 9;
 /** Min opacity a wall fades to while it occludes the local player. */
@@ -138,6 +145,10 @@ interface CellRec {
   wallMask: number;
   /** true for a real walkable cell (BFS only flows between walkable cells). */
   walkable: boolean;
+  /** part of a stair flight — the only place the route graph climbs. */
+  stair: boolean;
+  /** no floor: a hole. You can DROP through one, which is a one-way edge downward. */
+  hole: boolean;
   group: THREE.Group;
   /** the grid-aligned black cube hiding this cell while unexplored (null for stair extras). */
   fog: THREE.Mesh | null;
@@ -204,6 +215,7 @@ export class Dungeon {
   /** DEBUG A/B (?shell=classic): texture the shell the OLD way — one fixed PBR material per
    *  surface KIND (classifySurface → get()), no per-pixel recolor. For comparison. */
   private classicShell = false;
+  /** `?fog=boxes`: restore the OLD drawn-over ink cubes instead of the shader clip, for comparison. */
   /** DEV (?fog=off): reveal every cell at build (no black fog cubes) — for inspecting generation. */
   private fogOff = false;
   /** DEV (?bare=1): floor mesh ONLY on ROOM (template) cells, so corridors read as empty and the
@@ -239,6 +251,7 @@ export class Dungeon {
     this.rawColoring = params.get('raw') === '1' || themeParam === 'raw' || themeParam === 'none';
     this.classicShell = params.get('shell') === 'classic';
     this.fogOff = params.get('fog') === 'off';
+    this.fogBoxes = params.get('fog') === 'boxes';
     this.bareTemplates = params.get('bare') === '1';
 
     // THE TILING ARRAYS MUST EXIST BEFORE THE FIRST RECOLOR.
@@ -275,7 +288,14 @@ export class Dungeon {
       const g = await loader.loadAsync(stripFragment(url));
       if (wantsOpen(url)) openDoorLeaves(g.scene);
       if (!this.rawColoring && !this.classicShell) applyRecolor(g.scene, url, 'position');
-      g.scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      g.scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.castShadow = true; m.receiveShadow = true;
+        // ONE choke point: patch the TEMPLATE, and `cloneMaterial` carries `onBeforeCompile` into
+        // every per-piece clone, so the clip reaches all of them without a second traversal.
+        for (const mm of Array.isArray(m.material) ? m.material : [m.material]) this.patchFogClip(mm);
+      });
       return [url, g.scene] as const;
     }));
     for (const [url, scene] of unitLoaded) this.unitTpl.set(url, scene);
@@ -318,6 +338,11 @@ export class Dungeon {
     // atlas (returns null), fall back to PBR-by-class so the piece is never left untextured.
     const resolved = applyRecolor(scene, DIR + url, 'position');
     if (!resolved) scene.traverse((o) => this.applyMaterial(tileKey, o as THREE.Mesh));
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      for (const mm of Array.isArray(m.material) ? m.material : [m.material]) this.patchFogClip(mm);
+    });
     return Promise.resolve();
   }
 
@@ -361,6 +386,46 @@ export class Dungeon {
   private hostless = 0;
   /** The cell the last line-of-sight trace ran from, so standing still costs nothing. */
   private lastLosCell = -1;
+  /** The cell the last route cull ran from — the answer only changes when the player moves cell. */
+  private lastCullCell = -1;
+  /**
+   * THE CUT. `xy` = the player's position on screen in PHYSICAL pixels, `z` = the radius in the same
+   * units (0 disables it), `w` = the player's window-space depth.
+   *
+   * ONE uniform object, shared by every occluder material, so the whole effect is a single write per
+   * frame no matter how many thousands of wall pieces are on screen.
+   */
+  private readonly cutUniform = { value: new THREE.Vector4(0, 0, 0, 1) };
+
+  /**
+   * THE INK, AS A CLIP RATHER THAN A LID.
+   *
+   * It used to be one black BOX per unexplored cell — eighteen thousand of them on a five-storey
+   * tower — drawn over the top of everything. A box does not hide a cell, it hides everything BEHIND
+   * the cell as well, so from any raised camera the unexplored region became a wall of black across
+   * most of the screen, and it got worse the moment the boxes were given their correct (wall) height.
+   *
+   * Now the unexplored region is a MASK the shader reads, and geometry inside it is discarded per
+   * fragment. Nothing is painted over: a wall straddling the boundary keeps the part sticking out and
+   * loses the part inside, and you can see straight past an unexplored cell to whatever is beyond it.
+   * It also deletes those eighteen thousand meshes.
+   *
+   * One byte per cell, strata stacked down the texture: `(stratum * h + row) * w + col`.
+   */
+  private fogTex: THREE.DataTexture | null = null;
+  private fogData: Uint8Array = new Uint8Array(0);
+  private fogDirty = false;
+  /** How many cells are explored — a cheap way to notice a reveal without rescanning. */
+  private exploredCount = 0;
+  /** originX, originZ, cellSize, gridW */
+  private readonly fogGridA = { value: new THREE.Vector4(0, 0, 1, 0) };
+  /** gridH, strataCount, baseY, floorHeight */
+  private readonly fogGridB = { value: new THREE.Vector4(0, 0, 0, 1) };
+  /** 0 = draw everything (no clip); 1 = clip to the explored mask. */
+  private readonly fogOn = { value: 0 };
+  private readonly fogTexU: { value: THREE.Texture | null } = { value: null };
+  /** `?fog=boxes` restores the old drawn-over cubes, for comparison. */
+  private fogBoxes = false;
   /**
    * Urls the IR asked for that no template was loaded for. A missing template used to be a bare
    * `return` and that is how fifteen percent of the world went missing without a word — the compiler
@@ -375,6 +440,7 @@ export class Dungeon {
   build(grids: StratumCellGrid[], stairs?: StairInfo[]): void {
     this.hostless = 0;
     this.lastLosCell = -1;
+    this.lastCullCell = -1;
     this.noTemplate.clear();
     this.group.clear();
     this.strata = [];
@@ -439,12 +505,13 @@ export class Dungeon {
         sub.add(cg);
         // BLACK FOG CUBE (boss #3): a grid-aligned black box filling this cell's column,
         // shown while UNexplored, hidden on reveal. Grid geometry → always lines up.
-        const fog = this.makeFogCube(cx, sy, cz, cs);
-        fog.visible = !this.fogOff;
-        sub.add(fog);
+        // no cube when the ink is a CLIP — the mask does the hiding and a box would only re-introduce
+        // the thing it replaced
+        const fog = this.fogBoxes ? this.makeFogCube(cx, sy, cz, cs) : null;
+        if (fog) { fog.visible = !this.fogOff; sub.add(fog); }
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
-          wallMask: c.wallMask, walkable, group: cg, fog,
+          wallMask: c.wallMask, walkable, stair: c.stair, hole: false, group: cg, fog,
           explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats,
         };
         this.cells.push(rec);
@@ -460,12 +527,11 @@ export class Dungeon {
       for (const c of grid.cells) {
         if (c.type !== 'VOID') continue;
         const cx = toFloat(fromRaw(c.cx)), cz = toFloat(fromRaw(c.cz));
-        const fog = this.makeFogCube(cx, sy, cz, cs);
-        fog.visible = !this.fogOff;
-        sub.add(fog);
+        const fog = this.fogBoxes ? this.makeFogCube(cx, sy, cz, cs) : null;
+        if (fog) { fog.visible = !this.fogOff; sub.add(fog); }
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
-          wallMask: 0, walkable: false, group: new THREE.Group(), fog,
+          wallMask: 0, walkable: false, stair: false, hole: true, group: new THREE.Group(), fog,
           explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats: [],
         };
         this.cells.push(rec);
@@ -498,6 +564,7 @@ export class Dungeon {
     /* A piece dropped for want of a host cell is invisible geometry, and this is the only path that
        makes geometry. Say so rather than returning quietly — it reads 0 today, which is precisely
        when a silent drop can start firing without anyone finding out. */
+    this.buildFogMask(grids);
     if (this.noTemplate.size > 0) {
       console.warn(`[dungeon] no template for ${this.noTemplate.size} url(s) — those pieces are NOT in `
         + `the world: ${[...this.noTemplate].map((u) => u.split('/').pop()).join(', ')}`);
@@ -550,6 +617,7 @@ export class Dungeon {
       const cl = cloneMaterial(m);
       cl.userData = { ...cl.userData, occ: true };
       cl.transparent = true;
+      this.patchCutout(cl);
       host.mats.push(cl);
       return cl;
     };
@@ -615,6 +683,157 @@ export class Dungeon {
     box.position.set(cx, sy + height / 2 - 0.1, cz);
     box.renderOrder = 2;                     // draw after tiles so the ink reliably covers them
     return box;
+  }
+
+  /** Size the explored mask to the tower and point the uniforms at it. */
+  private buildFogMask(grids: StratumCellGrid[]): void {
+    const g0 = grids[0];
+    if (!g0 || this.fogBoxes) { this.fogOn.value = 0; return; }
+    const w = g0.width, h = g0.height, n = grids.length;
+    const cs = toFloat(fromRaw(g0.cellSize));
+
+    // the grid is centred on the origin, so cell (0,0)'s CENTRE is the mask origin
+    let originX = Infinity, originZ = Infinity;
+    for (const c of g0.cells) {
+      originX = Math.min(originX, toFloat(fromRaw(c.cx)));
+      originZ = Math.min(originZ, toFloat(fromRaw(c.cz)));
+    }
+    const baseY = this.strata[0]?.surfaceY ?? 0;
+    const rise = (this.strata[1]?.surfaceY ?? baseY + NATIVE_WALL_H) - baseY;
+
+    this.fogData = new Uint8Array(w * h * n);
+    const tex = new THREE.DataTexture(this.fogData, w, h * n, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.magFilter = THREE.NearestFilter;   // a cell is a cell; never interpolate the mask
+    tex.minFilter = THREE.NearestFilter;
+    tex.unpackAlignment = 1;               // one byte per texel, rows are not padded
+    tex.needsUpdate = true;
+    this.fogTex = tex;
+    this.fogTexU.value = tex;
+    this.fogGridA.value.set(originX, originZ, cs, w);
+    this.fogGridB.value.set(h, n, baseY, rise > 0 ? rise : NATIVE_WALL_H);
+    this.fogOn.value = 1;
+    this.fogDirty = true;
+  }
+
+  /** Push the `explored` flags into the mask texture. Only when something actually changed. */
+  private syncFogMask(): void {
+    if (!this.fogTex || !this.fogDirty) return;
+    this.fogDirty = false;
+    const w = this.fogGridA.value.w, h = this.fogGridB.value.x;
+    this.fogData.fill(0);
+    for (const c of this.cells) {
+      if (!c.explored) continue;
+      const i = (c.stratum * h + c.row) * w + c.col;
+      if (i >= 0 && i < this.fogData.length) this.fogData[i] = 255;
+    }
+    this.fogTex.needsUpdate = true;
+  }
+
+  /**
+   * CLIP THIS MATERIAL TO THE EXPLORED MASK.
+   *
+   * Needs the fragment's WORLD position, which a standard material does not hand out, so the vertex
+   * stage grows a varying for it. The fragment then maps that position to a cell and throws itself
+   * away if the cell is unexplored — an absence, not a black surface drawn in front.
+   */
+  private patchFogClip(mat: THREE.Material): void {
+    if (mat.userData['fogPatched'] === true) return;
+    const prev = mat.onBeforeCompile?.bind(mat);      // CHAIN: the lab's tiling shader is already here
+    mat.onBeforeCompile = (shader, renderer): void => {
+      prev?.(shader, renderer);
+      shader.uniforms['uFogMask'] = this.fogTexU;
+      shader.uniforms['uFogA'] = this.fogGridA;
+      shader.uniforms['uFogB'] = this.fogGridB;
+      shader.uniforms['uFogOn'] = this.fogOn;
+
+      shader.vertexShader = 'varying vec3 vFogWorld;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n  vFogWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+      shader.fragmentShader =
+        'uniform sampler2D uFogMask;\nuniform vec4 uFogA;\nuniform vec4 uFogB;\nuniform float uFogOn;\n'
+        + 'varying vec3 vFogWorld;\n'
+        + shader.fragmentShader.replace(
+          'void main() {',
+          `void main() {
+          if (uFogOn > 0.5) {
+            float fcol = floor((vFogWorld.x - uFogA.x) / uFogA.z + 0.5);
+            float frow = floor((vFogWorld.z - uFogA.y) / uFogA.z + 0.5);
+            // a piece sits ON its storey's deck, so nudge up before dividing or the floor itself
+            // lands one storey low
+            float fst  = floor((vFogWorld.y - uFogB.z + 0.05) / uFogB.w);
+            fst = clamp(fst, 0.0, uFogB.y - 1.0);
+            if (fcol >= 0.0 && fcol < uFogA.w && frow >= 0.0 && frow < uFogB.x) {
+              float tx = (fcol + 0.5) / uFogA.w;
+              float ty = (fst * uFogB.x + frow + 0.5) / (uFogB.x * uFogB.y);
+              if (texture2D(uFogMask, vec2(tx, ty)).r < 0.5) discard;
+            }
+          }`,
+        );
+    };
+    // the same cache-key rule as `patchCutout` — this changes the generated source too
+    const prevKey = mat.customProgramCacheKey?.bind(mat);
+    mat.customProgramCacheKey = (): string => `${prevKey?.() ?? ''}|fogclip`;
+
+    mat.userData['fogPatched'] = true;
+    mat.needsUpdate = true;
+  }
+
+  /**
+   * CUT A HOLE IN THIS MATERIAL rather than fading it out.
+   *
+   * The old cutaway faded every wall between the camera and the player to a low opacity. That is the
+   * naive solution and it has the two problems it always has: with this many overlapping pieces the
+   * blending sorts badly and goes muddy, and a faded wall is still a wall in front of you.
+   *
+   * A SCREEN-SPACE DISCARD instead. Every fragment asks whether it lands inside a circle around the
+   * player ON SCREEN and is NEARER THE CAMERA than the player is; if so it is thrown away. The result
+   * is an actual hole with a crisp edge, no transparency and therefore no sort order to get wrong.
+   *
+   * THE DEPTH TEST IS THE PART THAT MATTERS. Without `gl_FragCoord.z < uCut.w` the circle would punch
+   * through walls BEHIND the player too and you would see out of the world. It also means the floor
+   * under the player survives for free — it is below them, not nearer the camera than them — which is
+   * the thing a volume-based cutaway has to be carefully shaped to avoid eating.
+   *
+   * The rim is dithered across a soft band so it dissolves instead of stamping a hard cookie-cutter
+   * circle; a dither keeps this a pure discard, so still no blending.
+   */
+  private patchCutout(mat: THREE.Material): void {
+    if (mat.userData['cutPatched'] === true) return;
+    // CHAIN, never replace: these materials already carry the lab's tiling shader on
+    // `onBeforeCompile`, and clobbering it would strip every surface back to flat colour.
+    const prev = mat.onBeforeCompile?.bind(mat);
+    mat.onBeforeCompile = (shader, renderer): void => {
+      prev?.(shader, renderer);
+      shader.uniforms['uCut'] = this.cutUniform;
+      shader.fragmentShader = 'uniform vec4 uCut;\n' + shader.fragmentShader.replace(
+        'void main() {',
+        `void main() {
+          if (uCut.z > 0.0 && gl_FragCoord.z < uCut.w) {
+            float cutD = distance(gl_FragCoord.xy, uCut.xy);
+            float cutSoft = uCut.z * 1.35;
+            if (cutD < cutSoft) {
+              float cutT = smoothstep(uCut.z, cutSoft, cutD);
+              float cutN = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+              if (cutN > cutT) discard;
+            }
+          }`,
+      );
+    };
+    /* AND THE CACHE KEY MUST MOVE WITH THE SOURCE. `tiling.ts` deliberately gives every recolored
+       material the SAME `customProgramCacheKey` ('recolorTiled1') because with texture arrays they all
+       emit byte-identical source and differ only in uniform values — sharing one program there is a
+       real win. That holds right up until something makes the generated source depend on the material,
+       which is exactly what this patch does. three resolves the cache key BEFORE it looks at the
+       source, so a patched and an unpatched material would share whichever program compiled first and
+       the other would silently get the wrong one — appearing as the effect applying to everything or
+       nothing, flipping with draw order. Extend the key, never replace it, so sharing still happens
+       WITHIN each variant. See the invariant at tiling.ts:362. */
+    const prevKey = mat.customProgramCacheKey?.bind(mat);
+    mat.customProgramCacheKey = (): string => `${prevKey?.() ?? ''}|cutout`;
+
+    mat.userData['cutPatched'] = true;
+    mat.needsUpdate = true;
   }
 
   /** Packed (stratum,row,col) key for the cell index used by the reachable-cell BFS. */
@@ -798,9 +1017,12 @@ export class Dungeon {
     for (const b of bodies) {
       const start = this.cellAt(b.x, b.y, b.z);
       if (!start) continue;
+      const before = this.exploredCount;
       this.lineOfSightReveal(start);
       this.floodReveal(start);
+      if (this.exploredCount !== before) this.fogDirty = true;
     }
+    this.syncFogMask();
     // 2) drive the per-cell fade + fog cube from the `explored` flag.
     for (const cell of this.cells) {
       if (cell.explored) {
@@ -822,6 +1044,9 @@ export class Dungeon {
   /** DEV/verify only: force every cell explored (reveal the whole tower for screenshots). */
   revealAll(): void {
     for (const c of this.cells) c.explored = true;
+    this.exploredCount = this.cells.length;
+    this.fogDirty = true;
+    this.syncFogMask();
   }
 
   /**
@@ -902,7 +1127,7 @@ export class Dungeon {
         if (dc * dc + dr * dr > R * R) continue;            // a circle, not a square
         const target = this.cellIndex.get(this.cellKey(start.stratum, start.col + dc, start.row + dr));
         if (!target || target.explored) continue;
-        if (this.sightClear(start, start.col + dc, start.row + dr)) target.explored = true;
+        if (this.sightClear(start, start.col + dc, start.row + dr)) { target.explored = true; this.exploredCount++; }
       }
     }
   }
@@ -945,36 +1170,36 @@ export class Dungeon {
    * is NEARER the camera than the player (along the camera→player axis), and is on the
    * correct facing side (its outward axis faces the camera). Fades are eased for smoothness.
    */
-  occlude(camera: THREE.Camera, player: { x: number; y: number; z: number }, dt: number): void {
-    camera.getWorldPosition(this._v);
-    const camX = this._v.x, camY = this._v.y, camZ = this._v.z;
-    this._camToPlayer.set(player.x - camX, player.y - camY, player.z - camZ);
-    const playerDist = this._camToPlayer.length();
-    this._camToPlayer.normalize();
-    const k = 1 - Math.exp(-OCCLUDE_FADE_RATE * Math.max(dt, 1 / 240));
+  occlude(
+    camera: THREE.Camera, player: { x: number; y: number; z: number }, _dt: number,
+    screen?: { w: number; h: number; dpr: number },
+  ): void {
+    if (!screen || screen.w <= 0 || screen.h <= 0) { this.cutUniform.value.set(0, 0, 0, 1); return; }
+
+    // the player, projected. `project` gives normalised device coords in [-1,1] on every axis.
+    this._v.set(player.x, player.y + CUT_EYE_RAISE, player.z).project(camera as THREE.PerspectiveCamera);
+    // behind the camera: NDC z leaves [-1,1] and the projection wraps. Disable rather than cut a hole
+    // in the wrong place.
+    if (this._v.z < -1 || this._v.z > 1) { this.cutUniform.value.set(0, 0, 0, 1); return; }
+
+    // gl_FragCoord is in PHYSICAL pixels, so the projection has to be scaled by the device ratio —
+    // otherwise the hole sits at a fraction of the right place on any HiDPI screen.
+    const px = (this._v.x * 0.5 + 0.5) * screen.w * screen.dpr;
+    const py = (this._v.y * 0.5 + 0.5) * screen.h * screen.dpr;
+    const radius = Math.min(screen.w, screen.h) * screen.dpr * CUT_RADIUS_FRAC;
+    // window-space depth, pulled slightly toward the camera so the player's own cell is never cut
+    const depth = (this._v.z * 0.5 + 0.5) - CUT_DEPTH_BIAS;
+    this.cutUniform.value.set(px, py, radius, depth);
+
+    /* The walls' own opacity is no longer touched. It was the old fade, and leaving it half-applied
+       would leave ghosts standing wherever the player last walked. */
     for (const wr of this.walls) {
-      let occluding = false;
-      const dxp = wr.x - player.x, dzp = wr.z - player.z;
-      if (dxp * dxp + dzp * dzp <= OCCLUDE_RADIUS * OCCLUDE_RADIUS) {
-        this._camToWall.set(wr.x - camX, player.y - camY, wr.z - camZ);
-        const wallDist = this._camToWall.length();
-        // nearer the camera than the player (in front of them from the camera's view)
-        if (wallDist < playerDist - 0.4) {
-          // and roughly along the camera→player ray (so we only drop walls that are
-          // actually in front of the player on screen, not off to the side)
-          const along = (this._camToWall.x * this._camToPlayer.x + this._camToWall.y * this._camToPlayer.y + this._camToWall.z * this._camToPlayer.z) / Math.max(wallDist, 1e-3);
-          if (along > 0.6) occluding = true;
-        }
-      }
-      const target = occluding ? OCCLUDE_MIN_OPACITY : 1;
-      wr.occ += (target - wr.occ) * k;
-      if (Math.abs(wr.occ - target) < 0.01) wr.occ = target;
+      if (wr.occ === 1) continue;
+      wr.occ = 1;
       wr.obj.traverse((o) => {
-        const mat = (o as THREE.Mesh).material as (THREE.Material & { opacity: number; transparent: boolean }) | undefined;
+        const mat = (o as THREE.Mesh).material as (THREE.Material & { opacity: number; transparent: boolean; depthWrite: boolean }) | undefined;
         if (!mat || mat.userData?.['occ'] !== true) return;
-        mat.opacity = wr.occ;
-        mat.transparent = wr.occ < 1;
-        mat.depthWrite = wr.occ > 0.95;
+        mat.opacity = 1; mat.transparent = false; mat.depthWrite = true;
       });
     }
   }
@@ -984,7 +1209,109 @@ export class Dungeon {
    * player never occludes them) — the dungeon equivalent of the coalescence reveal.
    */
   cull(viewY: number): void {
+    // Kept for callers that have only a height. The real rule is `cullByRoute`, which needs to know
+    // WHERE the player is, not just how high.
     for (const s of this.strata) s.group.visible = s.surfaceY <= viewY + 2.5;
+  }
+
+  /**
+   * WHAT YOU CAN SEE OF THE OTHER STOREYS, decided by how far away they are ALONG A ROUTE.
+   *
+   * The old rule hid every stratum whose floor sat above the player, wholesale, so the ceiling never
+   * occluded them — and equally you could never see up a stairwell, and the floor below was shown
+   * whether or not it had anything to do with where you are.
+   *
+   * The rule now: a cell on another storey is visible only if it is REACHABLE, and only if getting
+   * there is not much further than getting to the cell directly above or below it on your own storey.
+   * Concretely `dist(cell) <= dist(cell directly under/over it on my level) + 1 + |storeys apart|`.
+   *
+   * It behaves the way you would want without being told to:
+   *   - the ceiling right over your head is reachable only by walking to a stairwell and back, so it
+   *     is far, so it is hidden — no lid over the camera;
+   *   - the floor under a hole beside you is one DROP away, so it is near, so you see down it;
+   *   - stand at a stairwell and the storey it serves comes into view, because that is where the
+   *     route actually is.
+   *
+   * Distance is hop count over the route graph: between walkable neighbours that no wall separates,
+   * up and down at stair cells, and DOWN through a hole (you can fall, and that is why a shaft shows
+   * what is under it).
+   */
+  cullByRoute(px: number, py: number, pz: number): void {
+    const start = this.cellAt(px, py, pz);
+    if (!start) return;
+    const startKey = this.cellKey(start.stratum, start.col, start.row);
+    if (startKey === this.lastCullCell) return;      // nothing moved; the answer is unchanged
+    this.lastCullCell = startKey;
+
+    const dist = this.routeDistances(start);
+    for (const cell of this.cells) {
+      /* YOUR OWN STOREY IS NEVER PRUNED. The rule compares a cell against "the corresponding cell on
+         our level", which is only meaningful for another level — on this one it degenerates to
+         `d <= d + 1`, always true. Applying it literally here deleted the fog as well as the
+         geometry, so unreachable ground rendered as raw background instead of ink and most of the
+         screen went black. Here, explored shows and unexplored inks, exactly as before. */
+      if (cell.stratum === start.stratum) { this.setCellShown(cell, true); continue; }
+
+      const d = dist.get(this.cellKey(cell.stratum, cell.col, cell.row));
+      const under = dist.get(this.cellKey(start.stratum, cell.col, cell.row));
+      const budget = 1 + Math.abs(cell.stratum - start.stratum);
+      const near = d !== undefined && under !== undefined && d <= under + budget;
+      this.setCellShown(cell, near);
+    }
+    // a stratum stays in the scene now; visibility is decided per cell above
+    for (const s of this.strata) s.group.visible = true;
+  }
+
+  /**
+   * Show or hide one cell.
+   *
+   * On the player's own storey `shown` is always true, and the cell reads the way it always has:
+   * geometry once explored, ink until then. A pruned cell on ANOTHER storey shows nothing at all —
+   * not even ink, because a block of ink floating above or below the player is worse than an absence.
+   */
+  private setCellShown(cell: CellRec, shown: boolean): void {
+    cell.group.visible = shown && cell.explored;
+    if (cell.fog) cell.fog.visible = shown && !cell.explored;
+  }
+
+  /** Hop count from `start` over the route graph — walls block, stairs climb, holes drop. */
+  private routeDistances(start: CellRec): Map<number, number> {
+    const dist = new Map<number, number>();
+    const startKey = this.cellKey(start.stratum, start.col, start.row);
+    dist.set(startKey, 0);
+    let frontier: CellRec[] = [start];
+    // bits: 1=+X(col+1) 2=-X(col-1) 4=+Z(row+1) 8=-Z(row-1)
+    const steps: ReadonlyArray<readonly [number, number, number]> = [
+      [1, 1, 0], [2, -1, 0], [4, 0, 1], [8, 0, -1],
+    ];
+    while (frontier.length) {
+      const next: CellRec[] = [];
+      for (const cur of frontier) {
+        const d = dist.get(this.cellKey(cur.stratum, cur.col, cur.row))!;
+        const visit = (n: CellRec | undefined): void => {
+          if (!n) return;
+          const k = this.cellKey(n.stratum, n.col, n.row);
+          if (dist.has(k)) return;
+          dist.set(k, d + 1);
+          next.push(n);
+        };
+        // sideways, where no wall stands between
+        for (const [bit, dc, dr] of steps) {
+          if ((cur.wallMask & bit) !== 0) continue;
+          const n = this.cellIndex.get(this.cellKey(cur.stratum, cur.col + dc, cur.row + dr));
+          if (n && (n.walkable || n.hole)) visit(n);
+        }
+        // a flight climbs, and either end of it connects the two storeys
+        if (cur.stair) {
+          visit(this.cellIndex.get(this.cellKey(cur.stratum + 1, cur.col, cur.row)));
+          visit(this.cellIndex.get(this.cellKey(cur.stratum - 1, cur.col, cur.row)));
+        }
+        // and a hole drops — one way, downward, which is what makes a shaft show its floor
+        if (cur.hole) visit(this.cellIndex.get(this.cellKey(cur.stratum - 1, cur.col, cur.row)));
+      }
+      frontier = next;
+    }
+    return dist;
   }
 
   /**

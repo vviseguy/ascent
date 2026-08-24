@@ -227,6 +227,8 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
+  /** Scratch for the drawing-buffer size, so the per-frame cutout update allocates nothing. */
+  private readonly _screenSize = new THREE.Vector2();
   /** Post-processing stack (render → SMAA → bloom → ACES output). View-only. */
   private composer!: EffectComposer;
   private bloom!: UnrealBloomPass;
@@ -800,14 +802,25 @@ export class Renderer {
     }
 
     this.dbgLocalPos = localPos; // DEV: last local-player render pos (headless framing checks)
-    if (this.dungeon) { this.dungeon.reveal(crew, FOG_RADIUS, dtMs / 1000); this.dungeon.cull(localY); } // fog fade-in + floor-above cull
+    if (this.dungeon) {
+      this.dungeon.reveal(crew, FOG_RADIUS, dtMs / 1000);
+      // ROUTE-BASED, not height-based: a storey is shown where getting to it is not much further than
+      // getting to the cell under or over it here. Must run AFTER reveal, which sets visibility from
+      // the explored flag alone and knows nothing about which storeys are worth showing.
+      this.dungeon.cullByRoute(localPos.x, localPos.y, localPos.z);
+    }
     this.updateCoalescence(anchorY);
     this.updateImpactFx(nowMs);
     this.drawVerbFx(w, alpha, localId);
     this.updateFrameBias(localPos, dtMs / 1000); // slide the target onto the lit room (boss #1/#2)
     this.updateCamera(dtMs / 1000, wsum, cx, cy, cz, minX, maxX, minZ, maxZ);
     // OCCLUSION CUTAWAY: after the camera is posed, fade walls between it and the local player.
-    if (this.dungeon) this.dungeon.occlude(this.camera, localPos, dtMs / 1000);
+    if (this.dungeon) {
+      // the cut is a SCREEN-SPACE circle, so it needs the drawing-buffer size and the device ratio
+      const sz = this.renderer.getSize(this._screenSize);
+      this.dungeon.occlude(this.camera, localPos, dtMs / 1000,
+        { w: sz.x, h: sz.y, dpr: this.renderer.getPixelRatio() });
+    }
     this.drawOffscreenIndicators(w, localId, anchorId);
     this.updateHud(w, anchorId, localId);
     if (this.hotbar && localId >= 0 && localId < w.count) this.hotbar.update(w, localId);
