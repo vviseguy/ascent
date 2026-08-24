@@ -66,6 +66,18 @@ async function loadPixels(file: string | undefined, res: number): Promise<Uint8C
     const c = document.createElement('canvas');
     c.width = c.height = res;
     const g = c.getContext('2d', { willReadFrequently: true })!;
+    // FLIP VERTICALLY. Every normal map in existence is authored for the convention TextureLoader
+    // gives you: flipY = true, so V = 0 is the BOTTOM row. DataArrayTexture hard-sets flipY = false,
+    // and UNPACK_FLIP_Y_WEBGL is ignored for ArrayBufferView uploads regardless — so a canvas read
+    // (row 0 = top) lands with V = 0 at the TOP and the whole array is upside-down against the rest
+    // of the world.
+    //
+    // Invisible in the albedo: mirrored stone is still stone. NOT invisible in the normal map, where
+    // green encodes the slope along +V — run V the other way through the image and every bump lights
+    // as a dent. Flipping here rather than negating green in the shader keeps albedo, normal, rough
+    // and AO in ONE consistent parameterisation, so a map added later behaves without a special case.
+    g.translate(0, res);
+    g.scale(1, -1);
     g.drawImage(img, 0, 0, res, res);
     return g.getImageData(0, 0, res, res).data;
   } catch {
@@ -288,14 +300,19 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         // normal. Picking the plane from abs(normal) alone ignores which WAY the face points, and
         // then cross(T,B) equals -Y / -X / +Z for the three cases — so every up-facing surface, and
         // every face on the negative side of its axis, gets a mirrored frame and its bumps light as
-        // dents. Flipping B fixes the frame; flipping V with it keeps the albedo sampling in the
-        // same parameterisation, so grain and relief stay registered to each other.
+        // dents. The correction has to mirror an axis to restore handedness — see below for which.
         'void planarFrame(float inv, out vec2 uv, out vec3 T, out vec3 B, out vec3 Ng){',
         '  vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; Ng = normalize(vWNor);',
         '  if ( wn.y >= wn.x && wn.y >= wn.z ) { uv = wp.xz; T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
         '  else if ( wn.x >= wn.z )            { uv = wp.zy; T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
         '  else                                { uv = wp.xy; T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
-        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { B = -B; uv.y = -uv.y; }',
+        // Mirror U, never V. Box-planar hands the front and back of a wall the SAME uv (both are
+        // Z-dominant) with OPPOSITE normals, so on one of them the frame is left-handed and the
+        // relief lights inside-out. Either axis fixes the handedness — but seeing a surface from
+        // the other side is a HORIZONTAL mirror, so flipping U corrects it while leaving the
+        // pattern the right way up. Flipping V corrects the lighting and stands the texture on its
+        // head, which is worse: wrong relief reads as odd, upside-down masonry reads as broken.
+        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { T = -T; uv.x = -uv.x; }',
         '}',
       ].join('\n'))
       // after the baked albedo: apply grain / albedo and stash surface terms for the chunks below.

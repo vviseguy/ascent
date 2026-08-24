@@ -56,7 +56,7 @@ import { buildSurfacePanel, syncSurfacePanel, type SurfacePanelHandle } from './
 import { dock, restoreDrawers, setDrawersVisible } from './drawers.ts';
 import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
-import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, overlayConfigParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
 import { mountPageNav } from './page-nav.ts';
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
@@ -254,6 +254,10 @@ async function boot(): Promise<void> {
   // surfaced in the HUD timing readout alongside the per-fit box-fit time.
   const buildStart = performance.now();
   const params = new URLSearchParams(location.search);
+  /** ?yaw=<deg> — rotate the OBJECT about Y. Orbiting the camera leaves every face pointing the same
+   *  way relative to the light, so it cannot answer "does this surface respond to its facing?".
+   *  Turning the object does. Diagnostic only; it does not touch the fit or the bake. */
+  const OBJECT_YAW = ((Number(params.get('yaw')) || 0) * Math.PI) / 180;
   const elIds = [...elements.keys()].sort();
   const objIds = [...objects.keys()].sort();
   const objId = params.get('object');
@@ -389,6 +393,7 @@ async function boot(): Promise<void> {
   ground.receiveShadow = true;
   scene.add(ground);
 
+  built.root.rotation.y = OBJECT_YAW;
   scene.add(built.root);
 
   // COLLISION-BOX OVERLAY: the fitted footprint as a green wireframe hugging the mesh.
@@ -593,7 +598,8 @@ async function boot(): Promise<void> {
         disposeBuiltMaterials(built.root); // free the previous bake's textures (geometry is shared)
         built = next;
         footprint = next.footprint;
-        scene.add(built.root);
+        built.root.rotation.y = OBJECT_YAW;
+  scene.add(built.root);
         refit(); // re-fit boxes on the new root (also renders)
         onObjectRebuilt?.(); // the face picker holds mesh refs; the swap just invalidated them
       } finally {
@@ -631,7 +637,9 @@ async function boot(): Promise<void> {
           initial: params.get('profile'),
           // a profile REPLACES the live config wholesale, so every widget in the panel has to be
           // pulled back into line before the re-bake — otherwise the sliders lie about what is on.
-          onApplied: () => { texPanel?.resync(); void rebuildObject(); },
+          // a link means PROFILE + deltas: re-apply the URL's tex overrides on top of the
+          // profile, or the async profile load silently discards them (see overlayConfigParam)
+          onApplied: () => { overlayConfigParam(params.get('tex')); texPanel?.resync(); void rebuildObject(); },
         });
       },
       extras: [
