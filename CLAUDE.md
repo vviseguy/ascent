@@ -231,6 +231,22 @@ says a word. Recovered by branching at the pre-rebase SHA from the reflog rather
 So: verify the upstream, and prefer `git pull --rebase origin main` — naming the branch you mean beats
 trusting whatever the ref happens to point at.
 
+**AND IT IS MANUFACTURED, NOT BAD LUCK.** Rebase-merge with delete-branch — the default on this repo's
+PRs — produces this shape every single time you merge and keep the local branch: the remote goes away
+at merge time while the branch survives pointing at it. A peer session audited itself after hitting the
+above and found two live instances, both from merged PRs. Expect it, and audit with:
+
+```
+git for-each-ref --format='%(refname:short) -> %(upstream:short) %(upstream:track)' refs/heads | grep gone
+```
+
+A branch with NO upstream is the SAFE failure — `git pull` errors instead of rewriting. A branch
+tracking a `[gone]` ref is the dangerous one.
+
+When cleaning these up, PROBE FOR THE CONTENT, never trust "the PR merged" or `git cherry`: rebasing
+rewrites patch-ids, so genuinely-merged work reports as unmerged. Grep `main` for the distinctive
+symbol the branch added and delete only once you have found it.
+
 **THE AUTHORING STORE MOVES UNDER YOU.** `src/floor/cell-structures.json` is written by a human through
 a live dev server WHILE sessions test against it. A before/after comparison that straddles a save is
 not a comparison, and it fails silently — both runs look valid and the conclusion is wrong. It has
