@@ -361,48 +361,103 @@ function sideClosed(
 
 /** The flight whose ORIGIN is (x,y), or null. The origin is the block's lowest-coordinate cell, so
  *  exactly one cell of a flight ever reports it and the mesh is emitted once. */
-/**
- * Does the wall closing side `d` CONTINUE past the block, or stop at it?
- *
- * This is what breaks the tie when a staircase stands in a corner. A wall the stair merely stands
- * against — a room wall — runs on beyond the block; the stair's OWN head wall stops where the stair
- * does. So when both axes look equally closed, the one whose wall stops is the head, and the one whose
- * wall carries on is a flank. It reads the same way a person does: you climb toward the little wall at
- * the top, not along the long wall you happen to be beside.
- */
-function endContinues(
-  cells: readonly (Cell | null)[], w: number, h: number,
-  x: number, y: number, bw: number, bh: number, d: Dir,
-): boolean {
-  // one cell past each end of the run that wall occupies, on the same side
-  const [ax, ay, bx, by] = d === 'N' ? [x - 1, y, x + bw, y]
-    : d === 'S' ? [x - 1, y + bh - 1, x + bw, y + bh - 1]
-      : d === 'W' ? [x, y - 1, x, y + bh]
-        : [x + bw - 1, y - 1, x + bw - 1, y + bh];
 
-  /* OFF THE MAP IS NOT A WALL — here. `wallOn` reports the void beyond the lattice as `wall`, which is
-     exactly right for `sideClosed` (you cannot walk off the world) and exactly wrong for this question.
-     "Does this wall run ON past the block" cannot be answered yes by geometry that does not exist:
-     beyond the edge there is nothing for it to run into.
-     It cost a real misreading. A stair whose own head stub started at the north border had its
-     off-lattice probe invent a wall, the `||` short-circuited before the real probe was weighed, and
-     its head read as "a wall it stands beside" — dropping its score by one and manufacturing a tie
-     with the other axis that a tiebreak then resolved by luck. Same "one function, two questions"
-     class as `openingAt` vs `moduleAt` and `edgeDraw`'s overloaded null, both documented above. */
-  const onMap = (px: number, py: number): boolean => px >= 0 && py >= 0 && px < w && py < h;
-  const runsOn = (px: number, py: number): boolean =>
-    onMap(px, py) && blocks(wallOn(cells, w, h, px, py, d));
-  return runsOn(ax, ay) || runsOn(bx, by);
+/* ==================================================================================================
+   WHICH WAY DOES IT CLIMB?
+
+   Four readings of the same block, scored, best wins. THE INDEX IS WHERE THE FOOT IS: `rank[i]` scores
+   "you walk in from side i", so the flight climbs toward the opposite side. Thinking in feet rather
+   than heads is what makes the formula read straight — every term is either about the end you enter
+   from or the end you climb into, and they are always opposites.
+
+   RING is ordered N,E,S,W so the opposite side is simply (i + 2) % 4.
+
+   The whole judgement is four small integer arrays — walls and floors, on this storey and the one
+   above — and five terms over them. It replaced a scheme where the walls acted as a GATE: an axis
+   qualified only if exactly one of its ends was fully walled, which meant at most two of the four
+   directions were ever candidates and a half-built head wall struck its axis out before anything else
+   was weighed. A staircase with unfinished walls and unambiguous floor evidence was made to climb into
+   the void, and no amount of reweighting could fix it because the right answer had already been
+   discarded. Nothing is discarded now.
+   ================================================================================================== */
+
+/** The four sides in a ring, so `opposite(i)` is (i + 2) % 4. Do not reorder. */
+const RING = ['N', 'E', 'S', 'W'] as const;
+const opposite = (i: number): number => (i + 2) % 4;
+
+/** LAST RESORT, when the terms and the tiebreak have all come out level: prefer a vertical reading.
+ *  Arbitrary — but FIXED, and the same arbitrary choice the previous scheme made, so a perfectly
+ *  symmetric corner does not silently turn ninety degrees. The editor says when it lands here. */
+const TIE_ORDER: readonly Dir[] = ['N', 'S', 'W', 'E'];
+
+/** The block's own cells along one side. */
+function sideCells(x: number, y: number, bw: number, bh: number, d: Dir): [number, number][] {
+  const out: [number, number][] = [];
+  if (d === 'N' || d === 'S') {
+    const row = d === 'N' ? y : y + bh - 1;
+    for (let i = 0; i < bw; i++) out.push([x + i, row]);
+  } else {
+    const col = d === 'W' ? x : x + bw - 1;
+    for (let j = 0; j < bh; j++) out.push([col, y + j]);
+  }
+  return out;
 }
 
+/** One cell OUT from each of those — where you would be standing. */
+const beyondSide = (x: number, y: number, bw: number, bh: number, d: Dir): [number, number][] =>
+  sideCells(x, y, bw, bh, d).map(([cx, cy]) => [cx + STEP[d][0], cy + STEP[d][1]] as [number, number]);
+
 /**
- * Can you get OFF the top of a flight that climbs `d` — is the storey above open over its head cells?
+ * IS THE EDGE ON SIDE `d` OF (x,y) ACTUALLY SEALED?
  *
- * A flight climbs into a wall, so the ceiling is its only exit. `floor: 'none'` up there is a hole to
- * climb through; anything else is a deck you would hit. With no storey above (a single-level structure,
- * or the top of the tower) there is nothing to be blocked BY, so this answers false for every
- * direction and the caller falls through to its other rule rather than picking arbitrarily.
+ * NOT the same as "is there a wall segment here". Some walls are doors. A `doorway`, `arch` or
+ * `scaffold` that is `open` draws as a wall and is walked straight through, so counting segments alone
+ * puts a head wall where there is an open door and calls a foot blocked when you can stroll in.
+ *
+ * The segment lives on the EDGE, the opening lives on a POINT, and a 4u module straddles TWO segments
+ * — the one either side of its point (see `moduleAt`). So an edge is un-sealed by a walk-through module
+ * at EITHER of its endpoints, on the matching axis: horizontal for a north edge, vertical for a west
+ * one.
+ *
+ * This is the same DRAWN-versus-WALK-THROUGH distinction that `moduleAt` and `openingAt` exist to keep
+ * apart, and it had leaked back in here: the scoring asked `blocks()` and got the render answer to a
+ * movement question.
  */
+function edgeSealed(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, d: Dir,
+): boolean {
+  const o = d === 'N' ? { x, y, side: 'N' as const }
+    : d === 'W' ? { x, y, side: 'W' as const }
+      : d === 'S' ? { x, y: y + 1, side: 'N' as const }
+        : { x: x + 1, y, side: 'W' as const };
+  if (!blocks(wallOn(cells, w, h, x, y, d))) return false;   // nothing there in the first place
+  const axis: Axis = o.side === 'N' ? 'H' : 'V';
+  const throughA = openingAt(cells, w, h, o.x, o.y, axis);
+  const throughB = o.side === 'N'
+    ? openingAt(cells, w, h, o.x + 1, o.y, axis)
+    : openingAt(cells, w, h, o.x, o.y + 1, axis);
+  return !(throughA || throughB);
+}
+
+/** Per side: how many of that side's cells are SEALED against you. 0..bw (or bh). */
+const wallsPerSide = (
+  cells: readonly (Cell | null)[] | undefined, w: number, h: number,
+  x: number, y: number, bw: number, bh: number,
+): number[] => RING.map((d) => cells
+  ? sideCells(x, y, bw, bh, d).filter(([cx, cy]) => edgeSealed(cells, w, h, cx, cy, d)).length
+  : 0);
+
+/** Somewhere to stand. `none` is a pit and `rock` is solid, so neither is ground. */
+const standable = (c: Cell | null): boolean => !!c && c.floor !== 'none' && c.floor !== 'rock';
+
+/** Per side: how many cells just beyond it you could stand on. */
+const floorsPerSide = (
+  cells: readonly (Cell | null)[] | undefined, w: number, h: number,
+  x: number, y: number, bw: number, bh: number,
+): number[] => RING.map((d) => cells
+  ? beyondSide(x, y, bw, bh, d).filter(([cx, cy]) => standable(cellAt(cells, w, h, cx, cy))).length
+  : 0);
+
 function ceilingOpen(
   above: readonly (Cell | null)[] | undefined, w: number, h: number,
   x: number, y: number, bw: number, bh: number, d: Dir,
@@ -423,163 +478,134 @@ function ceilingOpen(
   return cells.every(([cx, cy]) => at(cx, cy)?.floor === 'none');
 }
 
-/**
- * Can you get ON to a flight that climbs `d` — is there ground to walk in from at its FOOT?
- *
- * The foot is the open end, opposite the climb. Being unwalled is not enough: a flight whose entry
- * faces a void, solid rock, or the edge of the map is one nobody can use, and that is the strongest
- * evidence there is about which way it really goes. You can argue about which end is the head; you
- * cannot argue about an entrance nobody can reach.
- */
-/**
- * WHY A FLIGHT POINTS THE WAY IT DOES, recorded on the way past.
- *
- * The direction comes from up to three signals of different strength, and when a flight faces a way
- * an author did not expect the useful question is never "what did it pick" but "what did it weigh".
- * Module-level and overwritten per call, which is fine because the only reader asks immediately
- * afterwards on the same cell — this is an EXPLANATION, not state anything depends on.
- */
-export interface StairSignals {
-  dir: Dir; score: number; foot: number; ceiling: boolean; landing: boolean; ownHead: boolean;
-  /** Manhattan distance from this reading's head to the stair block on the storey above; null if none. */
-  toNext?: number | null;
-}
-export interface StairChoice {
-  /** false when only one axis qualified, so the walls decided alone and nothing else was consulted. */
-  contested: boolean;
-  v: StairSignals;
-  h: StairSignals | null;
-  tie: boolean;
-  /** the weighted signals tied and CONTINUITY with the flight above settled it */
-  brokenByNext?: boolean;
-}
-let lastChoice: StairChoice | null = null;
+/* ---- THE FIVE TERMS ------------------------------------------------------------------------------
+   Two shapes of evidence, and the difference is deliberate.
 
-/**
- * DOES THIS READING CARRY ON UPWARD — the only signal that knows a spiral is a spiral.
- *
- * Walls, floor and ceiling can all be perfectly symmetric at a corner, and then nothing above decides
- * anything: `spiral stairs` has a flight where both readings score identically on every other signal
- * and the direction falls to an arbitrary tiebreak. But a spiral is a SEQUENCE, and that is asymmetric
- * even when the local geometry is not — the head of one flight should land near the FOOT of the next.
- *
- * So: find the stair block on the storey above and prefer the direction whose head ends up nearest it.
- * Returns a distance, smaller being better, or null when there is nothing above to aim at.
- *
- * ITS POSITION, NEVER ITS DIRECTION. Asking the flight above which way IT climbs invites storey k to
- * ask k+1 while k+1 asks k, and neither can answer. Position is unambiguous and it is enough.
- */
-function continuesUpward(
-  above: readonly (Cell | null)[] | undefined, w: number, h: number,
-  x: number, y: number, bw: number, bh: number, d: Dir, mat: FloorMaterial,
-): number | null {
-  if (!above) return null;
-  // where THIS reading puts its head
-  const [dx, dy] = STEP[d];
-  const hx = x + (bw - 1) / 2 + dx * (bw / 2);
-  const hy = y + (bh - 1) / 2 + dy * (bh / 2);
+   PRESENCE IS SQUARED. A side half-covered is not half as good as one fully covered: an entrance two
+   cells wide is a way in, one cell wide is a gap you might fall through, and none at all is a wall.
+   Squaring the 0/1/2 count spreads them 0 / 1 / 4 so a full side decisively outweighs a partial one.
 
-  /* THE NEAREST stair cell above, not the centre of all of them. A storey of a spiral has more than
-     one flight, and their centroid sits in the middle of the building — equidistant from both readings
-     and therefore useless, which is exactly how this first failed to break the tie it was written for.
-     The relevant flight is the one you would actually arrive at. */
-  let best: number | null = null;
-  for (let cy = 0; cy < h; cy++) {
-    for (let cx = 0; cx < w; cx++) {
-      const c = above[cy * w + cx];
-      if (!c || c.floor !== mat) continue;
-      const dist = Math.abs(hx - cx) + Math.abs(hy - cy);
-      if (best === null || dist < best) best = dist;
-    }
-  }
-  return best;
+   ABSENCE IS A FLAG. "Nothing is in the way" has no degrees worth grading — one wall segment across
+   your path stops you as surely as two — so those terms are simply 0 or 1.
+
+   Weights are meant to be tuned; the shape is what matters. HEAD WALL and GROUND are the two that
+   define a staircase (something to climb into, somewhere to come from), so they carry the most. */
+const W_FOOT_OPEN = 2;    // the side you enter from is unwalled
+const W_HEAD_WALL = 3;    // the side you climb into IS walled
+const W_CLEAR_ABOVE = 2;  // upstairs, that side is unwalled too, so arriving is not blocked
+const W_GROUND = 3;       // floor just beyond the foot, to walk in from
+const W_LANDING = 2;      // floor upstairs just beyond the head, to step out onto
+
+const strength = (n: number): number => n * n;
+const absent = (n: number): number => (n === 0 ? 1 : 0);
+
+export interface DirRank {
+  /** Where you climb TO. */
+  dir: Dir;
+  /** Where you walk in FROM — the opposite side, and the one the score is indexed by. */
+  foot: Dir;
+  score: number;
+  /** Fit to draw at all: something to climb into, and somewhere to come from. See `rankAll`. */
+  viable: boolean;
+  /** Tiebreak only, never scored: does the head wall stop at the block, or run past it? */
+  ownHead: boolean;
+  /** Every term, for the readout. */
+  terms: { footOpen: number; headWall: number; clearAbove: number; ground: number; landing: number };
 }
 
 /**
- * IS THERE ANYWHERE TO ARRIVE — floor on the storey above, one cell past the head.
+ * DOES THE HEAD WALL STOP AT THE BLOCK, or run on past it?
  *
- * `ceilingOpen` asks whether the hole exists; this asks whether anything is on the far side of it. They
- * are different questions and only the first was ever asked, so a flight could climb through a perfectly
- * good hole and leave you treading air. The author's own words for it: a good reading has "an unblocked
- * floor at the top AND an unblocked floor at the bottom" — `entryReachable` covered the bottom and
- * nothing covered the top.
+ * NOT A TERM — a tiebreak, and the distinction matters. The five terms describe GEOMETRY. This is a
+ * guess about a HUMAN HABIT: someone building a stairwell draws a short wall exactly behind the
+ * stairs, while a wall running the length of the room is the room's own. Weaker evidence, so it never
+ * outvotes a fact — it only orders readings the geometry has already declared identical, which beats
+ * ordering them by an arbitrary compass order.
  *
- * `floor: 'none'` up there is the void and `rock` is solid, so neither is a landing. No storey above
- * means the question does not apply, and it answers false for BOTH directions rather than guessing —
- * the same shape as `ceilingOpen`, so a signal that cannot be evaluated never tips the decision.
+ *      ITS OWN HEAD WALL            A WALL IT MERELY STANDS BESIDE
+ *      (stops at the block)         (runs on past, both ways)
+ *
+ *           =====                   =====================
+ *            S S                            S S
+ *            S S                            S S
+ *
+ * OFF THE MAP IS NOT A WALL. `wallOn` reports the void beyond the lattice as `wall` — right for
+ * `sideClosed` (you cannot walk off the world), wrong here: beyond the edge there is nothing for a
+ * wall to run on into. A head stub starting on the border used to read as "runs past".
  */
-function landingClear(
-  above: readonly (Cell | null)[] | undefined, w: number, h: number,
+function headWallRunsPast(
+  cells: readonly (Cell | null)[], w: number, h: number,
   x: number, y: number, bw: number, bh: number, d: Dir,
 ): boolean {
-  if (!above) return false;
-  const [sx, sy] = STEP[d];
-  const beyond: [number, number][] = [];
-  if (d === 'N' || d === 'S') {
-    const row = d === 'N' ? y : y + bh - 1;
-    for (let i = 0; i < bw; i++) beyond.push([x + i, row + sy]);
-  } else {
-    const col = d === 'W' ? x : x + bw - 1;
-    for (let j = 0; j < bh; j++) beyond.push([col + sx, y + j]);
-  }
-  for (const [cx, cy] of beyond) {
-    const c = cellAt(above, w, h, cx, cy);
-    if (c && c.floor !== 'none' && c.floor !== 'rock') return true;
-  }
-  return false;
+  const [ax, ay, bx, by] = d === 'N' ? [x - 1, y, x + bw, y]
+    : d === 'S' ? [x - 1, y + bh - 1, x + bw, y + bh - 1]
+      : d === 'W' ? [x, y - 1, x, y + bh]
+        : [x + bw - 1, y - 1, x + bw - 1, y + bh];
+  const onMap = (px: number, py: number): boolean => px >= 0 && py >= 0 && px < w && py < h;
+  const runsOn = (px: number, py: number): boolean =>
+    onMap(px, py) && blocks(wallOn(cells, w, h, px, py, d));
+  return runsOn(ax, ay) || runsOn(bx, by);
 }
 
 /**
- * HOW GOOD A READING IS. The one scorer — the decision and the explanation both call THIS, never a
- * copy of it. An explanation that can disagree with the decision is worse than no explanation, and
- * this codebase has paid for that twice already (`openingAt` vs `moduleAt` cost eleven wall types;
- * `edgeDraw`'s overloaded null put an endcap in a quarter of all doorways).
+ * All four readings, best first.
  *
- * THE FOOT MULTIPLIER IS DERIVED, NOT PICKED. The invariant is: A REAL FLOOR ENTRANCE ALONE MUST
- * OUTWEIGH EVERY OTHER SIGNAL COMBINED — an ordinary way in beats any pile of circumstantial evidence
- * for the other reading. The foot is graded 0/1/2 (nothing / more stairs / ordinary floor), so with the
- * other signals summing to at most 2+2+1 = 5, the multiplier must exceed that: 12 against 6+5 = 11.
+ * VIABILITY IS SEPARATE FROM SCORE, and keeping them apart is the point. Score RANKS; viability says
+ * whether the winner is fit to draw at all. Fold them together and there is always a winner however
+ * bad the field — four poor readings still produce a confident staircase, which is how a flight ended
+ * up facing a wall with its entrance in the void.
  *
- * It has already gone wrong twice by being chosen instead of derived. At x3 an ordinary foot alone (6)
- * TIED a stairs foot with everything else (3+2+1 = 6); x4 fixed that but was then left behind when
- * `landingClear` was added, which would have made 4+2+2+1 = 9 beat a bare ordinary foot at 8. RECOMPUTE
- * THIS BOUND whenever a signal is added or reweighted.
+ * THE HOLE IN THE CEILING IS NOT HERE, and deliberately. It is the only way off the top of a flight,
+ * which makes it sound like the strongest signal of all — but it is the same value for every direction.
+ * A stairwell's hole is cut to the shape of the BLOCK, so every reading's head cells sit inside it:
+ * measured across the whole authored store, 13 flights out of 13 answered identically in all four
+ * directions. A constant added to all four options cannot order them. It survives where it does mean
+ * something — as a FAULT, below, for a flight that climbs into a solid deck — and nowhere else.
  */
-function score(
+function rankAll(
   cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
-  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
-): number {
-  return entryReachable(cells, w, h, x, y, bw, bh, d) * 6
-    + (ceilingOpen(above, w, h, x, y, bw, bh, d) ? 2 : 0)
-    + (landingClear(above, w, h, x, y, bw, bh, d) ? 2 : 0)
-    + (endContinues(cells, w, h, x, y, bw, bh, d) ? 0 : 1);
+  w: number, h: number, x: number, y: number, bw: number, bh: number,
+): DirRank[] {
+  const wallsHere = wallsPerSide(cells, w, h, x, y, bw, bh);
+  const wallsAbove = wallsPerSide(above, w, h, x, y, bw, bh);
+  const floorsHere = floorsPerSide(cells, w, h, x, y, bw, bh);
+  const floorsAbove = floorsPerSide(above, w, h, x, y, bw, bh);
+
+  const ranks = RING.map((footDir, i): DirRank => {
+    const head = opposite(i);
+    const terms = {
+      footOpen: absent(wallsHere[i]!) * W_FOOT_OPEN,
+      headWall: strength(wallsHere[head]!) * W_HEAD_WALL,
+      clearAbove: absent(wallsAbove[head]!) * W_CLEAR_ABOVE,
+      ground: strength(floorsHere[i]!) * W_GROUND,
+      landing: strength(floorsAbove[head]!) * W_LANDING,
+    };
+    const dir = RING[head]!;
+    return {
+      dir, foot: footDir,
+      score: terms.footOpen + terms.headWall + terms.clearAbove + terms.ground + terms.landing,
+      // a wall to climb into, and ground to come from. Neither is a preference.
+      viable: wallsHere[head]! > 0 && floorsHere[i]! > 0,
+      ownHead: !headWallRunsPast(cells, w, h, x, y, bw, bh, dir),
+      terms,
+    };
+  });
+
+  return ranks.slice().sort((a, b) => (b.viable ? 1 : 0) - (a.viable ? 1 : 0)
+    || b.score - a.score                                  // the five terms decide
+    || (b.ownHead ? 1 : 0) - (a.ownHead ? 1 : 0)          // identical? then whose wall is it
+    || TIE_ORDER.indexOf(a.dir) - TIE_ORDER.indexOf(b.dir));  // still level? fixed, never random
 }
 
-/** `score` plus the continuity tiebreak, as a sortable pair. Continuity is consulted ONLY when the
- *  scores are equal — it is a tiebreak, not a fourth weighted signal, because a flight that carries on
- *  upward is no use if nobody can walk on to it. */
-function rank(
-  cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
-  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir, mat: FloorMaterial,
-): { score: number; toNext: number | null } {
-  return {
-    score: score(cells, above, w, h, x, y, bw, bh, d),
-    toNext: continuesUpward(above, w, h, x, y, bw, bh, d, mat),
-  };
+export interface StairChoice {
+  /** all four, best first */
+  ranks: DirRank[];
+  chosen: Dir | null;
+  /** the winner and runner-up scored the same */
+  tie: boolean;
 }
 
-function signals(
-  cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
-  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
-): { foot: number; ceiling: boolean; landing: boolean; ownHead: boolean } {
-  return {
-    // 2 = ordinary floor, 1 = only more stairs, 0 = nothing to enter from. See `entryReachable`.
-    foot: entryReachable(cells, w, h, x, y, bw, bh, d),
-    ceiling: ceilingOpen(above, w, h, x, y, bw, bh, d),
-    landing: landingClear(above, w, h, x, y, bw, bh, d),
-    ownHead: !endContinues(cells, w, h, x, y, bw, bh, d),
-  };
-}
+let lastChoice: StairChoice | null = null;
 
 /** The reasoning behind the flight at (x,y), or null if there is none there. Call right after
  *  `stairFlight` on the same cell. */
@@ -592,48 +618,18 @@ export function stairChoiceAt(
   return lastChoice;
 }
 
-/** One line an author can read. */
+/** One line an author can read. The LOSERS are the interesting part when a flight faces somewhere
+ *  unexpected, so all four are printed with every term. */
 export function stairChoiceText(c: StairChoice): string {
-  const one = (s: StairSignals): string =>
-    `${s.dir}(foot ${s.foot === 2 ? 'FLOOR' : s.foot === 1 ? 'only stairs' : 'NO GROUND'}, ceiling ${s.ceiling ? 'open' : 'not open'}, `
-    + `landing ${s.landing ? 'clear' : 'none'}, `
-    + `head ${s.ownHead ? 'its own' : 'runs past'}${s.score >= 0 ? ` = ${s.score}` : ''}, toNext ${s.toNext ?? 'n/a'})`;
-  if (!c.contested) return `only one axis had a closed end, so the walls decided: ${one(c.v)}`;
-  const tail = !c.tie ? ''
-    : c.brokenByNext ? ' — tied on every signal, settled by which head lands nearer the flight above'
-      : ' — TIED on everything and nothing above to aim at, so it took the vertical reading';
-  return `${one(c.v)} vs ${one(c.h!)}${tail}`;
+  const one = (r: DirRank): string =>
+    `${r.dir}${r.dir === c.chosen ? '*' : ''} ${r.score}`
+    + ` (foot ${r.foot}: open ${r.terms.footOpen}, head wall ${r.terms.headWall},`
+    + ` clear above ${r.terms.clearAbove}, ground ${r.terms.ground}, landing ${r.terms.landing}`
+    + `${r.viable ? '' : ' — UNUSABLE'})`;
+  return c.ranks.map(one).join('  |  ')
+    + (c.tie ? '  — tied on all five, ordered by whose head wall it is' : '');
 }
 
-function entryReachable(
-  cells: readonly (Cell | null)[], w: number, h: number,
-  x: number, y: number, bw: number, bh: number, d: Dir,
-): number {
-  // one cell beyond the foot, across the whole width of it
-  const [sx, sy] = STEP[d];
-  const beyond: [number, number][] = [];
-  if (d === 'N' || d === 'S') {
-    const row = d === 'N' ? y + bh - 1 : y;          // the foot row is the END OPPOSITE the climb
-    for (let i = 0; i < bw; i++) beyond.push([x + i, row - sy]);
-  } else {
-    const col = d === 'W' ? x + bw - 1 : x;
-    for (let j = 0; j < bh; j++) beyond.push([col - sx, y + j]);
-  }
-  /* GRADED, because not all ground is an entrance.
-     ORDINARY floor at the foot is a real way in — someone walks along it and steps on. More STAIRS at
-     the foot is not: that is the middle of a staircase, and treating it as an entrance made a flight
-     surrounded by stair cells look equally enterable from every side, so two readings tied on the
-     strongest signal and the direction fell to an arbitrary tiebreak. Void or solid rock is no
-     entrance at all.
-     One neighbour is enough — a flight entered through a doorway is entered from one cell. */
-  let best = 0;
-  for (const [cx, cy] of beyond) {
-    const c = cellAt(cells, w, h, cx, cy);
-    if (!c || c.floor === 'none' || c.floor === 'rock') continue;
-    best = Math.max(best, isStairFloor(c.floor) ? 1 : 2);
-  }
-  return best;
-}
 
 /** Everything both the placer and the diagnostic need, worked out ONCE so they cannot disagree. */
 interface Geometry {
@@ -657,87 +653,46 @@ function flightGeometry(
     for (let i = 0; i < bw; i++) if (!isStairs(cells, w, h, x + i, y + j, mat)) return { fault: { kind: 'ragged', mat } };
   }
 
-  const closed = {
-    N: sideClosed(cells, w, h, x, y, bw, bh, 'N'),
-    S: sideClosed(cells, w, h, x, y, bw, bh, 'S'),
-    W: sideClosed(cells, w, h, x, y, bw, bh, 'W'),
-    E: sideClosed(cells, w, h, x, y, bw, bh, 'E'),
+  /* RANK ALL FOUR DIRECTIONS. No axis gate, no forced/contested split.
+
+     What stood here: `closed[d]` was computed all-or-nothing, then `vAxis = closed.N XOR closed.S`
+     and the same for W/E decided which AXES were even allowed to compete. At most two directions
+     were ever candidates, and WITHIN an axis the walls alone picked N-or-S with no other signal
+     consulted. If exactly one axis survived, the walls settled it outright and the foot, ceiling and
+     landing were computed only for the readout and then thrown away.
+
+     That gate is what put a staircase into the void: a head wall covering half the block failed the
+     all-or-nothing test, its axis was struck out before scoring, and the surviving axis won by being
+     the only one left — while the axis with the actual floor evidence held a twelve-point advantage
+     nothing ever counted.
+
+     Now every direction is scored on every criterion and the best one wins. The walls stopped being
+     a filter and became evidence, which is all they ever were. */
+  const ranks = rankAll(cells, above, w, h, x, y, bw, bh);
+  const best = ranks[0]!;
+  const runnerUp = ranks[1];
+  lastChoice = {
+    ranks,
+    chosen: best.viable ? best.dir : null,
+    tie: !!runnerUp && runnerUp.viable === best.viable && runnerUp.score === best.score,
   };
-  const vAxis = closed.N !== closed.S;
-  const hAxis = closed.W !== closed.E;
-  if (!vAxis && !hAxis) return { fault: { kind: 'undecidable', mat, bw, bh } }; // nothing to go on
 
-  let vertical: boolean;
-  const contested = vAxis === hAxis;
-  if (!contested) {
-    /* ONE AXIS QUALIFIES, so the walls settle it on their own and the floor evidence is never
-       consulted. Recorded anyway, because "the walls left no choice" is itself the answer to "why is
-       it pointing that way" and an author staring at a flight deserves to be told that rather than
-       left to infer it. */
-    vertical = vAxis;
-    const only: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
-    lastChoice = {
-      contested: false,
-      v: { dir: only, score: score(cells, above, w, h, x, y, bw, bh, only), ...signals(cells, above, w, h, x, y, bw, bh, only) },
-      h: null, tie: false,
-    };
-  } else {
-    /* BOTH axes look like a climb, which is what a staircase in a corner looks like. Two things can
-       tell them apart, and the CEILING is the better one, so it is asked first.
+  /* NOTHING FIT TO DRAW. Not "the walls were ambiguous" any more — every reading was examined and
+     none of them is a staircase: no wall to climb into, or no way in, or nowhere to come from. The
+     readout carries the whole table, so the author can see which criterion each direction failed
+     rather than being told the block is undecidable. */
+  if (!best.viable) return { fault: { kind: 'undecidable', mat, bw, bh } };
 
-       WHERE DOES THE FLIGHT ARRIVE? It climbs into a wall — that is how its direction is derived — so
-       the only way off the top is through the storey above. One reading may arrive under a hole and
-       the other under solid floor, and a flight that climbs into a closed ceiling is simply the wrong
-       reading of the same walls. That is only answerable with the storey above in hand, which is why
-       it is threaded this far down.
-
-       Failing that (one storey, or both ends equally open above), fall back to which head wall STOPS
-       at the block: a wall that runs on past it is one the stair stands beside, not its own head. */
-    const vDir: Dir = closed.N ? 'N' : 'S';
-    const hDir: Dir = closed.W ? 'W' : 'E';
-
-    /* WEIGHTED, because the three signals are not equally good evidence.
-
-       THE FOOT OUTWEIGHS EVERYTHING. A flight whose entry faces void, solid rock or the edge of the
-       map is one nobody can walk on to, and that settles the question outright — you can argue about
-       which end is the head, you cannot argue about an entrance nobody can reach.
-
-       THE CEILING IS NEXT. A flight climbs into a wall, so the storey above is its only exit; of two
-       readings the one arriving under a hole works and the one arriving under solid deck does not.
-       Strong, but only answerable when there IS a storey above.
-
-       THE HEAD WALL IS THE WEAKEST, and was the original rule: a wall that runs on past the block is
-       one the stair stands beside rather than its own head. A reasonable guess, and the one to fall
-       back on when nothing better is available.
-
-       Scored rather than ordered so a direction winning two weak signals can still lose to the strong
-       one — which is the whole reason for weighting instead of a chain of ifs. */
-    const v = rank(cells, above, w, h, x, y, bw, bh, vDir, mat);
-    const hh = rank(cells, above, w, h, x, y, bw, bh, hDir, mat);
-    const tied = v.score === hh.score;
-    /* Equal on every weighted signal, so ask which reading CARRIES ON UPWARD — the head that lands
-       nearer the next flight is the one the author drew. Only then, and only when there is something
-       above to aim at, does it fall back to the arbitrary vertical reading. */
-    let byNext: boolean | null = null;
-    if (tied && v.toNext !== null && hh.toNext !== null && v.toNext !== hh.toNext) {
-      byNext = v.toNext < hh.toNext;
-    }
-    lastChoice = {
-      contested: true,
-      v: { dir: vDir, score: v.score, toNext: v.toNext, ...signals(cells, above, w, h, x, y, bw, bh, vDir) },
-      h: { dir: hDir, score: hh.score, toNext: hh.toNext, ...signals(cells, above, w, h, x, y, bw, bh, hDir) },
-      tie: tied,
-      brokenByNext: byNext !== null,
-    };
-    vertical = byNext ?? v.score >= hh.score;
-  }
-
-  const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
+  const up: Dir = best.dir;
+  const vertical = up === 'N' || up === 'S';
   const width = vertical ? bw : bh;
   const run = vertical ? bh : bw;
   const left = LEFT_OF[up], right = RIGHT_OF[up];
+  /* THE HANDED MESH still asks the all-or-nothing question, and correctly: a flank is a wall to run
+     the balustrade against only if it covers the whole flight. Half a flank is not half a mesh. */
+  const flank = (d: Dir): boolean => sideClosed(cells, w, h, x, y, bw, bh, d);
   const walls: -1 | 0 | 1 | 2 =
-    closed[left] && closed[right] ? 2 : closed[left] ? -1 : closed[right] ? 1 : 0;
+    flank(left) && flank(right) ? 2 : flank(left) ? -1 : flank(right) ? 1 : 0;
 
   /* RUN AND WIDTH ARE BOTH HARD. Run length was already — a 4u mesh in a 6u hole leaves a step
      missing — but width was only a preference, and a block wider than any mesh fell through to
@@ -745,26 +700,26 @@ function flightGeometry(
      because the block's other cells abstain from drawing ground of their own (`insideFlight`).
      Failing here instead sends the whole block to per-cell stone: visible, walkable, and
      `stairFaultText` tells the author which sizes exist. */
-  /* THE CHOSEN READING HAS TO BE USABLE, and on a FORCED axis nothing checked.
-     When both axes qualify the scoring picks the better one; when only one does, the walls settle it
-     and the foot and ceiling were never consulted at all — so a flight could climb into a solid deck,
-     or sit with its entrance in the void, and nothing said a word.
-     A FAULT rather than a reversal. Reversing puts the foot where the wall is, and the walls are the
-     one thing that is not ambiguous here, so the honest answer is to tell the author their flight does
-     not work rather than to draw a different wrong one. Only ever with the storey above IN HAND: no
-     `above` means the question was not asked, not that the answer was bad.
+  /* A SEALED CEILING is worth refusing over, but ONLY WHEN THE WALLS LEFT NO CHOICE.
 
-     ONLY ON A FORCED AXIS. When both axes qualified, the scoring already WEIGHED the foot and the
-     ceiling and picked the better reading — faulting there would reject cases it deliberately resolved,
-     and would break a structure that currently ships. A contested reading that still looks poor is a
-     WARNING for the readout, not a refusal to draw. */
-  if (!contested) {
-    if (entryReachable(cells, w, h, x, y, bw, bh, up) === 0) {
-      return { fault: { kind: 'no-entry', mat, up } };
-    }
-    if (above && !ceilingOpen(above, w, h, x, y, bw, bh, up)) {
-      return { fault: { kind: 'sealed-ceiling', mat, up } };
-    }
+     `hole` is scored rather than required on purpose: a single-storey structure has no ceiling to
+     speak of, and requiring one would make every ground-floor staircase a fault. So the refusal is
+     narrow — when exactly one direction has a head wall at all, the geometry dictated the answer and
+     nothing weighed the ceiling, and a flight climbing into solid deck should say so rather than draw.
+
+     WHEN TWO OR MORE DIRECTIONS HAVE A HEAD WALL, THE RANKING ALREADY WEIGHED THE HOLE and picked the
+     best available reading. Faulting there would reject cases it deliberately resolved — including a
+     staircase whose only usable entrance happens to sit under solid deck, which is a real authoring
+     situation and currently ships. Drawing the best available reading and reporting `hole n` in the
+     table is the honest answer; refusing to draw is not.
+
+     This is the restriction the old code expressed as "only on a FORCED axis". Restating it in the new
+     vocabulary cost three tests when it was briefly dropped: the test is HEAD WALLS, not viability,
+     because viability also folds in the foot — and the foot is exactly what the ranking is supposed to
+     be allowed to trade against the ceiling. */
+  const withHeadWall = ranks.filter((r) => r.terms.headWall > 0).length;
+  if (withHeadWall <= 1 && above && !ceilingOpen(above, w, h, x, y, bw, bh, up)) {
+    return { fault: { kind: 'sealed-ceiling', mat, up } };
   }
 
   if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run && m.across === width)) {

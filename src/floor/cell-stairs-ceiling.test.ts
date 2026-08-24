@@ -48,26 +48,22 @@ function ceilingWithHoleAt(holes: readonly [number, number][]): Cell[] {
 }
 
 describe('a corner staircase climbs toward the hole in the ceiling', () => {
-  it('climbs NORTH when the hole is over its north end', () => {
-    // the north head cells of the block are (1,1) and (2,1)
-    const above = ceilingWithHoleAt([[1, 1], [2, 1]]);
-    expect(stairFlight(corner(), W, H, 1, 1, above)).toMatchObject({ up: 'N' });
-  });
-
-  it('climbs WEST when the hole is over its west end instead', () => {
-    // the west head cells are (1,1) and (1,2) — same walls, same block, opposite reading
-    const above = ceilingWithHoleAt([[1, 1], [1, 2]]);
-    expect(stairFlight(corner(), W, H, 1, 1, above)).toMatchObject({ up: 'W' });
-  });
-
-  it('needs the WHOLE head open — half a hole is somewhere to fall, not an exit', () => {
-    // only one of the two north head cells is open, so north does not win on the ceiling
-    const half = ceilingWithHoleAt([[1, 1]]);
-    // ...and neither does west, whose head is (1,1)+(1,2) and also only half open. With the ceiling
-    // silent it falls through to the older rule rather than picking at random.
-    const both = stairFlight(corner(), W, H, 1, 1, half);
-    const none = stairFlight(corner(), W, H, 1, 1);
-    expect(both?.up).toBe(none?.up);
+  it('THE CEILING DOES NOT CHOOSE THE DIRECTION — it is the same hole whichever way you read it', () => {
+    /* THIS TEST USED TO ASSERT THE OPPOSITE, and it was measuring an accident of its own fixture.
+       A real stairwell's hole is cut to the shape of the BLOCK, so every reading's head cells sit
+       inside it and the answer is the same for all four directions. Measured across the whole authored
+       store: 13 flights out of 13 answered identically N/E/S/W. A value that is equal for every option
+       cannot order them, so the ceiling was doing nothing but costing four lookups per flight.
+       These fixtures could only make it look decisive by punching a hole over ONE end, which is not a
+       shape anybody authors. The walls and the floor choose the direction now; the ceiling survives as
+       a FAULT for a flight that climbs into solid deck, which is the question it can actually answer. */
+    const overNorth = ceilingWithHoleAt([[1, 1], [2, 1]]);
+    const overWest = ceilingWithHoleAt([[1, 1], [1, 2]]);
+    const whole = ceilingWithHoleAt([[1, 1], [2, 1], [1, 2], [2, 2]]);   // how it is really authored
+    const plain = stairFlight(corner(), W, H, 1, 1)?.up;
+    expect(stairFlight(corner(), W, H, 1, 1, whole)?.up).toBe(plain);
+    expect(stairFlight(corner(), W, H, 1, 1, overNorth)?.up).toBe(plain);
+    expect(stairFlight(corner(), W, H, 1, 1, overWest)?.up).toBe(plain);
   });
 
   it('prefers the head with somewhere to LAND, not just a hole to climb through', () => {
@@ -114,12 +110,22 @@ describe('a corner staircase climbs toward the hole in the ceiling', () => {
     expect(stairFlight(cells, W, H, 1, 1)).toMatchObject({ up: 'W' });
   });
 
-  it('ONE walkable neighbour at the foot is enough — a doorway is one cell wide', () => {
+  it('a WIDER entrance beats a narrower one, but one cell is still a way in', () => {
+    /* A DELIBERATE CHANGE OF MODEL. The foot used to be graded by the BEST neighbour, so one walkable
+       cell scored exactly as well as two — "a doorway is one cell wide". It is counted now, and the
+       count is squared (0 / 1 / 4), because the two are not equally good: a two-cell entrance is a way
+       in, a one-cell entrance is a gap you have to line yourself up with.
+       One cell still makes the reading VIABLE — it is a way in, just a worse one — so a flight with a
+       single walkable neighbour and nothing competing still draws. */
     const cells = corner();
-    cells[3 * W + 1]!.floor = 'rock';                            // block half of north's entry
-    // north's foot is still reachable through (2,3), so the ceiling gets to decide as before
-    const above = ceilingWithHoleAt([[1, 1], [2, 1]]);
-    expect(stairFlight(cells, W, H, 1, 1, above)).toMatchObject({ up: 'N' });
+    cells[3 * W + 1]!.floor = 'rock';                   // half of north's entry blocked; west's is full
+    expect(stairFlight(cells, W, H, 1, 1)).toMatchObject({ up: 'W' });
+
+    // ...and with west's entry blocked off entirely, north's single cell carries it
+    const narrow = corner();
+    narrow[3 * W + 1]!.floor = 'rock';
+    for (const yy of [1, 2]) narrow[yy * W + 3]!.floor = 'none';   // east of the block: no ground at all
+    expect(stairFlight(narrow, W, H, 1, 1)).toMatchObject({ up: 'N' });
   });
 
   it('the ceiling never OVERRIDES an unambiguous flight — but a sealed head is a FAULT', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, stairChoiceAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
@@ -442,6 +442,52 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
       if (x === 3) c.wallW = 'wall';                        // room wall, full height
     });
     expect(stairFlight(mirrored, SW, SH, 3, 0)).toMatchObject({ up: 'N' });
+  });
+
+  it("the FOOT goes where the FLOOR is, not off the end of the structure", () => {
+    /* FROM A REAL AUTHORED CASE. A 3x2 structure: a 2x2 stair block in the top-left corner, ordinary
+       stone filling the right-hand column, `wallN` across the block's top and `wallW` down its left.
+       Both walls are exactly the block's extent. The foot belongs on the RIGHT, on the stone — so it
+       climbs WEST.
+
+       North and west are IDENTICAL on every other signal: both head walls are 100% and both are the
+       block's own. The ONLY thing between them is where the ground is, and north's foot points at the
+       padding row — the strip of lattice past the structure's floor extent, which owns nothing. Read
+       that as walkable and north scores an identical 20, the tiebreak cannot separate them either, and
+       the fixed order hands it to north: a staircase whose entrance is outside the structure.
+
+       So this test is really about the padding. `entryReachable` is handed the POINT lattice and has no
+       idea which of it is real, which is why `forDisplay` pins the unowned slots to `none` before
+       anything reads them. Pin them and W wins outright, 20 to an unusable 8. */
+    const SW = 3, SH = 2;
+    const lw = SW + 1, lh = SH + 1;          // the point lattice, which is what stairFlight is handed
+    const cells: Cell[] = [];
+    for (let y = 0; y < lh; y++) {
+      for (let x = 0; x < lw; x++) {
+        const c = openCell();
+        const padding = x >= SW || y >= SH;
+        if (padding) c.floor = 'none';       // owns nothing — see `abstainUnowned` / `forDisplay`
+        else if (x <= 1 && y <= 1) c.floor = 'stairs';
+        else c.floor = 'stone';              // the right-hand column: the way in
+        if (!padding && y === 0 && x <= 1) c.wallN = 'wall';
+        if (!padding && x === 0 && y <= 1) c.wallW = 'wall';
+        cells.push(c);
+      }
+    }
+
+    expect(stairFlight(cells, lw, lh, 0, 0)).toMatchObject({ up: 'W' });
+
+    // and WHY, so a regression says which criterion moved rather than just flipping a letter
+    const why = stairChoiceAt(cells, lw, lh, 0, 0)!;
+    const by = (d: string) => why.ranks.find((r) => r.dir === d)!;
+    expect(why.chosen).toBe('W');
+    expect(by('W')).toMatchObject({ viable: true });
+    expect(by('W').terms.ground).toBeGreaterThan(0);
+    // north's head wall is just as good — it loses on the foot alone, and must be UNUSABLE not merely worse
+    expect(by('N')).toMatchObject({ viable: false });
+    expect(by('N').terms.headWall).toBe(by('W').terms.headWall);   // the heads are equally walled
+    expect(by('N').terms.ground).toBe(0);                          // it is the GROUND that decides
+    expect(by('W').score).toBeGreaterThan(by('N').score);
   });
 
   it('still refuses when NEITHER axis has a closed end — there is nothing to go on', () => {
