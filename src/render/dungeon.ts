@@ -1187,15 +1187,24 @@ export class Dungeon {
     for (let depth = 0; depth < FOG_SPREAD; depth++) {
       const next: CellRec[] = [];
       for (const rec of frontier) {
-        for (const [bit, dc, dr] of steps) {
-          if ((rec.wallMask & bit) !== 0) continue;          // awareness does not pass a wall
-          const nb = this.cellIndex.get(this.cellKey(rec.stratum, rec.col + dc, rec.row + dr));
-          if (!nb || !nb.walkable) continue;
+        const reach = (nb: CellRec | undefined): void => {
+          if (!nb || !nb.walkable) return;
           const k = this.cellKey(nb.stratum, nb.col, nb.row);
-          if (seen.has(k)) continue;
+          if (seen.has(k)) return;
           seen.add(k);
           if (!nb.explored) { nb.explored = true; this.exploredCount++; }
           next.push(nb);
+        };
+        for (const [bit, dc, dr] of steps) {
+          if ((rec.wallMask & bit) !== 0) continue;          // awareness does not pass a wall
+          reach(this.cellIndex.get(this.cellKey(rec.stratum, rec.col + dc, rec.row + dr)));
+        }
+        /* AND IT CLIMBS. A stairwell is the one place awareness should carry between storeys — you can
+           see the bottom of a flight and know what is at the top of it. The route graph has always
+           known this; the reveal did not, so the sense stopped dead at the foot of every staircase. */
+        if (rec.stair) {
+          reach(this.cellIndex.get(this.cellKey(rec.stratum + 1, rec.col, rec.row)));
+          reach(this.cellIndex.get(this.cellKey(rec.stratum - 1, rec.col, rec.row)));
         }
       }
       frontier = next;

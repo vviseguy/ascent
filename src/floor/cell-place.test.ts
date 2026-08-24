@@ -264,8 +264,8 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     const p = cellPlacements(block(), SW, SH, 1, 1)[0]!;
     expect(p.turn).toBe(0);              // a north climb is the mesh's native orientation
     expect(p.x).toBe(65536);             // (bw-1) = 1 east: centred across the 2-cell width
-    expect(p.z).toBe(-65536 + 7864);     // the top end (-1), pushed 0.12 DOWNHILL to clear the wall trim
-    expect(p.y).toBe(3277);              // lifted to the deck's walking surface, 0.05
+    expect(p.z).toBe(-65536);            // (bh-1) - run = -1: the top end, not the middle
+    expect(p.y).toBe(0);                 // sits ON the deck — no lift, no nudge, just the pivot
     // which puts the 4u-deep mesh over the two cells of the block, flush with the floor either end
   });
 
