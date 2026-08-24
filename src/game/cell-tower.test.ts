@@ -4,11 +4,13 @@ import { fromInt, fromFloatConst, toFloat, toRaw } from '../sim/fixed/fixed.ts';
 import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveGrid } from '../floor/cell-grid.ts';
 import { compileCellTower, cellCentre2u, cellWorldPlacements, wallMask2u, CELL_SIZE_2U, type CellFloor } from './cell-tower.ts';
+import { drawnClimbDir } from '../floor/cell-place.ts';
 import { FLOOR_HEIGHT } from './tower.ts';
 import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
 import { openCell } from '../floor/cell.ts';
 import { summitRoute, CELL_PROBE } from './route-check.ts';
 import type { Cell } from '../floor/cell.ts';
+import type { AABB } from '../sim/collide/terrain.ts';
 
 const W = 24, H = 20;
 const makeFloor = (seed: bigint): CellFloor => {
@@ -208,4 +210,95 @@ describe('wallMask2u speaks the canonical bit language', () => {
   it('an open cell in open ground has no bits set at all', () => {
     expect(wallMask2u(grid(() => {}), W, H, centre)).toBe(0);
   });
+});
+
+describe('cell-tower — the collider and the mesh describe the SAME staircase', () => {
+  /* A corner flight whose direction the STOREY ABOVE decides.
+     2x2 of stairs at (1,1), walled north and west, with ground on both open sides — so the walls and
+     the floor alone are symmetric and cannot choose. What breaks the tie is where the hole is, and
+     that lives one storey up. */
+  const flight = (): Cell[] => {
+    const out: Cell[] = [];
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        const c = openCell();
+        c.floor = 'stone';
+        if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs';
+        if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
+        if ((y === 1 || y === 2) && x === 1) c.wallW = 'wall';
+        out.push(c);
+      }
+    }
+    return out;
+  };
+  /** A deck that is void EXCEPT where it gives the flight somewhere to land — floor one cell past a
+   *  head, which is what `above` contributes to the score now that the hole no longer steers. */
+  const deckLandingAt = (landing: readonly [number, number][]): Cell[] => {
+    const out: Cell[] = [];
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        const c = openCell();
+        c.floor = landing.some(([hx, hy]) => hx === x && hy === y) ? 'stone' : 'none';
+        out.push(c);
+      }
+    }
+    return out;
+  };
+
+  /* Which way the DRAWN mesh climbs. NOT derivable from `turn` alone: two meshes in the kit are
+     authored a quarter-turn off and carry a per-mesh correction, so the url is part of the question.
+     `drawnClimbDir` is the renderer's own inverse — going through it is the point. */
+
+  /** Which way the COLLIDER climbs: find the tallest step, and see which end of the block it sits at. */
+  function collidedDir(solids: readonly { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[],
+    baseY: number): string {
+    const steps = solids.filter((b) => Math.abs(b.minY - baseY) < 1e-6 && b.maxY > baseY + 0.1);
+    expect(steps.length).toBeGreaterThan(0);
+    const top = steps.reduce((a, b) => (b.maxY > a.maxY ? b : a));
+    const cx = (top.minX + top.maxX) / 2, cz = (top.minZ + top.maxZ) / 2;
+    const mid = steps.reduce((a, b) => a + (b.minX + b.maxX) / 2, 0) / steps.length;
+    const midZ = steps.reduce((a, b) => a + (b.minZ + b.maxZ) / 2, 0) / steps.length;
+    // the taller end is the HEAD; whichever axis it is displaced along is the climb axis
+    return Math.abs(cz - midZ) >= Math.abs(cx - mid)
+      ? (cz < midZ ? 'N' : 'S')
+      : (cx < mid ? 'W' : 'E');
+  }
+
+  for (const [label, landing, want] of [
+    ['a landing NORTH of it', [[1, 0], [2, 0]], 'N'],
+    ['a landing WEST of it', [[0, 1], [0, 2]], 'W'],
+  ] as [string, [number, number][], string][]) {
+    it(`agree when the storey above decides it — ${label}`, () => {
+      const floors: CellFloor[] = [
+        { cells: flight(), width: 5, height: 5, entry: 0, exit: 24 },
+        { cells: deckLandingAt(landing), width: 5, height: 5, entry: 0, exit: 24 },
+      ];
+      const t = compileCellTower(floors, 0, PARAMS);
+
+      // what got DRAWN
+      const stair = t.cellGrid![0]!.wallPlacements.filter((p) => /stairs/.test(p.unit.url));
+      expect(stair.length).toBe(1);
+      const drawn = drawnClimbDir(stair[0]!.unit.url, stair[0]!.unit.turn);
+
+      // what got COLLIDED — the step stack on stratum 0
+      /** AABB stores RAW Fixed, not `Fixed` — Q16.16, so a raw unit is 1/65536 of a metre. */
+      const F = (n: number): number => n / 65536;
+      const base = toFloat(PARAMS.groundY);
+      const inBlock = t.terrain.solids.filter((b: AABB) => {
+        const cx = (F(b.minX) + F(b.maxX)) / 2, cz = (F(b.minZ) + F(b.maxZ)) / 2;
+        return Math.abs(cx) <= 2.01 && Math.abs(cz) <= 2.01;
+      }).map((b: AABB) => ({
+        minX: F(b.minX), maxX: F(b.maxX), minY: F(b.minY),
+        maxY: F(b.maxY), minZ: F(b.minZ), maxZ: F(b.maxZ),
+      }));
+      const collided = collidedDir(inBlock, base);
+
+      /* THE POINT. These came from two calls to `stairFlight` — one for the mesh, one for the
+         collider — and the collider's used to omit the storey above. Different arguments, different
+         answer, and the two answers are the staircase you SEE and the steps you can STAND on. It could
+         be drawn climbing west and collided climbing north. */
+      expect(drawn).toBe(want);
+      expect(collided).toBe(drawn);
+    });
+  }
 });

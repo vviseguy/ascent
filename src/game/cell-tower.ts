@@ -35,7 +35,7 @@
 
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
-import { blocks, isStairFloor, seesThrough, type Cell } from '../floor/cell.ts';
+import { blocks, isStairFloor, seesThrough, type Cell, type Dir } from '../floor/cell.ts';
 import { gridPlacements, moduleAt, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
 import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
 import { getApproved, type ApprovedBox } from './approved-assets.ts';
@@ -295,8 +295,38 @@ export function wallMask2u(cells: readonly (Cell | null)[], w: number, h: number
 }
 
 /**
+ * THE SIDES A STAIR MESH CARRIES, measured off the GLBs (`tmp/glb-rails.mjs`).
+ *
+ * A staircase is not just treads. Every variant in the kit carries something down at least one flank —
+ * a full wall on the handed pair, banisters on the open ones, solid sides on the walled one — and NONE
+ * of it collided. `emitFlightSolids` laid eight tread boxes and stopped, so a body could walk sideways
+ * straight through a 5.10-tall wall it could see, and off the edge of every banistered flight.
+ *
+ * Worse than an ordinary missing collider, because a walled flight's sides are deliberately NOT drawn
+ * by the cells either — the mesh carries them, which is what `walls` is for and what the "a walled
+ * flight carries its own sides" test pins. So nothing anywhere put a solid there.
+ *
+ *   stairs / stairs_wide / stairs_wood   rails BOTH flanks, 0.75 wide, up to 5.10
+ *   stairs_wall_left / _right            a WALL on ONE flank, 0.90 wide, up to 5.10; other flank OPEN
+ *   stairs_walled                        solid sides BOTH flanks, 1.00 wide, tread height only
+ *
+ * `walls` already says which flanks the mesh dresses, so it is the only input: the open flank of a
+ * handed mesh is genuinely open — you step off it onto the landing — and must stay that way.
+ */
+const SIDE_THICKNESS = fromFloatConst(0.75);
+
+/** Which flanks of a flight carry something solid, from the mesh it resolved to. */
+function dressedFlanks(walls: StairFlight['walls']): { left: boolean; right: boolean } {
+  // -1 = wall on the left only, 1 = right only; 2 = solid both; 0 = banisters, which are still solid
+  return walls === -1 ? { left: true, right: false }
+    : walls === 1 ? { left: false, right: true }
+      : { left: true, right: true };
+}
+
+/**
  * The collider for one authored flight: a stack of STEPS rather than a ramp, matching the mesh's own
- * eight treads of 0.50 so a body's feet land where the art says they should.
+ * eight treads of 0.50 so a body's feet land where the art says they should — PLUS whatever the mesh
+ * carries down its flanks (see `dressedFlanks`).
  */
 function emitFlightSolids(solids: AABB[], f: StairFlight, w: number, h: number, baseY: Fixed): void {
   const rise = mul(FLOOR_HEIGHT, fromFloatConst(1 / STAIR_STEPS));
@@ -320,7 +350,30 @@ function emitFlightSolids(solids: AABB[], f: StairFlight, w: number, h: number, 
     const top = add(baseY, mul(rise, fromInt(k + 1)));
     solids.push(vertical ? makeBox(x0, baseY, lo, x1, top, hi) : makeBox(lo, baseY, z0, hi, top, z1));
   }
+
+  /* THE FLANKS. Full storey height rather than the rail's own profile: a banister follows the slope,
+     so matching it exactly would mean another eight boxes per side for a barrier nobody can vault
+     anyway. One box a side, floor to ceiling, is the same answer to "can I walk off the edge" for a
+     tenth of the broadphase cost.
+     Placed INSIDE the block, not on its outer face: the mesh overhangs its cells by up to half a unit
+     (`stairs` is 5.00 across a 4.00 block) and a collider that followed the art out there would poke
+     into the neighbouring cell and block a corridor that looks clear. */
+  const { left, right } = dressedFlanks(f.walls);
+  const climbLeft = LEFT_OF_DIR[f.up], climbRight = RIGHT_OF_DIR[f.up];
+  const ceilY = add(baseY, FLOOR_HEIGHT);
+  for (const [on, side] of [[left, climbLeft], [right, climbRight]] as [boolean, Dir][]) {
+    if (!on) continue;
+    // the strip hugging that flank, along the whole run
+    if (side === 'W') solids.push(makeBox(x0, baseY, z0, add(x0, SIDE_THICKNESS), ceilY, z1));
+    else if (side === 'E') solids.push(makeBox(sub(x1, SIDE_THICKNESS), baseY, z0, x1, ceilY, z1));
+    else if (side === 'N') solids.push(makeBox(x0, baseY, z0, x1, ceilY, add(z0, SIDE_THICKNESS)));
+    else solids.push(makeBox(x0, baseY, sub(z1, SIDE_THICKNESS), x1, ceilY, z1));
+  }
 }
+
+/** Standing at the foot looking up, which grid direction is on each hand. Mirrors `cell-place.ts`. */
+const LEFT_OF_DIR: Record<Dir, Dir> = { N: 'W', W: 'S', S: 'E', E: 'N' };
+const RIGHT_OF_DIR: Record<Dir, Dir> = { W: 'N', S: 'W', E: 'S', N: 'E' };
 
 /**
  * THE OUTER WALL. Every storey is ringed, and without it the tower has no edge: you walk off the last
@@ -407,9 +460,18 @@ export function compileCellTower(
     const baseY = add(params.groundY, mul(FLOOR_HEIGHT, fromInt(idx)));
     stratumBaseY[idx] = toRaw(baseY);
 
+    /* THE SAME FLIGHT THE RENDERER DRAWS. `stairFlight` decides a direction partly from the storey
+       ABOVE — a flight climbs into a wall, so where the hole is settles a corner — and this loop used
+       to call it without one while `cellWorldPlacements` below was handed `floors[idx + 1]?.cells`.
+       Two callers of one function with different arguments get different answers, and these two
+       answers are the COLLIDER and the MESH. A flight could be drawn climbing west and collided
+       climbing north: the treads you can see and the steps you can stand on pointing different ways.
+       Everything downstream of this array inherits it — the per-cell `stair` flag, the sealed-ceiling
+       report, and `emitFlightSolids`. One source of truth, decided once, with everything known. */
+    const ceiling = floors[idx + 1]?.cells;
     const flights: StairFlight[] = [];
     for (let i = 0; i < f.cells.length; i++) {
-      const fl = stairFlight(f.cells, f.width, f.height, i % f.width, Math.floor(i / f.width));
+      const fl = stairFlight(f.cells, f.width, f.height, i % f.width, Math.floor(i / f.width), ceiling);
       if (fl) flights.push(fl);
     }
 
@@ -447,8 +509,9 @@ export function compileCellTower(
       });
     }
 
-    // the storey above, so a flight in a corner climbs toward the hole rather than the deck
-    const wallPlacements = cellWorldPlacements(f.cells, f.width, f.height, floors[idx + 1]?.cells);
+    // the storey above, so a flight in a corner climbs toward the hole rather than the deck — the SAME
+    // `ceiling` the flights above were decided with, so the mesh and the collider cannot diverge
+    const wallPlacements = cellWorldPlacements(f.cells, f.width, f.height, ceiling);
     emitPerimeter(solids, wallPlacements, f.width, f.height, baseY);
     const grid: StratumCellGrid = {
       stratum: idx, width: f.width, height: f.height,
