@@ -55,9 +55,30 @@ export interface TextureOption {
    *    'albedo'           — the texture's OWN colour, re-shaded by the baked KayKit gradient. Right
    *                         for scanned materials whose colour variation IS the asset (real wood). */
   color?: 'grain' | 'albedo';
+  /**
+   * How much a per-group texture PHASE may move this texture (group-anchors.ts). It is a permission,
+   * not a strength: `shift` slides the projection, `shift+rotate` also turns it a quarter turn, and
+   * `none` opts out entirely. It lives on the TEXTURE because "may this rotate" is a fact about the
+   * material — plank grain and brick courses have a direction and reading them sideways is simply
+   * wrong, while a rubble wall has no direction to get wrong. Default `shift`.
+   */
+  vary?: VaryMode;
   /** World tile size (metres per repeat). Poly Haven publishes this: its `dimensions` in mm. */
   scale: number;
 }
+
+/**
+ * The three answers to "may a group move this texture off the shared world projection".
+ *
+ * QUARTER turns, not free rotation, for `shift+rotate`: 90° maps a square-repeating texture's
+ * lattice onto itself, so the tiling stays seamless and mortar joints stay orthogonal to the world.
+ * A free angle differentiates more and immediately looks like a mistake on anything with courses.
+ */
+export type VaryMode = 'none' | 'shift' | 'shift+rotate';
+
+/** What a texture with no `vary` of its own gets. Sliding is safe on every material we ship — the
+ *  worst case is a different part of the same stone — so the default is ON. */
+export const DEFAULT_VARY: VaryMode = 'shift';
 
 /** The texture library. Order = menu order within each group. */
 export const TEXTURES: readonly TextureOption[] = [
@@ -66,13 +87,22 @@ export const TEXTURES: readonly TextureOption[] = [
   // height RISES from the image top to the middle and FALLS after, so the crest is the midline
   // and the troughs are the top and bottom edges. Pick it on any type and the surface tells you
   // unambiguously whether the pipeline lights a ridge as a ridge. Not art — a measuring stick.
-  { id: 'calibration', label: 'Relief calibration (test)', group: 'neutral', diff: 'calib_diff.png', nor: 'calib_nor.png', scale: 2.0 },
-  // stone family
+  // vary: 'shift+rotate' — this is the texture whose whole job is to make a transform visible, and
+  // the per-group phase is now a transform that can be wrong. Turned on, each group's arrow shows
+  // its own quarter turn and the ridge must still light as a ridge; `?vary=0` holds every group
+  // still again, which is the unmoved reference. Both readings off one texture.
+  { id: 'calibration', label: 'Relief calibration (test)', group: 'neutral', diff: 'calib_diff.png', nor: 'calib_nor.png', vary: 'shift+rotate', scale: 2.0 },
+  // `vary: 'shift+rotate'` ONLY where the image has no direction to get wrong. This was decided by
+  // LOOKING at the six albedos side by side, not by taste: masonry and brick are laid in horizontal
+  // COURSES and a quarter turn stands them on end (rendered, it reads as vertical streaking — a
+  // different, stringier material, not a second stone); worn iron's rust runs downhill; concrete is
+  // a near-isotropic wash and marble's veining has no axis, so both turn freely; cobbles are set in
+  // rough courses that genuinely do get laid at right angles to each other.
   { id: 'masonry', label: 'Masonry', group: 'stone', diff: 'stone_diff.jpg', nor: 'stone_nor.jpg', rough: 'stone_rough.jpg', scale: 3.0 },
   { id: 'brick', label: 'Brick', group: 'stone', diff: 'brick_diff.jpg', nor: 'brick_nor.jpg', scale: 2.2 },
-  { id: 'concrete', label: 'Concrete (smooth)', group: 'stone', diff: 'concrete_diff.jpg', nor: 'concrete_nor.jpg', scale: 3.0 },
-  { id: 'marble', label: 'Marble (smooth)', group: 'stone', diff: 'marble_diff.jpg', nor: 'marble_nor.jpg', scale: 3.2 },
-  { id: 'cobble', label: 'Cobblestone', group: 'floor', diff: 'floor_diff.jpg', nor: 'floor_nor.jpg', rough: 'floor_rough.jpg', scale: 2.6 },
+  { id: 'concrete', label: 'Concrete (smooth)', group: 'stone', diff: 'concrete_diff.jpg', nor: 'concrete_nor.jpg', vary: 'shift+rotate', scale: 3.0 },
+  { id: 'marble', label: 'Marble (smooth)', group: 'stone', diff: 'marble_diff.jpg', nor: 'marble_nor.jpg', vary: 'shift+rotate', scale: 3.2 },
+  { id: 'cobble', label: 'Cobblestone', group: 'floor', diff: 'floor_diff.jpg', nor: 'floor_nor.jpg', rough: 'floor_rough.jpg', vary: 'shift+rotate', scale: 2.6 },
   // wood — the three Poly Haven scans are 'albedo' mode: their colour variation is the whole point,
   // and a luminance-only read throws it away. `scale` is Poly Haven's published real-world size.
   { id: 'medieval-wood', label: 'Medieval wood', group: 'wood', diff: 'wood-medieval_diff.jpg', nor: 'wood-medieval_nor.jpg', arm: 'wood-medieval_arm.jpg', color: 'albedo', scale: 2.0 },
@@ -163,6 +193,20 @@ export function aoToParam(v: number): string { return v !== 0.7 ? String(Math.ro
 export function aoFromParam(param: string | null): number {
   const n = Number(param);
   return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.7;
+}
+
+// ---- VARIATION (global strength 0..1) — the per-group texture phase (group-anchors.ts) ---------
+// ON at full strength: the whole point of the group anchors is that a carved stone stops being a
+// window onto one continuous slab of wallpaper. Kept as a dial rather than a boolean because 0 is
+// the exact A/B control — at 0 the shader emits the same projection it did before groups existed,
+// so "did this change anything else" is one screenshot pair rather than a rebuild.
+let _vary = 1;
+export function getVaryStrength(): number { return _vary; }
+export function setVaryStrength(v: number): void { _vary = Math.min(1, Math.max(0, v)); }
+export function varyToParam(v: number): string { return v !== 1 ? String(Math.round(v * 100)) : ''; }
+export function varyFromParam(param: string | null): number {
+  const n = Number(param);
+  return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 1;
 }
 
 /**

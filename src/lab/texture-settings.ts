@@ -10,7 +10,7 @@
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================
 
-import { TEXTURES, CONFIGURABLE_PRESETS, getConfig, setTypeSetting, resetConfig, getRelief, setRelief, getAOStrength, setAOStrength, type Preset } from './texture-catalog.ts';
+import { TEXTURES, CONFIGURABLE_PRESETS, getConfig, setTypeSetting, resetConfig, getRelief, setRelief, getAOStrength, setAOStrength, getVaryStrength, setVaryStrength, type Preset } from './texture-catalog.ts';
 
 /** What the caller gets back — enough to re-sync every widget after the config is replaced from
  *  outside (applying a profile), without this module knowing why. */
@@ -124,6 +124,10 @@ export function buildTextureSettings(opts: TextureSettingsOpts): TextureSettings
   };
   globalSlider('Relief', getRelief, setRelief, true);
   globalSlider('AO', getAOStrength, setAOStrength, true);
+  // Vary = how far a GROUP may slide its own texture off the shared world projection
+  // (group-anchors.ts). At 0 every surface is back on the one continuous slab, which is the A/B
+  // control: drag it and watch whether the pavers stop being copies of each other.
+  globalSlider('Vary', getVaryStrength, setVaryStrength, true);
   for (const e of extras) globalSlider(e.label, e.get, e.set, false);
   if (colors.length) {
     const row = document.createElement('div');

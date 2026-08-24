@@ -29,6 +29,7 @@ import * as THREE from 'three';
 // game has no dev middleware at all. Same pattern (and the same import attribute, which Node's
 // strip-types runner requires) as src/game/approved-assets.ts.
 import data from '../game/mesh-surfaces.json' with { type: 'json' };
+import type { VaryMode } from './texture-catalog.ts';
 
 /** Per-mesh hidden triangle lists, keyed by the mesh's index in a depth-first traverse. */
 export type HiddenByMesh = Record<string, number[]>;
@@ -48,6 +49,12 @@ export interface SurfaceGroup {
   name: string;
   /** mesh index -> triangle indices, sorted. Same numbering as `hidden`: the UNFILTERED source. */
   tris: HiddenByMesh;
+  /**
+   * Per-group override of the texture-variation permission (group-anchors.ts). Absent = whatever
+   * the material TYPE's texture says, which is the right default: "may this rotate" is a fact about
+   * the material (plank grain must not) far more often than about one region of one mesh.
+   */
+  vary?: VaryMode;
 }
 
 export interface SurfaceEntry {
@@ -164,22 +171,43 @@ export function filterGeometry(g: THREE.BufferGeometry, hidden: readonly number[
 /** Apply a mesh URL's stored hidden set to a freshly cloned model. No-op when nothing is stored, or
  *  when the geometry no longer matches what the edit was authored against. */
 export function applyHiddenFaces(root: THREE.Object3D, meshUrl: string): void {
-  const entry = _store.meshes[meshUrl];
-  if (!entry || !Object.keys(entry.hidden).length) return;
-  // hash the ORIGINALS: on a re-entrant call (a rebuild) some meshes may already be filtered
-  const list: THREE.BufferGeometry[] = [];
-  forEachMesh(root, (mesh) => list.push(sourceGeometry(mesh)));
-  const now = geometryHashOf(list);
-  if (entry.geom !== now) {
-    console.warn(`[surfaces] "${meshUrl}" hidden faces SKIPPED — geometry changed (stored ${entry.geom}, now ${now}). Re-author the selection.`);
-    return;
-  }
+  if (!Object.keys(_store.meshes[meshUrl]?.hidden ?? {}).length) return;
+  const entry = validSurfaceEntry(root, meshUrl);
+  if (!entry) return;
   forEachMesh(root, (mesh, i) => {
     const hidden = entry.hidden[String(i)];
     if (!hidden?.length) return;
-    mesh.userData[SOURCE_GEOM] = mesh.geometry; // so the picker can still see the original numbering
+    // `??=`, not `=`: group-anchors.ts may already have parked the TRUE original here and swapped in
+    // a rebuilt geometry. Overwriting it would make `sourceGeometry()` hand back the rebuild, and
+    // the next cold load would hash that, compare it to the stored hash, and reject its own edit.
+    mesh.userData[SOURCE_GEOM] ??= mesh.geometry;
     mesh.geometry = filterGeometry(mesh.geometry, hidden);
   });
+}
+
+/** Warn about a stale entry ONCE per url — every model build asks, and a per-build warning would
+ *  bury the one line that matters under a hundred copies of itself. */
+const _warned = new Set<string>();
+
+/**
+ * The stored entry for a mesh url, but only if it was authored against THIS geometry.
+ *
+ * Triangle indices are positions in a buffer that only one exact GLB produces, so every consumer
+ * (hidden faces, saved groups) has to ask the same question and get the same answer. Hashes the
+ * UNFILTERED sources, because on a re-entrant call some meshes are already filtered.
+ */
+export function validSurfaceEntry(root: THREE.Object3D, meshUrl: string): SurfaceEntry | null {
+  const entry = _store.meshes[meshUrl];
+  if (!entry) return null;
+  const list: THREE.BufferGeometry[] = [];
+  forEachMesh(root, (mesh) => list.push(sourceGeometry(mesh)));
+  const now = geometryHashOf(list);
+  if (entry.geom === now) return entry;
+  if (!_warned.has(meshUrl)) {
+    _warned.add(meshUrl);
+    console.warn(`[surfaces] "${meshUrl}" SKIPPED — geometry changed (stored ${entry.geom}, now ${now}). Re-author the selection.`);
+  }
+  return null;
 }
 
 // ---- the dev store (GET/POST /__lab/surfaces, see vite.config.ts) --------------------------------
@@ -188,8 +216,14 @@ export function applyHiddenFaces(root: THREE.Object3D, meshUrl: string): void {
 // only REFRESHES it from the dev endpoint, so the lab picks up an edit made in another tab.
 let _store: SurfaceStore = data as SurfaceStore;
 
+/** Bumped whenever the store changes. Anything that CACHES a derivation of it (group-anchors.ts
+ *  rebuilds a geometry per saved group) has to notice a save, and a cache keyed on the geometry
+ *  alone never would — the geometry is the input that did not change. */
+let _rev = 0;
+
+export function surfaceStoreRev(): number { return _rev; }
 export function getSurfaceStore(): SurfaceStore { return _store; }
-export function setSurfaceStore(s: SurfaceStore): void { _store = s; }
+export function setSurfaceStore(s: SurfaceStore): void { _store = s; _rev++; }
 export function hiddenFor(meshUrl: string): SurfaceEntry | undefined { return _store.meshes[meshUrl]; }
 
 export async function loadSurfaces(): Promise<SurfaceStore> {
@@ -197,6 +231,7 @@ export async function loadSurfaces(): Promise<SurfaceStore> {
     const res = await fetch('/__lab/surfaces');
     if (!res.ok) throw new Error(String(res.status));
     _store = (await res.json()) as SurfaceStore;
+    _rev++;
   } catch (e) {
     console.warn('[surfaces] store unavailable (dev middleware only) —', String(e));
   }
@@ -214,6 +249,7 @@ export async function saveSurfaces(meshUrl: string, entry: SurfaceEntry | null):
     if (r.ok) {
       if (entry) _store.meshes[meshUrl] = entry;
       else delete _store.meshes[meshUrl];
+      _rev++;
     }
     return r;
   } catch (e) {

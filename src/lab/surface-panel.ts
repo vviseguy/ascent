@@ -11,6 +11,7 @@
 
 import type { FaceSelectHandle, GrowMode } from './face-select.ts';
 import { hiddenFor, type SurfaceGroup } from './face-surfaces.ts';
+import type { VaryMode } from './texture-catalog.ts';
 
 export interface SurfacePanelOpts {
   container: HTMLElement;
@@ -248,6 +249,23 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
       const n = document.createElement('span');
       n.textContent = `${triCountOf(g)} tri`;
       Object.assign(n.style, { opacity: '.6', flex: '0 0 auto' } as Partial<CSSStyleDeclaration>);
+      // VARY — this group's own texture-phase permission (group-anchors.ts). Blank inherits the
+      // material TYPE's, which is what almost every group should do; the override is for the one
+      // region where the material's own answer is wrong (a plank panel set into a stone wall).
+      const vry = document.createElement('select');
+      vry.title = 'texture variation for this group (blank = whatever the material type allows)';
+      Object.assign(vry.style, { flex: '0 0 auto', fontSize: '9px', background: '#1b2030', color: '#cfe3ff', border: '1px solid rgba(120,130,170,.3)', borderRadius: '3px' } as Partial<CSSStyleDeclaration>);
+      for (const [v, label] of [['', 'type'], ['none', 'fixed'], ['shift', 'shift'], ['shift+rotate', 'turn']] as const) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = label;
+        vry.appendChild(o);
+      }
+      vry.value = g.vary ?? '';
+      vry.addEventListener('change', () => {
+        if (vry.value) g.vary = vry.value as VaryMode; else delete g.vary;
+        say('variation set — Save to persist');
+      });
+
       const ren = document.createElement('button');
       ren.textContent = '✎'; ren.title = 'rename';
       const del = document.createElement('button');
@@ -267,7 +285,7 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
         saved.splice(i, 1);
         renderSaved(); paintSaved(); say('deleted — Save to persist');
       });
-      row.append(dot, nm, n, ren, del);
+      row.append(dot, nm, n, vry, ren, del);
       savedList.appendChild(row);
     });
   };

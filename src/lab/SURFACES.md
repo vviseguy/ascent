@@ -181,7 +181,29 @@ root. With faces already hidden the root IS the filtered mesh, and storing that 
 next cold load compare it against the original and reject the edit as "geometry changed" — which
 is exactly the bug this guard is meant to catch, turned against itself.
 
-**Not yet built:** per-group textures and boundary marking. The plumbing is here (a group is just
-a triangle set); what they need is a second attribute path so the shader can pick a slot per
-group instead of per swatch, plus a per-group UV transform so courses break at a surface edge
-rather than running through the object as one slab.
+## What a group is FOR: the texture anchor ([group-anchors.ts](group-anchors.ts))
+
+A group is not just a selection you named. At build time every group is given an **ANCHOR** — its
+area-weighted centroid, in object space — and the tiling shader derives that group's texture phase
+from it, so each carved stone stops being a window onto one continuous slab. The rule and its
+consequences live in [MATERIALS.md](MATERIALS.md); what belongs here is what it means for the mesh:
+
+- **The partition is the CARVE facet set at 75°**, the same one `show groups` tints. That is
+  deliberate: if the overlay showed one partition and the shader varied a different one, every
+  decision made by looking at the overlay would be a decision about the wrong thing. Both call
+  `partitionFacets` in [facets.ts](facets.ts) — extracted from the picker for exactly that reason.
+- **A saved group REPLACES the auto facets it covers.** A decision beats a proposal. It may also
+  carry its own `vary` (the per-row dropdown), for the one region where the material's own answer
+  is wrong — a plank panel set into a stone wall.
+- **A vertex two groups both want gets DUPLICATED.** An attribute holds one value per vertex, and a
+  GLB shares vertices wherever the normals agree — so at some crease boundaries one triangle of a
+  paver would otherwise wear its neighbour's phase and the texture would tear along a shared corner.
+  The rebuild splits those vertices and rewrites the index; triangle ORDER and COUNT never change,
+  so every stored index stays valid.
+- **Anchoring runs BEFORE hiding, and the order is load-bearing.** The anchor pass parks the true
+  original in `userData[SOURCE_GEOM]` and `applyHiddenFaces` filters the anchored copy (attributes
+  ride along by reference). The other order would park the REBUILD as the "source", and the geometry
+  hash below would then reject the store's own edits. `group-anchors.test.ts` pins this.
+
+**Still not built:** a per-group TEXTURE (a different slot per group, not just a different phase of
+the same one) and boundary marking, so courses stop at a surface edge rather than crossing it.

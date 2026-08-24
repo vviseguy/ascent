@@ -30,7 +30,7 @@ import type { WorldObject, WorldObjectBuild } from './world-object.ts';
 import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
 import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
 import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
-import { setConfig, getConfig, configFromParam, overlayConfigParam, setRelief, reliefFromParam, setAOStrength, aoFromParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, overlayConfigParam, setRelief, reliefFromParam, setAOStrength, aoFromParam, setVaryStrength, varyFromParam } from './texture-catalog.ts';
 import { ensureTilingTextures } from './recolor.ts';
 import { APPROVED_ASSETS, approvedProfile } from '../game/approved-assets.ts';
 
@@ -83,6 +83,7 @@ async function main(): Promise<void> {
   setConfig(configFromParam(params.get('tex')));
   setRelief(reliefFromParam(params.get('relief')));
   setAOStrength(aoFromParam(params.get('ao')));
+  setVaryStrength(varyFromParam(params.get('vary')));
 
   let renderer: THREE.WebGLRenderer;
   try {

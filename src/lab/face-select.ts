@@ -33,7 +33,13 @@
 // ============================================================================
 
 import * as THREE from 'three';
-import { forEachMesh, triCount, filterGeometry, geometryHashOf, sourceGeometry } from './face-surfaces.ts';
+import { forEachMesh, filterGeometry, geometryHashOf, sourceGeometry } from './face-surfaces.ts';
+import { buildTopology, growFacet, partitionFacets, type GrowMode, type FacetInfo, type MeshTopology, type Partition } from './facets.ts';
+
+// The PARTITION itself lives in facets.ts — the interactive picker and the build-time anchor
+// baker (group-anchors.ts) must agree about what "one facet" is, so there is one implementation
+// and both call it. Re-exported here so existing importers keep their single import.
+export type { GrowMode, FacetInfo } from './facets.ts';
 
 export interface FaceSelectOpts {
   root: THREE.Object3D;
@@ -45,20 +51,6 @@ export interface FaceSelectOpts {
   onChange: () => void;
   render: () => void;
 }
-
-/**
- * How a hover spreads.
- *
- * - `planar` — one cone about the seed normal. Gives the flat faces themselves.
- * - `carve`  — the seed face PLUS the slants that roll down off it, stopping at the concave crease
- *              where the neighbouring tile's slant comes back up. Gives a tile the way a mason
- *              would think of one: the face and its own chamfers, fitted against the next tile.
- *
- * The difference is the SIGN of the fold, not its angle. On a KayKit floor tile the bevels off each
- * paver (convex, 20-45°) and the rut bottoms between pavers (concave, 60-65°) are both just "edges"
- * to an angle threshold; only convexity separates them.
- */
-export type GrowMode = 'planar' | 'carve';
 
 export interface FaceSelectHandle {
   setEnabled: (on: boolean) => void;
@@ -93,41 +85,9 @@ export interface FaceSelectHandle {
   dispose: () => void;
 }
 
-/**
- * A maximal run of edge-connected triangles within the angle tolerance — the unit a texture gets
- * "ironed onto", and what a per-group transform will eventually key off.
- *
- * MESH-LOCAL by construction. Facets that abut across two placed instances — the corner pieces of
- * four floor tiles meeting to form one diamond — are separate facets here, and can only be joined
- * once world positions are known. That is a different mechanism, deliberately not this one.
- */
-export interface FacetInfo {
-  id: number;
-  tris: number[];
-  /** Local-space, area-weighted centroid. Becomes the per-group texture ANCHOR later. */
-  centroid: THREE.Vector3;
-  normal: THREE.Vector3;
-  /** Surface area — the only honest way to sort facets. A triangle count says more about how the
-   *  exporter happened to triangulate than about how big the face actually is. */
-  area: number;
-}
-
-/** One mesh's precomputed topology. Built once per model load; a few hundred triangles, so cheap. */
-interface MeshInfo {
-  mesh: THREE.Mesh;
-  index: number;
-  source: THREE.BufferGeometry;   // the UNFILTERED geometry — hiding never destroys it
-  tris: number;
-  /** Flat [ax,ay,az, bx,by,bz, cx,cy,cz] per triangle, local space. */
-  verts: Float32Array;
-  /** Unit normal per triangle, local space. */
-  normals: Float32Array;
-  /** Centroid per triangle, local space — needed to tell a convex fold from a concave crease. */
-  cents: Float32Array;
-  /** triangle -> up to 3 edge-adjacent triangles. */
-  adj: Int32Array;
-  adjCount: Uint8Array;
-}
+/** One mesh, plus the pure topology facets.ts computed for it. The scene-graph half (which mesh,
+ *  which depth-first index) is all this layer adds — everything geometric is shared. */
+type MeshInfo = MeshTopology & { mesh: THREE.Mesh; index: number };
 
 const OVERLAY_OFFSET = -2; // polygon offset units: sit the highlight just in front of the surface
 
@@ -135,59 +95,7 @@ function buildInfo(mesh: THREE.Mesh, index: number): MeshInfo {
   // SOURCE, not mesh.geometry: on a cold load the build has already applied the stored hidden set,
   // so mesh.geometry is the FILTERED mesh. Numbering topology off that while the stored indices
   // number the original is exactly the "selection lands on the wrong faces" bug.
-  const g = sourceGeometry(mesh);
-  const pos = g.getAttribute('position');
-  const idx = g.index;
-  const tris = triCount(g);
-  const verts = new Float32Array(tris * 9);
-  const normals = new Float32Array(tris * 3);
-  const cents = new Float32Array(tris * 3);
-
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
-  const vi = (t: number, k: number): number => (idx ? idx.getX(t * 3 + k) : t * 3 + k);
-
-  for (let t = 0; t < tris; t++) {
-    a.fromBufferAttribute(pos, vi(t, 0));
-    b.fromBufferAttribute(pos, vi(t, 1));
-    c.fromBufferAttribute(pos, vi(t, 2));
-    verts.set([a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z], t * 9);
-    ab.subVectors(b, a); ac.subVectors(c, a);
-    n.crossVectors(ab, ac);
-    if (n.lengthSq() > 1e-20) n.normalize(); else n.set(0, 1, 0); // degenerate tri: harmless filler
-    normals.set([n.x, n.y, n.z], t * 3);
-    cents.set([(a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3, (a.z + b.z + c.z) / 3], t * 3);
-  }
-
-  // edge -> triangles, keyed by QUANTISED endpoint positions so UV/normal seams don't split it
-  const Q = 1e4;
-  const key = (t: number, k: number): string => {
-    const o = t * 9 + k * 3;
-    return `${Math.round(verts[o]! * Q)},${Math.round(verts[o + 1]! * Q)},${Math.round(verts[o + 2]! * Q)}`;
-  };
-  const edges = new Map<string, number[]>();
-  for (let t = 0; t < tris; t++) {
-    for (let k = 0; k < 3; k++) {
-      const p = key(t, k), q = key(t, (k + 1) % 3);
-      const ek = p < q ? p + '|' + q : q + '|' + p;
-      const list = edges.get(ek);
-      if (list) list.push(t); else edges.set(ek, [t]);
-    }
-  }
-  const adj = new Int32Array(tris * 3).fill(-1);
-  const adjCount = new Uint8Array(tris);
-  for (const list of edges.values()) {
-    if (list.length < 2) continue;
-    for (const t of list) {
-      for (const u of list) {
-        if (u === t || adjCount[t]! >= 3) continue;
-        let dup = false;
-        for (let k = 0; k < adjCount[t]!; k++) if (adj[t * 3 + k] === u) { dup = true; break; }
-        if (!dup) { adj[t * 3 + adjCount[t]!] = u; adjCount[t]!++; }
-      }
-    }
-  }
-  return { mesh, index, source: g, tris, verts, normals, cents, adj, adjCount };
+  return { ...buildTopology(sourceGeometry(mesh)), mesh, index };
 }
 
 export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
@@ -247,7 +155,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     let o = 0;
     for (const t of list) {
       for (let k = 0; k < 3; k++) {
-        v.set(info.verts[t * 9 + k * 3]!, info.verts[t * 9 + k * 3 + 1]!, info.verts[t * 9 + k * 3 + 2]!).applyMatrix4(mat);
+        v.set(info.pos[t * 9 + k * 3]!, info.pos[t * 9 + k * 3 + 1]!, info.pos[t * 9 + k * 3 + 2]!).applyMatrix4(mat);
         out[o++] = v.x; out[o++] = v.y; out[o++] = v.z;
       }
     }
@@ -258,106 +166,20 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     overlay.visible = true;
   };
 
-  // ---- grow ---------------------------------------------------------------------------------
+  // ---- grow + the exhaustive partition ---------------------------------------------------------
 
-  /** Flood across shared edges from `seed`, taking any triangle whose normal is within the
-   *  tolerance OF THE SEED. Seed-relative rather than neighbour-relative on purpose: chaining
-   *  neighbour-to-neighbour walks all the way around a curved surface a fraction of a degree at a
-   *  time, which is never what you meant by "these faces are basically the same face". */
-  /** Is the edge between two triangles a convex fold (the surface rolling AWAY) or a concave crease
-   *  (the surface folding back on itself)? Convex when the neighbour's centroid sits BEHIND this
-   *  face's plane. This is the whole difference between "the bevel off the top of a paver" and "the
-   *  bottom of the rut where two pavers meet" — they sit at similar angles and only the sign
-   *  separates them. */
-  const isConvex = (info: MeshInfo, t: number, u: number): boolean => {
-    const dx = info.cents[u * 3]! - info.cents[t * 3]!;
-    const dy = info.cents[u * 3 + 1]! - info.cents[t * 3 + 1]!;
-    const dz = info.cents[u * 3 + 2]! - info.cents[t * 3 + 2]!;
-    return info.normals[t * 3]! * dx + info.normals[t * 3 + 1]! * dy + info.normals[t * 3 + 2]! * dz < 0;
-  };
+  // Both live in facets.ts. The picker only supplies the CURRENT mode/tolerance and caches the
+  // answer, because the tolerance is not a filter over some fixed truth — it IS the definition of
+  // what counts as one surface, so a change to it invalidates the partition rather than refining it.
+  const grow = (info: MeshInfo, seed: number): number[] => growFacet(info, seed, mode, tolCos);
 
-  /** Below this, two faces are "the same plane" and the convex/concave sign is meaningless noise —
-   *  the centroid offset is nearly in-plane, so its sign is arbitrary. Always join these. */
-  const FLAT_EPS_COS = Math.cos(THREE.MathUtils.degToRad(8));
+  let facetCache: { tol: number; mode: GrowMode; mesh: MeshInfo; part: Partition } | null = null;
 
-  const grow = (info: MeshInfo, seed: number): number[] => {
-    const sx = info.normals[seed * 3]!, sy = info.normals[seed * 3 + 1]!, sz = info.normals[seed * 3 + 2]!;
-    const seen = new Uint8Array(info.tris);
-    const out: number[] = [];
-    const stack = [seed];
-    seen[seed] = 1;
-    while (stack.length) {
-      const t = stack.pop()!;
-      out.push(t);
-      for (let k = 0; k < info.adjCount[t]!; k++) {
-        const u = info.adj[t * 3 + k]!;
-        if (u < 0 || seen[u]) continue;
-        const ux = info.normals[u * 3]!, uy = info.normals[u * 3 + 1]!, uz = info.normals[u * 3 + 2]!;
-        const dSeed = sx * ux + sy * uy + sz * uz;          // how far off the SEED plane
-        if (mode === 'carve') {
-          // CARVED-TILE mode: a tile is its flat top plus the slants that roll down off it, ending
-          // where the neighbouring tile's slant comes back up — that meeting is a concave crease.
-          // So: always cross a near-flat edge, otherwise cross only CONVEX folds, and never a
-          // crease. The seed cone still caps how far down a slant may go.
-          const dLocal = info.normals[t * 3]! * ux + info.normals[t * 3 + 1]! * uy + info.normals[t * 3 + 2]! * uz;
-          if (dLocal < FLAT_EPS_COS) {
-            if (!isConvex(info, t, u)) continue;            // concave crease — the rut bottom
-            if (dSeed < tolCos) continue;                   // rolled too far from the tile's face
-          }
-        } else if (dSeed < tolCos) continue;                // PLANAR mode: one cone about the seed
-        seen[u] = 1;
-        stack.push(u);
-      }
-    }
-    return out;
-  };
-
-  // ---- exhaustive partition --------------------------------------------------------------------
-
-  // The same flood the hover preview uses, run to exhaustion instead of from a single seed: every
-  // triangle lands in exactly one facet. Cached against the tolerance because the tolerance is not a
-  // filter over some fixed truth — it IS the definition of what counts as one surface, so a change
-  // to it invalidates the whole partition rather than refining it.
-  let facetCache: { tol: number; mesh: MeshInfo; list: FacetInfo[]; byTri: Int32Array } | null = null;
-
-  const partition = (info: MeshInfo): { list: FacetInfo[]; byTri: Int32Array } => {
-    if (facetCache && facetCache.tol === tolCos && facetCache.mesh === info) return facetCache;
-    const byTri = new Int32Array(info.tris).fill(-1);
-    const list: FacetInfo[] = [];
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), mid = new THREE.Vector3();
-    for (let seed = 0; seed < info.tris; seed++) {
-      if (byTri[seed]! >= 0) continue;
-      const tris = grow(info, seed);
-      const id = list.length;
-      const centroid = new THREE.Vector3();
-      let area = 0;
-      for (const t of tris) {
-        byTri[t] = id;
-        a.set(info.verts[t * 9]!, info.verts[t * 9 + 1]!, info.verts[t * 9 + 2]!);
-        b.set(info.verts[t * 9 + 3]!, info.verts[t * 9 + 4]!, info.verts[t * 9 + 5]!);
-        c.set(info.verts[t * 9 + 6]!, info.verts[t * 9 + 7]!, info.verts[t * 9 + 8]!);
-        // AREA-WEIGHT the centroid. An exporter's fan triangulation clusters many slivers at one
-        // corner of a face, and a plain per-triangle mean would drag the anchor over there instead
-        // of leaving it in the middle where a texture wants to be centred.
-        const w = e1.subVectors(b, a).cross(e2.subVectors(c, a)).length() / 2;
-        area += w;
-        mid.copy(a).add(b).add(c).multiplyScalar(1 / 3);
-        centroid.addScaledVector(mid, w);
-      }
-      if (area > 1e-12) centroid.multiplyScalar(1 / area);
-      list.push({
-        id, tris, centroid, area,
-        normal: new THREE.Vector3(info.normals[seed * 3]!, info.normals[seed * 3 + 1]!, info.normals[seed * 3 + 2]!),
-      });
-    }
-    // biggest first — that is the order you want to read them in, so make it the id order too
-    list.sort((x, y) => y.area - x.area);
-    const remap = new Int32Array(list.length);
-    list.forEach((f, i) => { remap[f.id] = i; f.id = i; });
-    for (let t = 0; t < byTri.length; t++) byTri[t] = remap[byTri[t]!]!;
-    facetCache = { tol: tolCos, mesh: info, list, byTri };
-    return facetCache;
+  const partition = (info: MeshInfo): Partition => {
+    if (facetCache && facetCache.tol === tolCos && facetCache.mode === mode && facetCache.mesh === info) return facetCache.part;
+    const part = partitionFacets(info, mode, tolCos);
+    facetCache = { tol: tolCos, mode, mesh: info, part };
+    return part;
   };
 
   /** Which mesh the panel is talking about: whatever is hovered, else the first (these models are
@@ -401,7 +223,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
       facetColor(f.id, c);
       for (const t of f.tris) {
         for (let k = 0; k < 3; k++) {
-          v.set(info.verts[t * 9 + k * 3]!, info.verts[t * 9 + k * 3 + 1]!, info.verts[t * 9 + k * 3 + 2]!).applyMatrix4(m);
+          v.set(info.pos[t * 9 + k * 3]!, info.pos[t * 9 + k * 3 + 1]!, info.pos[t * 9 + k * 3 + 2]!).applyMatrix4(m);
           pos[o] = v.x; pos[o + 1] = v.y; pos[o + 2] = v.z;
           col[o] = c.r; col[o + 1] = c.g; col[o + 2] = c.b;
           o += 3;
@@ -451,7 +273,7 @@ export function mountFaceSelect(opts: FaceSelectOpts): FaceSelectHandle {
     const info = hoverMesh;
     info.mesh.updateWorldMatrix(true, false);
     const c = new THREE.Vector3();
-    for (let k = 0; k < 3; k++) c.add(new THREE.Vector3(info.verts[hoverTri * 9 + k * 3]!, info.verts[hoverTri * 9 + k * 3 + 1]!, info.verts[hoverTri * 9 + k * 3 + 2]!));
+    for (let k = 0; k < 3; k++) c.add(new THREE.Vector3(info.pos[hoverTri * 9 + k * 3]!, info.pos[hoverTri * 9 + k * 3 + 1]!, info.pos[hoverTri * 9 + k * 3 + 2]!));
     c.multiplyScalar(1 / 3).applyMatrix4(info.mesh.matrixWorld);
     const n = new THREE.Vector3(info.normals[hoverTri * 3]!, info.normals[hoverTri * 3 + 1]!, info.normals[hoverTri * 3 + 2]!)
       .transformDirection(info.mesh.matrixWorld);
