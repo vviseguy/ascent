@@ -30,7 +30,7 @@
 
 import { makeGrid, begin, stamp, commit, rollback, txConflicts, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
 import {
-  previewCell, template, settleMask, segs, floors, corners, wallTypes, torches, domainSize,
+  previewCell, template, settleMask, segs, floors, corners, wallTypes, torches, opens, domainSize,
   type Mask, type CellField,
 } from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
@@ -50,6 +50,9 @@ const NONE: Mask = segs('none');
 const POROUS: Mask = segs('none', 'wall');
 const STONE: Mask = floors('stone');
 const SOLID_CORNER: Mask = corners('none');
+/** A framed opening — the wall stays and you can walk through it. See SEAL. */
+const DOORWAY: Mask = wallTypes('doorway');
+const OPEN: Mask = opens('open');
 const SOLID_TYPE: Mask = wallTypes('solid');
 const ROCK: Mask = floors('rock');
 const TORCH_YES: Mask = torches('yes');
@@ -124,6 +127,9 @@ export interface EmergentResult {
     wallsRejectedConflict: number;
     wallsRejectedUnreachable: number;
     ringSealed: number;
+    /** Perimeter walls that could not close and became a real DOORWAY instead. */
+    doorsCut: number;
+    /** ...and the ones that could not even do that, so they stay a gap. */
     doorsKept: number;
     mazeNote: string;
     reachableCells: number;
@@ -206,13 +212,42 @@ function structureStamp(
     stamp: (lx, ly) => {
       const f = st.cells[lvBase + ly * sw + lx]!;
       const onEdge = lx === 0 || ly === 0 || lx === st.w || ly === st.h;
-      return onEdge
-        ? {
-          ...f,
-          wallN: holdsStairN(lx, ly) ? f.wallN : loosen(f.wallN),
-          wallW: holdsStairW(lx, ly) ? f.wallW : loosen(f.wallW),
-        }
-        : { ...f, wallN: assertAir(f.wallN), wallW: assertAir(f.wallW) };
+      if (!onEdge) return { ...f, wallN: assertAir(f.wallN), wallW: assertAir(f.wallW) };
+
+      const wallN = holdsStairN(lx, ly) ? f.wallN : loosen(f.wallN);
+      const wallW = holdsStairW(lx, ly) ? f.wallW : loosen(f.wallW);
+      /* IF A WALL MAY BECOME A DOOR, THE OPENING FIELDS HAVE TO ALLOW ONE.
+         `loosen` widens a perimeter wall to {none, wall} and says, in as many words, that the
+         generator may cut a door through it. But an author pins the perimeter's `wallType` to `solid`
+         and `open` to `closed` — so the doorway SEAL tries to cut meets {solid} & {doorway} = empty,
+         the transaction is rejected, and the only way it can honour connectivity is to DELETE the
+         wall. That is the "high-specificity edges degrading" an author sees: 9% of pinned wallN and
+         5% of pinned wallW on a structure's outermost ring came out as nothing, while every inner
+         ring and every other field survived at 100%.
+         Widening here is inert unless SEAL uses it — SETTLE_DEFAULTS still prefer `solid`/`closed`,
+         so a wall that seals normally is unchanged. It only means that when connectivity forces an
+         opening, the result can be a DOORWAY instead of a hole. */
+      /* ONLY WHERE THE AUTHOR SAID `solid`. Widening a wallType they pinned to something specific
+         wrecks it: {scaffold} | {doorway} settles to `doorway`, because SETTLE prefers `solid`, finds
+         it absent, and falls to the lowest surviving bit. That turned 117 authored scaffold walls
+         into doorways on the first cut of this change. A plain `solid` wall is exactly the case that
+         was becoming a hole, and it is the only case that needs the room. */
+      const loosened = wallN !== f.wallN || wallW !== f.wallW;
+      if (!loosened) return { ...f, wallN, wallW };
+      /* `open` is widened WHENEVER the wall is, because an author pins it `closed` everywhere and a
+         door cannot be cut through a slot that may only be shut — including the slots whose wallType
+         already allows a doorway. Inert unless SEAL uses it: SETTLE still prefers `closed`.
+
+         `wallType` is widened ONLY where the author said `solid`. Widening one they pinned to
+         something specific wrecks it — {scaffold} | {doorway} settles to `doorway`, because SETTLE
+         prefers `solid`, finds it absent, and falls to the lowest surviving bit. That turned 117
+         authored scaffold walls into doorways on the first cut of this change. A plain `solid` wall
+         is exactly the case that was becoming a hole, and the only one that needs the room. */
+      return {
+        ...f, wallN, wallW,
+        wallType: f.wallType === SOLID_TYPE ? f.wallType | DOORWAY : f.wallType,
+        open: f.open | OPEN,
+      };
     },
   };
 }
@@ -393,7 +428,7 @@ export function generateEmergentTower(cfg: EmergentConfig & { levels?: number })
     structuresPlaced: 0, structuresSkippedMultiLevel: 0, storeysWithoutStairwell: 0, torchesPlaced: 0,
     structuresRejectedConflict: 0, structuresRejectedOverlap: 0,
     wallsPlaced: 0, wallsRejectedConflict: 0, wallsRejectedUnreachable: 0,
-    ringSealed: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
+    ringSealed: 0, doorsCut: 0, doorsKept: 0, mazeNote: '', reachableCells: 0, cellsFilled: 0,
   };
 
   /* ---- 1. STRUCTURES — the only rooms there are, and the only phase that spans storeys ---- */
@@ -435,20 +470,63 @@ function finishStorey(
   const guarded = (at: ReturnType<typeof gridAt>): boolean => routes.every((r) => routeGuaranteed(at, r));
 
   /* ---- 3. SEAL. Close every porous perimeter wall that CAN close. The refusals are the doors —
-     discovered by what connectivity needs, never placed by a rule. ---- */
+     discovered by what connectivity needs, never placed by a rule.
+
+     A REFUSAL IS A DOORWAY, NOT A HOLE, and that distinction is the whole of this phase's second try.
+     A wall that cannot close stayed POROUS ({none, wall}), and SETTLE resolves a porous wall to
+     `none` — so every door this phase "discovered" rendered as a bite taken out of the wall. Measured
+     on the authored structures: 9% of the pinned wallN and 5% of the pinned wallW on a structure's
+     OUTERMOST RING came out as nothing, while every other field and every inner ring survived at
+     100%. That is exactly the "high-specificity sections degrading along the edges" an author sees.
+
+     So the ladder is: close it; failing that make it a real DOORWAY (the wall stays, the type becomes
+     a walk-through one); failing that leave it porous and take the hole.
+
+     THE SECOND RUNG NEEDS NO NEW REASONING ABOUT WHETHER THE DOORWAY IS LIVE. A module is only drawn
+     where both collinear spans are wall and the ground is real (`moduleAt`), and if it is not drawn
+     the pinned wall simply closes the gap — which the SAME connectivity gate rejects. So an opening
+     that would not actually open cannot commit. ---- */
   {
     for (const pw of porousWalls) {
-      const tx = begin(grid);
-      stamp(tx, { x: pw.x, y: pw.y, w: 1, h: 1 }, template(pw.side === 'N' ? { wallN: WALL } : { wallW: WALL }));
-      const at = txAt(tx);
-      // the wall separates this cell from the neighbour beyond it; if they still reach each other,
-      // no component split, so nothing became unreachable
       const other = pw.side === 'N' ? nodeId(w, pw.x, pw.y - 1) : nodeId(w, pw.x - 1, pw.y);
       const here = nodeId(w, pw.x, pw.y);
-      if (!at(pw.x, pw.y) || !guarded(at) || !stillConnected(at, w, h, 'may', here, other)) {
-        rollback(tx); stats.doorsKept++; continue;
+      /** Stamp `spec` at this point and keep it only if nothing that could reach anything still can. */
+      const tryStamp = (spec: Parameters<typeof template>[0]): boolean => {
+        const tx = begin(grid);
+        stamp(tx, { x: pw.x, y: pw.y, w: 1, h: 1 }, template(spec));
+        const at = txAt(tx);
+        // the wall separates this cell from the neighbour beyond it; if they still reach each other,
+        // no component split, so nothing became unreachable
+        if (!at(pw.x, pw.y) || !guarded(at) || !stillConnected(at, w, h, 'may', here, other)) {
+          rollback(tx);
+          return false;
+        }
+        return commit(tx);
+      };
+
+      const wallOnly = pw.side === 'N' ? { wallN: WALL } : { wallW: WALL };
+      if (tryStamp(wallOnly)) { stats.ringSealed++; continue; }
+
+      /* ...it has to stay open. Make it look like it MEANS to be open — but ONLY where the module
+         will actually be DRAWN.
+
+         A 4u module spans the two collinear segments either side of its point, and `cell-place`'s
+         `moduleAt` will not draw one unless BOTH are wall. `cell-reach`'s `openingCertain` does not
+         ask that — it reads `wallType` and `open` and nothing else. So the graph can believe in a
+         doorway the renderer declines to draw, and the run system lays a plain solid wall there
+         instead: passable on paper, a wall in the world. PROOF 9 caught exactly that, with the Anchor
+         wedged at waypoint 59 of 76.
+         Requiring the partner span to be a certain wall keeps this phase on the renderer's side of
+         the disagreement. The divergence itself is older than this change and wants fixing at the
+         source — `openingCertain` should ask what `moduleAt` asks. */
+      const partner = pw.side === 'N'
+        ? grid.cells[pw.y * w + (pw.x - 1)]?.wallN
+        : grid.cells[(pw.y - 1) * w + pw.x]?.wallW;
+      if (partner === WALL && tryStamp({ ...wallOnly, wallType: DOORWAY, open: OPEN })) {
+        stats.doorsCut++;
+        continue;
       }
-      if (commit(tx)) stats.ringSealed++; else stats.doorsKept++;
+      stats.doorsKept++;
     }
   }
 
