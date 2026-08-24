@@ -33,7 +33,7 @@
 import {
   SEGS, FLOOR_MATERIALS, CORNERS, WALL_TYPES, TORCHES, OPENS,
   isStairFloor,
-  type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Open, type Cell,
+  type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Open, type Cell, type Dir,
 } from '../floor/cell.ts';
 import {
   fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches, opens,
@@ -78,6 +78,10 @@ let W = 6, H = 5;
 let LEVELS = 1;
 let L = 0;
 let viewAll = true;
+/** Draw the CHOSEN climb direction over each flight in the 3D preview. Off by default — it is a
+ *  diagnostic, not decoration — but one click away, because "which way does it think it goes" is the
+ *  question this editor gets asked most and could not previously answer in the picture. */
+let showStairArrows = false;
 const stride = (): number => W + 1;
 const levelSize = (): number => (W + 1) * (H + 1);
 /** Base index of the level being edited — every paint and read goes through this. */
@@ -919,6 +923,13 @@ function buildBrushBar(): void {
       onclick: () => { viewAll = !viewAll; buildPanel(); },
     }, viewAll ? 'all' : 'this'));
   }
+  lv.append(h('span', {
+    class: `lvchip wide${showStairArrows ? ' on' : ''}`,
+    title: 'draw the climb direction the code chose over each flight — green arrow points UP-slope, '
+      + 'red ball marks the FOOT. If the arrow disagrees with the treads, the placement is wrong; if '
+      + 'they agree and both look wrong, the scoring is.',
+    onclick: () => { showStairArrows = !showStairArrows; buildPanel(); },
+  }, '↑stairs'));
   bar.append(lv);
 }
 
@@ -1449,6 +1460,47 @@ function schedule3d(): void {
 }
 
 let framedFor = '';
+/**
+ * WHICH WAY DOES THE CODE THINK EACH FLIGHT CLIMBS — drawn over the flight, in the editor.
+ *
+ * The readout says a direction in words and the preview draws a staircase, and for a long time the
+ * only way to compare them was to hold the compass in your head while looking at an isometric camera.
+ * That is not a comparison anyone can win an argument with, and several were lost to it. A green arrow
+ * from the FOOT to the HEAD, in the same frame as the mesh, makes the two directly checkable: if the
+ * arrow and the treads disagree, the placement is wrong; if they agree and both look wrong, the
+ * SCORING is wrong. Those need opposite fixes, and nothing on screen used to distinguish them.
+ */
+const DIR_VEC: Record<Dir, [number, number]> = { N: [0, -1], S: [0, 1], W: [-1, 0], E: [1, 0] };
+
+function addStairArrows(
+  deck: THREE.Object3D, cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
+): void {
+  const sw = stride();
+  for (let y = 0; y <= H; y++) {
+    for (let x = 0; x <= W; x++) {
+      const c = cells[y * sw + x];
+      if (!c || !isStairFloor(c.floor)) continue;
+      const same = (cx: number, cy: number): boolean =>
+        cx >= 0 && cy >= 0 && cx <= W && cy <= H && cells[cy * sw + cx]?.floor === c.floor;
+      if (same(x - 1, y) || same(x, y - 1)) continue;      // only the block's origin reports
+      const fl = stairFlight(cells, sw, H + 1, x, y, above);
+      if (!fl) continue;
+      const [dx, dz] = DIR_VEC[fl.up]!;
+      // `buildGrid` centres the whole lattice on the origin, so the ruler and this must agree
+      const cx = (x + (fl.bw - 1) / 2 - (sw - 1) / 2) * CELL;
+      const cz = (y + (fl.bh - 1) / 2 - H / 2) * CELL;
+      const v = new THREE.Vector3(dx, 0, dz);
+      const mid = new THREE.Vector3(cx, 5.2, cz);
+      deck.add(new THREE.ArrowHelper(v, mid.clone().addScaledVector(v, -2.2), 4.4, 0x2ee06a, 1.3, 0.9));
+      const foot = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xff3b30, depthTest: false }));
+      foot.position.copy(mid).addScaledVector(v, -3.0);
+      foot.renderOrder = 999;
+      deck.add(foot);
+    }
+  }
+}
+
 async function rebuild3d(): Promise<void> {
   if (!scene) return;
   /* Every storey, FLOOR_HEIGHT apart — or just the one being edited. "Take off layers" is the reason
@@ -1457,10 +1509,12 @@ async function rebuild3d(): Promise<void> {
   const group = new THREE.Group();
   for (const i of shown) {
     // the storey above breaks a tie between two possible stair directions — see `GridOptions.above`
-    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H },
-      i + 1 < LEVELS ? { above: resolvedLevel(i + 1) } : {});
+    const here = resolvedLevel(i);
+    const over = i + 1 < LEVELS ? resolvedLevel(i + 1) : undefined;
+    const deck = await buildGrid(here, stride(), H + 1, { w: W, h: H }, over ? { above: over } : {});
     deck.position.y = toFloat(FLOOR_HEIGHT) * i;
     group.add(deck);
+    if (showStairArrows) addStairArrows(deck, here, over);
   }
   if (built) scene.remove(built);
   built = group;

@@ -25,6 +25,7 @@
 
 import * as THREE from 'three';
 import { buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { previewCell } from '../floor/cell-field.ts';
 import { getStructure, levelsOf, listStructures } from '../floor/cell-structures.ts';
 import { stairFlight } from '../floor/cell-place.ts';
@@ -184,6 +185,99 @@ function subject(): Subject {
   };
 }
 
+/**
+ * THE ASSET BOARD — every stair mesh, UNROTATED, next to an arrow saying which way the code believes
+ * it climbs when unturned.
+ *
+ * `STAIR_TURN` rests on one sentence: "stairs rise toward -Z natively, so N is the unturned case."
+ * Every flight in the game is placed by rotating that assumption, and the assumption itself had never
+ * been looked at — only reasoned about, and the reasoning is circular if the premise is what is wrong.
+ * Vertex statistics do not settle it either: the walled variants are a handful of large boxes whose
+ * side walls span the whole run, so "which end is tall" reads the wall, not the treads.
+ *
+ * So: draw them, at turn 0, with the compass. If a mesh's treads climb away from its arrow, that mesh
+ * disagrees with the constant and the constant is wrong FOR THAT MESH — which the single shared turn
+ * table cannot express.
+ */
+/** Renderer + camera + one frame, for a subject that is not a grid. Mirrors the grid path in `main`;
+ *  kept separate rather than shared, because that one also frames on the union of its meshes. */
+function finishBoard(scene: THREE.Scene, host: HTMLElement, centre: THREE.Vector3, radius: number): void {
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  const wpx = Math.floor(host.clientWidth) || 900, hpx = Math.floor(host.clientHeight) || 620;
+  r.setSize(wpx, hpx);
+  host.append(r.domElement);
+  const camera = new THREE.PerspectiveCamera(45, wpx / hpx, 0.1, 500);
+  const dist = (radius / Math.tan((45 * Math.PI) / 360)) / num('zoom', 1.15);
+  const a = (num('angle', 35) * Math.PI) / 180, pitch = (num('pitch', 38) * Math.PI) / 180;
+  camera.position.set(
+    centre.x + Math.cos(a) * Math.cos(pitch) * dist,
+    centre.y + Math.sin(pitch) * dist,
+    centre.z + Math.sin(a) * Math.cos(pitch) * dist,
+  );
+  camera.lookAt(centre);
+  r.render(scene, camera);
+  const bad = loadFailures();
+  if (bad.length) window.__CELL_WARN = `${bad.length} load failure(s): ` + bad.map((b) => b.url).join(', ');
+  window.__CELL_READY = true;
+}
+
+async function assetBoard(scene: THREE.Scene): Promise<{ label: string; radius: number; centre: THREE.Vector3 }> {
+  const ALL = ['stairs', 'stairs_wall_left', 'stairs_wall_right', 'stairs_walled', 'stairs_wide', 'stairs_narrow'];
+  const want = q.get('only');
+  const picked = want ? want.split(',').map((n) => n.trim()).filter((n) => ALL.includes(n)) : ALL;
+  /* `spin=<name>` repeats ONE mesh at all four quarter-turns beside the others, which is how you find
+     the yaw that makes an odd asset line up with the rest instead of guessing at it. */
+  const spun = q.get('spin');
+  const names: string[] = spun ? [...picked, ...[0, 1, 2, 3].map((t) => `${spun}@${t}`)] : picked;
+  const loader = new GLTFLoader();
+  const PITCH = 9;
+  const startX = -((names.length - 1) * PITCH) / 2;
+
+  for (const [i, n] of names.entries()) {
+    const x = startX + i * PITCH;
+    const [file, spinTurn] = n.split('@');
+    let obj: THREE.Object3D;
+    try {
+      obj = (await loader.loadAsync(`models/kaykit_dungeon_remastered/${file}.gltf.glb`)).scene;
+    } catch {
+      continue;
+    }
+    obj.position.set(x, 0, 0);
+    // TURN 0 unless this is a `spin` copy — the same table the placer uses: [0, +90, 180, -90]
+    obj.rotation.y = spinTurn === undefined ? 0 : [0, Math.PI / 2, Math.PI, -Math.PI / 2][+spinTurn]!;
+    scene.add(obj);
+
+    /* The arrow the code would draw: unturned means it believes this climbs NORTH, which is -Z. */
+    scene.add(new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, -1), new THREE.Vector3(x, 6.2, 3.0), 6.0, 0x2ee06a, 1.6, 1.1));
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+    foot.position.set(x, 6.2, 3.6);            // the end the code thinks you walk in at
+    scene.add(foot);
+
+    // a per-asset name plate
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 96;
+    const g2 = c.getContext('2d')!;
+    g2.fillStyle = 'rgba(10,12,15,0.9)'; g2.fillRect(0, 0, 512, 96);
+    g2.font = 'bold 40px system-ui, sans-serif'; g2.fillStyle = '#e8eef6';
+    g2.textAlign = 'center'; g2.textBaseline = 'middle'; g2.fillText(n, 256, 52);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+    sp.position.set(x, -1.2, 5.2); sp.scale.set(8, 1.5, 1); sp.renderOrder = 999;
+    scene.add(sp);
+  }
+
+  const span = names.length * PITCH;
+  const grid = new THREE.GridHelper(span, names.length * 4, 0x3b6ea5, 0x2f3742);
+  grid.position.y = -0.02;
+  scene.add(grid);
+  return {
+    label: 'STAIR ASSETS AT TURN 0 — the arrow is where the code believes each climbs (NORTH, -Z)',
+    radius: span * 0.55, centre: new THREE.Vector3(0, 2, 0),
+  };
+}
+
 async function main(): Promise<void> {
   const s = subject();
   window.__CELL_INFO = s.label;
@@ -205,6 +299,15 @@ async function main(): Promise<void> {
 
   // EACH deck is told what is over IT, so every flight is decided the way the tower decides it
   const overBottom = s.decideAbove ?? s.above?.[0];
+  /* THE ASSET BOARD is a different subject entirely — raw meshes, no grid, no placement rules. */
+  if (q.get('assets') === 'stairs') {
+    const b = await assetBoard(scene);
+    window.__CELL_INFO = b.label;
+    if (cap) cap.textContent = b.label + '   |   compass: N is -Z';
+    finishBoard(scene, host, b.centre, b.radius);
+    return;
+  }
+
   const group = await buildGrid(s.cells, s.w, s.h, s.extent, overBottom ? { above: overBottom } : {});
   scene.add(group);
 
@@ -283,13 +386,38 @@ async function main(): Promise<void> {
   ruler.position.y = -0.02;
   scene.add(ruler);
 
-  /* THE COMPASS. Magenta = NORTH (-Z), cyan = EAST (+X), planted at the north-west corner of the
-     ruler. Without it a screenshot cannot be argued about: the camera yaw is a flag. */
+  /* THE COMPASS — LETTERED, one at the middle of each edge of the ruler.
+     Coloured arrows alone are not enough: they need a legend, and a legend is one more thing to get
+     backwards in an argument about which way is which. A literal N on the north edge cannot be
+     misread. The camera yaw is a flag, so north is a different screen direction in every shot. */
+  const letter = (text: string, at: THREE.Vector3, colour: string): void => {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    const g2 = c.getContext('2d')!;
+    g2.fillStyle = 'rgba(10,12,15,0.85)';
+    g2.beginPath(); g2.arc(64, 64, 56, 0, Math.PI * 2); g2.fill();
+    g2.font = 'bold 84px system-ui, sans-serif';
+    g2.fillStyle = colour; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+    g2.fillText(text, 64, 70);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), depthTest: false, transparent: true,
+    }));
+    sp.position.copy(at);
+    sp.scale.setScalar(Math.max(2, Math.min(gw, gh) * 0.14));
+    sp.renderOrder = 999;
+    scene.add(sp);
+  };
   {
+    const out = 2.2, y = 1.2;
+    letter('N', new THREE.Vector3(0, y, -gh / 2 - out), '#ff5bd8');
+    letter('S', new THREE.Vector3(0, y, gh / 2 + out), '#ff5bd8');
+    letter('E', new THREE.Vector3(gw / 2 + out, y, 0), '#5bd8ff');
+    letter('W', new THREE.Vector3(-gw / 2 - out, y, 0), '#5bd8ff');
+    // and the arrows, so the AXES are readable as well as the edges
     const corner = new THREE.Vector3(-gw / 2 - 1.5, 0.1, -gh / 2 - 1.5);
     const len = Math.max(3, Math.min(gw, gh) * 0.22);
-    compass(new THREE.Vector3(0, 0, -1), 0xff3bd0, corner, len);   // N
-    compass(new THREE.Vector3(1, 0, 0), 0x3bd0ff, corner, len);    // E
+    compass(new THREE.Vector3(0, 0, -1), 0xff3bd0, corner, len);   // N = -Z
+    compass(new THREE.Vector3(1, 0, 0), 0x3bd0ff, corner, len);    // E = +X
   }
 
   const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });

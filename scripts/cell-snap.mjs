@@ -74,6 +74,9 @@ const camera = `angle=${flags.get('angle') ?? 35}&pitch=${flags.get('pitch') ?? 
   + (flags.has('stack') ? `&stack=${flags.get('stack')}` : '')
   + (flags.has('rise') ? `&rise=${flags.get('rise')}` : '')
   + (flags.has('arrows') ? `&arrows=1` : '')
+  + (flags.has('assets') ? `&assets=${flags.get('assets')}` : '')
+  + (flags.has('only') ? `&only=${encodeURIComponent(flags.get('only'))}` : '')
+  + (flags.has('spin') ? `&spin=${encodeURIComponent(flags.get('spin'))}` : '')
   + (flags.has('level') ? `&level=${flags.get('level')}` : '')
   + (flags.has('levels') ? `&levels=${flags.get('levels')}` : '');
 

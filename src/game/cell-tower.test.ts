@@ -4,6 +4,7 @@ import { fromInt, fromFloatConst, toFloat, toRaw } from '../sim/fixed/fixed.ts';
 import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveGrid } from '../floor/cell-grid.ts';
 import { compileCellTower, cellCentre2u, cellWorldPlacements, wallMask2u, CELL_SIZE_2U, type CellFloor } from './cell-tower.ts';
+import { drawnClimbDir } from '../floor/cell-place.ts';
 import { FLOOR_HEIGHT } from './tower.ts';
 import { DIR_E, DIR_W, DIR_N, DIR_S } from '../floor/wallgrid.ts';
 import { openCell } from '../floor/cell.ts';
@@ -244,9 +245,9 @@ describe('cell-tower — the collider and the mesh describe the SAME staircase',
     return out;
   };
 
-  /** Which way the DRAWN mesh climbs, read back from its quarter-turn. Stairs rise toward -Z
-   *  natively (measured — see `STAIR_TURN`), so turn t rotates that by t x 90 degrees. */
-  const drawnDir = (turn: number): string => (['N', 'W', 'S', 'E'] as const)[((turn % 4) + 4) % 4]!;
+  /* Which way the DRAWN mesh climbs. NOT derivable from `turn` alone: two meshes in the kit are
+     authored a quarter-turn off and carry a per-mesh correction, so the url is part of the question.
+     `drawnClimbDir` is the renderer's own inverse — going through it is the point. */
 
   /** Which way the COLLIDER climbs: find the tallest step, and see which end of the block it sits at. */
   function collidedDir(solids: readonly { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[],
@@ -277,7 +278,7 @@ describe('cell-tower — the collider and the mesh describe the SAME staircase',
       // what got DRAWN
       const stair = t.cellGrid![0]!.wallPlacements.filter((p) => /stairs/.test(p.unit.url));
       expect(stair.length).toBe(1);
-      const drawn = drawnDir(stair[0]!.unit.turn);
+      const drawn = drawnClimbDir(stair[0]!.unit.url, stair[0]!.unit.turn);
 
       // what got COLLIDED — the step stack on stratum 0
       /** AABB stores RAW Fixed, not `Fixed` — Q16.16, so a raw unit is 1/65536 of a metre. */

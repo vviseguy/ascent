@@ -337,6 +337,52 @@ const STAIR_MESHES = [
  * asymmetric piece like a staircase.
  */
 const STAIR_TURN = { N: 0, W: 1, S: 2, E: 3 } as const;
+
+/**
+ * TWO MESHES IN THIS KIT ARE AUTHORED A QUARTER-TURN OFF, IN OPPOSITE DIRECTIONS.
+ *
+ * `STAIR_TURN` assumes every flight shares one body orientation, and five of the six do. The two
+ * banister-and-wall variants do not: their footprints are 4.00 x 5.00 where every other flight is
+ * 5.00 x 4.00 — DEEPER THAN WIDE, which is the whole tell, and it was sitting in this file's own
+ * comments for months while the same turn was applied to all six.
+ *
+ * Found by drawing them: `cell-snap.html?assets=stairs&spin=<name>` puts a mesh at all four
+ * quarter-turns beside `stairs`, and exactly one lines up. `stairs_wall_left` needs a further -90 and
+ * `stairs_wall_right` a further +90 — opposite ways, because the two are mirror images and a mirror
+ * turns a left-handed error into a right-handed one.
+ *
+ * WHY THE VERTEX MEASUREMENT MISSED IT. `tmp/glb-hand.mjs` counted vertices above the top tread and
+ * found 13 at -X for `_left` and 13 at +X for `_right`, concluding "the mesh names mean what they
+ * say". They do — but those 13 vertices are a POST AT ONE CORNER (measured centre: x=-2, z=4.02, the
+ * foot end), not a wall running the length of the flight. A statistic that agrees with the label is
+ * not a confirmation of it. The picture settled in one frame what four measurements could not.
+ *
+ * A DATA FIX, NOT A CODE FIX, would be better — re-export the two GLBs square with the rest and delete
+ * this table. Until someone owns the art, correcting at the placement is the honest version: it is one
+ * table, next to the constant it corrects, and it says which meshes are wrong and how.
+ */
+const MESH_YAW_FIX: Record<string, number> = {
+  [PIECE.stairsWallLeft]: 3,
+  [PIECE.stairsWallRight]: 1,
+};
+
+/** The quarter-turn to actually place `url` at, for a flight climbing `up`. */
+const stairTurn = (url: string, up: Dir): number =>
+  (STAIR_TURN[up] + (MESH_YAW_FIX[url] ?? 0)) % 4;
+
+/**
+ * READ A PLACED FLIGHT BACK: which way does this drawn staircase climb?
+ *
+ * The inverse of `stairTurn`, and it has to exist as a function rather than as a table anyone can
+ * write down, because `turn` ALONE NO LONGER ANSWERS IT — two meshes carry an extra quarter-turn of
+ * their own, so the same `turn` means different directions depending on the url. Anything reading a
+ * placement back (a test, a debug overlay, a collider cross-check) must go through here or it will
+ * silently disagree with the renderer on exactly those two meshes.
+ */
+export function drawnClimbDir(url: string, turn: number): Dir {
+  const raw = (((turn - (MESH_YAW_FIX[url] ?? 0)) % 4) + 4) % 4;
+  return (['N', 'W', 'S', 'E'] as const)[raw]!;
+}
 /** Unit step per direction, for pushing the pivot back up-slope. */
 const STEP: Record<Dir, readonly [number, number]> = { N: [0, -1], S: [0, 1], W: [-1, 0], E: [1, 0] };
 /**
@@ -972,9 +1018,17 @@ export function cellPlacements(
        NOTHING ELSE. There was a 0.05 lift onto the deck's walking surface and a 0.12 nudge downhill to
        clear wall trim; both are gone. The PIVOT correction stays — it is not a tweak, it is what puts
        the mesh on its own block at all. */
-    const [sx, sz] = STEP[flight.up];
+    /* THE PIVOT CORRECTION HAS TO TURN WITH THE MESH. The offset below exists because a flight pivots
+       on its TOP end, not its middle, so it is pushed half a run up-slope to land on its own block —
+       and "up-slope" is a direction in the mesh's LOCAL frame. Give a mesh an extra quarter-turn
+       (`MESH_YAW_FIX`) and that local direction rotates too; leave the offset alone and the flight is
+       rotated correctly but placed up to two cells off its block, which reads as the stairs vanishing
+       into a wall. Rotating +90 about Y maps (x,z) -> (z,-x). */
+    const fix = MESH_YAW_FIX[flight.url] ?? 0;
+    let [sx, sz] = STEP[flight.up];
+    for (let k = 0; k < fix; k++) [sx, sz] = [sz, -sx];
     out.push(at(
-      flight.url, STAIR_TURN[flight.up],
+      flight.url, stairTurn(flight.url, flight.up),
       fromInt(flight.bw - 1 + sx * flight.run), fromInt(flight.bh - 1 + sz * flight.run),
     ));
   } else if (isStairFloor(c.floor)) {
