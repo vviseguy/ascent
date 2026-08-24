@@ -34,6 +34,7 @@ import { setConfig, getConfig, configFromParam, setRelief, reliefFromParam, setA
 import { ensureTilingTextures } from './recolor.ts';
 import { APPROVED_ASSETS, approvedProfile } from '../game/approved-assets.ts';
 
+import { mountPageNav } from './page-nav.ts';
 // See lab.ts: the recolor BAKE reads atlas pixels through a 2D canvas, and drawImage is refused for
 // an ImageBitmap on some backends. Must be set before any GLB loads.
 (globalThis as { createImageBitmap?: unknown }).createImageBitmap = undefined;
@@ -305,3 +306,6 @@ async function main(): Promise<void> {
 }
 
 void main();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();

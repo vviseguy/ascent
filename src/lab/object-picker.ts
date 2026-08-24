@@ -86,13 +86,18 @@ export function buildObjectPicker(opts: ObjectPickerOpts): void {
   Object.assign(strip.style, {
     position: 'fixed',
     left: '10px',
-    top: '50%',
-    transform: 'translateY(-50%)',
+    /* ANCHORED, not centred. It used to sit at `top: 50%` with a translate, which is fine for a short
+       list and wrong for a long one: the taller it grows the further it creeps UP, until the first
+       entries are behind the top bar and you cannot see where the list begins. Spanning top-to-bottom
+       instead starts it in the same place every time and gives it the whole window, so far more of the
+       catalogue is in view at once. 54px is the drawer rail's offset (drawers.ts) — the top bar's
+       height, in one convention rather than two. */
+    top: '54px',
+    bottom: '54px',
     display: 'flex',
     flexDirection: 'column',
     gap: '1px',
     width: '208px',
-    maxHeight: 'calc(100vh - 24px)',
     overflowY: 'auto',
     padding: '8px',
     background: 'rgba(10,10,22,.72)',

@@ -21,6 +21,7 @@ import { tilePlacements } from './wall-tile-assets.ts';
 import { basicRoom, ROOMS } from '../floor/room-templates.ts';
 import { instance } from './tile-render.ts';
 
+import { mountPageNav } from './page-nav.ts';
 const CELL = 4; // a tile is 4u; grid cell (gx,gy) centres at world (gx*CELL, gy*CELL)
 const MARGIN = 1; // open border around a single room, so its open boundary is visible (blue)
 
@@ -158,3 +159,6 @@ function tick(): void {
   requestAnimationFrame(tick);
 }
 tick();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();

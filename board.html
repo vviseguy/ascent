@@ -14,7 +14,12 @@
       #status { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c; color: #aab; min-height: 2.4em; word-break: break-word; }
       #status .ok { color: #6fe3d0; }
       #status .bad { color: #ff8a78; }
-    </style>
+    
+  /* page-nav clearance: the switcher pill sits at top-left, so the panel starts below it.
+     A LAST rule rather than a property inside #panel — that rule sets `padding` shorthand
+     further down, which silently reset an earlier padding-top. */
+  #panel { padding-top: 42px; }
+</style>
   </head>
   <body>
     <div id="view"></div>

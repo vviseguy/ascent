@@ -30,6 +30,7 @@ import {
 import { tilePlacements } from './wall-tile-assets.ts';
 import { meshObject, type WorldObject, type Footprint } from './world-object.ts';
 
+import { mountPageNav } from './page-nav.ts';
 /* --------------------------------- constants --------------------------------- */
 
 const HALF = 2; // native 4u tile → ±2 to each edge
@@ -333,3 +334,6 @@ function tick(): void {
   requestAnimationFrame(tick);
 }
 tick();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();
