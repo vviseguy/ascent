@@ -1016,21 +1016,24 @@ function stairReport(): string[] {
       const c = here[y * stride() + x];
       if (!c || !isStairFloor(c.floor)) continue;
 
-      const flight = stairFlight(here, stride(), H + 1, x, y);
+      /* WITH THE STOREY ABOVE, ALWAYS — the same argument the 3D preview and the tower pass.
+         The ceiling is one of the three signals that choose a direction, so a readout that omits it is
+         not a weaker readout, it is a readout OF A DIFFERENT FLIGHT: this said "climbs N" under the
+         author's nose while the mesh beside it climbed W. An explanation that can disagree with the
+         thing it explains is worse than no explanation. */
+      const flight = stairFlight(here, stride(), H + 1, x, y, above ?? undefined);
       if (!flight) {
-        const fault = stairFault(here, stride(), H + 1, x, y);
+        const fault = stairFault(here, stride(), H + 1, x, y, above ?? undefined);
         if (fault) out.push(`⚠ stairs at (${x},${y}): ${stairFaultText(fault)}`);
-        // and WHY a flight points the way it does — the question an author actually has when one
-        // faces somewhere unexpected
-        const f = stairFlight(here, stride(), H + 1, x, y);
-        if (f) {
-          const why = stairChoiceAt(here, stride(), H + 1, x, y);
-          out.push(`stairs at (${x},${y}) climb ${f.up}` + (why ? ` — ${stairChoiceText(why)}` : ''));
-        }
         continue;
       }
       const mesh = flight.url.split('/').pop()!.replace('.gltf.glb', '');
       out.push(`stairs at (${x},${y}): ${flight.bw}×${flight.bh}, climbs ${flight.up} — ${mesh}`);
+      /* and WHY it points that way — the question an author actually has when one faces somewhere
+         unexpected. This used to sit in the `!flight` branch behind a second `stairFlight` call that
+         could not possibly be truthy there, so it had never printed once. */
+      const why = stairChoiceAt(here, stride(), H + 1, x, y, above ?? undefined);
+      if (why) out.push(`    ${stairChoiceText(why)}`);
 
       if (!above) continue;
       // THE CEILING over the whole footprint, and the arrival cell just beyond the top

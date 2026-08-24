@@ -1,15 +1,17 @@
 // WHICH WAY DOES A CORNER STAIRCASE CLIMB?
 //
 // A flight climbs toward its walled end, so a block walled on two ADJACENT sides reads two ways and
-// the walls alone cannot say which. Three signals break it, WEIGHTED rather than ordered:
+// the walls alone cannot say which. Four signals break it, WEIGHTED rather than ordered:
 //
-//   4  the FOOT is reachable   — is there ground to walk in from at the open end?
-//   2  the CEILING is open     — a flight climbs into a wall, so the storey above is its only exit
+//   6  the FOOT is reachable    — is there ground to walk in from at the open end?  (graded 0/1/2)
+//   2  the CEILING is open      — a flight climbs into a wall, so the storey above is its only exit
+//   2  the LANDING is clear     — and something to stand on once you are through the hole
 //   1  the head wall is its OWN — a wall running on past the block is one it stands beside
 //
 // Scored rather than chained so a direction winning two weak signals can still lose to the strong
-// one. The foot outweighs the rest on purpose: you can argue about which end is the head, you cannot
-// argue about an entrance nobody can reach.
+// one. The foot outweighs ALL THE REST COMBINED on purpose (12 against 6+2+2+1): you can argue about
+// which end is the head, you cannot argue about an entrance nobody can reach. That bound is why the
+// multiplier is 6 and not a round number — see `score` in cell-place.ts before changing any weight.
 
 import { describe, it, expect } from 'vitest';
 import { stairFlight, stairFault, stairFaultText } from './cell-place.ts';
@@ -66,6 +68,22 @@ describe('a corner staircase climbs toward the hole in the ceiling', () => {
     const both = stairFlight(corner(), W, H, 1, 1, half);
     const none = stairFlight(corner(), W, H, 1, 1);
     expect(both?.up).toBe(none?.up);
+  });
+
+  it('prefers the head with somewhere to LAND, not just a hole to climb through', () => {
+    /* THE OTHER HALF OF THE CEILING QUESTION. `ceilingOpen` asks whether the hole exists; it says
+       nothing about what is on the far side of it, so a flight could climb through a perfect hole and
+       leave you treading air. Here BOTH readings are open overhead and tie on every other signal — same
+       foot, same own-head wall — and the only difference is that north arrives over the void while west
+       arrives on floor. West is the flight the author drew. */
+    const above = ceilingWithHoleAt([[1, 1], [2, 1], [1, 2]]);  // both heads open
+    for (const x of [1, 2]) above[0 * W + x]!.floor = 'none';   // north's landing (1,0),(2,0): void
+    expect(stairFlight(corner(), W, H, 1, 1, above)).toMatchObject({ up: 'W' });
+
+    // and mirrored, so this is the landing deciding and not a standing preference for west
+    const flipped = ceilingWithHoleAt([[1, 1], [2, 1], [1, 2]]);
+    for (const y of [1, 2]) flipped[y * W + 0]!.floor = 'none'; // west's landing (0,1),(0,2): void
+    expect(stairFlight(corner(), W, H, 1, 1, flipped)).toMatchObject({ up: 'N' });
   });
 
   it('falls back to the old rule with no storey above at all', () => {

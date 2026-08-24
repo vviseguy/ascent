@@ -379,7 +379,20 @@ function endContinues(
     : d === 'S' ? [x - 1, y + bh - 1, x + bw, y + bh - 1]
       : d === 'W' ? [x, y - 1, x, y + bh]
         : [x + bw - 1, y - 1, x + bw - 1, y + bh];
-  return blocks(wallOn(cells, w, h, ax, ay, d)) || blocks(wallOn(cells, w, h, bx, by, d));
+
+  /* OFF THE MAP IS NOT A WALL — here. `wallOn` reports the void beyond the lattice as `wall`, which is
+     exactly right for `sideClosed` (you cannot walk off the world) and exactly wrong for this question.
+     "Does this wall run ON past the block" cannot be answered yes by geometry that does not exist:
+     beyond the edge there is nothing for it to run into.
+     It cost a real misreading. A stair whose own head stub started at the north border had its
+     off-lattice probe invent a wall, the `||` short-circuited before the real probe was weighed, and
+     its head read as "a wall it stands beside" — dropping its score by one and manufacturing a tie
+     with the other axis that a tiebreak then resolved by luck. Same "one function, two questions"
+     class as `openingAt` vs `moduleAt` and `edgeDraw`'s overloaded null, both documented above. */
+  const onMap = (px: number, py: number): boolean => px >= 0 && py >= 0 && px < w && py < h;
+  const runsOn = (px: number, py: number): boolean =>
+    onMap(px, py) && blocks(wallOn(cells, w, h, px, py, d));
+  return runsOn(ax, ay) || runsOn(bx, by);
 }
 
 /**
@@ -427,7 +440,7 @@ function ceilingOpen(
  * afterwards on the same cell — this is an EXPLANATION, not state anything depends on.
  */
 export interface StairSignals {
-  dir: Dir; score: number; foot: number; ceiling: boolean; ownHead: boolean;
+  dir: Dir; score: number; foot: number; ceiling: boolean; landing: boolean; ownHead: boolean;
   /** Manhattan distance from this reading's head to the stair block on the storey above; null if none. */
   toNext?: number | null;
 }
@@ -483,23 +496,62 @@ function continuesUpward(
 }
 
 /**
+ * IS THERE ANYWHERE TO ARRIVE — floor on the storey above, one cell past the head.
+ *
+ * `ceilingOpen` asks whether the hole exists; this asks whether anything is on the far side of it. They
+ * are different questions and only the first was ever asked, so a flight could climb through a perfectly
+ * good hole and leave you treading air. The author's own words for it: a good reading has "an unblocked
+ * floor at the top AND an unblocked floor at the bottom" — `entryReachable` covered the bottom and
+ * nothing covered the top.
+ *
+ * `floor: 'none'` up there is the void and `rock` is solid, so neither is a landing. No storey above
+ * means the question does not apply, and it answers false for BOTH directions rather than guessing —
+ * the same shape as `ceilingOpen`, so a signal that cannot be evaluated never tips the decision.
+ */
+function landingClear(
+  above: readonly (Cell | null)[] | undefined, w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir,
+): boolean {
+  if (!above) return false;
+  const [sx, sy] = STEP[d];
+  const beyond: [number, number][] = [];
+  if (d === 'N' || d === 'S') {
+    const row = d === 'N' ? y : y + bh - 1;
+    for (let i = 0; i < bw; i++) beyond.push([x + i, row + sy]);
+  } else {
+    const col = d === 'W' ? x : x + bw - 1;
+    for (let j = 0; j < bh; j++) beyond.push([col + sx, y + j]);
+  }
+  for (const [cx, cy] of beyond) {
+    const c = cellAt(above, w, h, cx, cy);
+    if (c && c.floor !== 'none' && c.floor !== 'rock') return true;
+  }
+  return false;
+}
+
+/**
  * HOW GOOD A READING IS. The one scorer — the decision and the explanation both call THIS, never a
  * copy of it. An explanation that can disagree with the decision is worse than no explanation, and
  * this codebase has paid for that twice already (`openingAt` vs `moduleAt` cost eleven wall types;
  * `edgeDraw`'s overloaded null put an endcap in a quarter of all doorways).
  *
- * THE FOOT IS WORTH FOUR, NOT THREE, and the difference matters. The foot is graded 0/1/2, so at x3
- * an ordinary-floor entrance with nothing else (6) TIES a stairs entrance with an open ceiling and its
- * own head (3+2+1 = 6) — and the first is plainly the better reading. At x4 it is 8 against 7. The
- * property to preserve when touching these numbers: A REAL FLOOR ENTRANCE ALONE MUST OUTWEIGH EVERY
- * OTHER SIGNAL COMBINED.
+ * THE FOOT MULTIPLIER IS DERIVED, NOT PICKED. The invariant is: A REAL FLOOR ENTRANCE ALONE MUST
+ * OUTWEIGH EVERY OTHER SIGNAL COMBINED — an ordinary way in beats any pile of circumstantial evidence
+ * for the other reading. The foot is graded 0/1/2 (nothing / more stairs / ordinary floor), so with the
+ * other signals summing to at most 2+2+1 = 5, the multiplier must exceed that: 12 against 6+5 = 11.
+ *
+ * It has already gone wrong twice by being chosen instead of derived. At x3 an ordinary foot alone (6)
+ * TIED a stairs foot with everything else (3+2+1 = 6); x4 fixed that but was then left behind when
+ * `landingClear` was added, which would have made 4+2+2+1 = 9 beat a bare ordinary foot at 8. RECOMPUTE
+ * THIS BOUND whenever a signal is added or reweighted.
  */
 function score(
   cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
   w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
 ): number {
-  return entryReachable(cells, w, h, x, y, bw, bh, d) * 4
+  return entryReachable(cells, w, h, x, y, bw, bh, d) * 6
     + (ceilingOpen(above, w, h, x, y, bw, bh, d) ? 2 : 0)
+    + (landingClear(above, w, h, x, y, bw, bh, d) ? 2 : 0)
     + (endContinues(cells, w, h, x, y, bw, bh, d) ? 0 : 1);
 }
 
@@ -519,11 +571,12 @@ function rank(
 function signals(
   cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
   w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
-): { foot: number; ceiling: boolean; ownHead: boolean } {
+): { foot: number; ceiling: boolean; landing: boolean; ownHead: boolean } {
   return {
     // 2 = ordinary floor, 1 = only more stairs, 0 = nothing to enter from. See `entryReachable`.
     foot: entryReachable(cells, w, h, x, y, bw, bh, d),
     ceiling: ceilingOpen(above, w, h, x, y, bw, bh, d),
+    landing: landingClear(above, w, h, x, y, bw, bh, d),
     ownHead: !endContinues(cells, w, h, x, y, bw, bh, d),
   };
 }
@@ -543,6 +596,7 @@ export function stairChoiceAt(
 export function stairChoiceText(c: StairChoice): string {
   const one = (s: StairSignals): string =>
     `${s.dir}(foot ${s.foot === 2 ? 'FLOOR' : s.foot === 1 ? 'only stairs' : 'NO GROUND'}, ceiling ${s.ceiling ? 'open' : 'not open'}, `
+    + `landing ${s.landing ? 'clear' : 'none'}, `
     + `head ${s.ownHead ? 'its own' : 'runs past'}${s.score >= 0 ? ` = ${s.score}` : ''}, toNext ${s.toNext ?? 'n/a'})`;
   if (!c.contested) return `only one axis had a closed end, so the walls decided: ${one(c.v)}`;
   const tail = !c.tie ? ''

@@ -416,6 +416,34 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     expect(stairFlight(other, SW, SH, 1, 1)).toMatchObject({ up: 'W' });
   });
 
+  it('does not invent a head wall OFF THE MAP', () => {
+    /* THE ONE THAT GOT AWAY, and it got away because every other fixture here sits at (1,1) with room
+       on all sides, so no probe ever left the lattice.
+
+       Put the block against the NORTH EDGE and the "does this wall carry on past the block" question
+       has to look at y = -1. `wallOn` answers `wall` off the map — correct for "can I walk out there",
+       wrong for this — and the reading whose head wall touches the border was scored as though it were
+       a room wall running past. It cost the west reading a point, manufactured a tie with north, and a
+       tiebreak then settled by luck what the geometry had already settled outright.
+
+       Here: the north wall spans the full width (a genuine room wall, runs past on both sides); the
+       west wall is exactly the block's two segments and stops (the stair's own head). West must win. */
+    const atEdge = mk((c, x, y) => {
+      if (x >= 3 && x <= 4 && y <= 1) c.floor = 'stairs';
+      if (y === 0) c.wallN = 'wall';                        // room wall, full width
+      if (x === 3 && y <= 1) c.wallW = 'wall';              // head wall, the block's extent exactly
+    });
+    expect(stairFlight(atEdge, SW, SH, 3, 0)).toMatchObject({ up: 'W' });
+
+    // and the mirror — head wall on the north border, room wall running the full height on the west
+    const mirrored = mk((c, x, y) => {
+      if (x >= 3 && x <= 4 && y <= 1) c.floor = 'stairs';
+      if (y === 0 && x >= 3 && x <= 4) c.wallN = 'wall';    // head wall, the block's extent exactly
+      if (x === 3) c.wallW = 'wall';                        // room wall, full height
+    });
+    expect(stairFlight(mirrored, SW, SH, 3, 0)).toMatchObject({ up: 'N' });
+  });
+
   it('still refuses when NEITHER axis has a closed end — there is nothing to go on', () => {
     const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
     expect(stairFlight(openBoth, SW, SH, 1, 1)).toBeNull();
