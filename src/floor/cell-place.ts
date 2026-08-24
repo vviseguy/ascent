@@ -162,12 +162,12 @@ const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ON
  * with the deck it reaches, because 0.05 + 4.00 = the next storey's surface. That is not a coincidence
  * to be tuned — it is the kit's own grid, and `FLOOR_HEIGHT` should equal it.
  */
-const FLOOR_SURFACE = fromFloatConst(0.05);
+/* The floor's walking surface sits 0.05 above its placement origin. Kept as a measurement — the
+   stairs no longer offset themselves onto it, but the number is what makes 0.05 + 4.00 land on the
+   next deck, which is why FLOOR_HEIGHT is what it is. */
 /** How far a flight actually climbs. `FLOOR_HEIGHT` must equal this or the stairs stop reaching. */
 export const STAIR_CLIMB: Fixed = fromInt(4);
-/** Pushed DOWNHILL by this much so the flight clears the trim that protrudes from the wall at its head.
- *  Small on purpose: any more and the gap at the top reads as a missing tread. */
-const STAIR_OUT = fromFloatConst(0.12);
+
 
 
 /* ------------------------------- reading the grid ------------------------------- */
@@ -644,12 +644,15 @@ export function cellPlacements(
   const flight = stairFlight(cells, w, h, x, y);
   if (flight && inFloor) {
     /* The block centre, relative to the origin cell centre, in cell-local (= world) units — then pushed
-       UP-SLOPE by half the run, because the mesh pivots on its top end rather than its middle. */
+       UP-SLOPE by half the run, because the mesh pivots on its top end rather than its middle.
+       NOTHING ELSE. There was a 0.05 lift onto the deck's walking surface and a 0.12 nudge downhill to
+       clear wall trim; both are gone. The PIVOT correction stays — it is not a tweak, it is what puts
+       the mesh on its own block at all. */
     const [sx, sz] = STEP[flight.up];
-    // LIFTED to the deck's walking surface and pushed a little DOWNHILL — see FLOOR_SURFACE/STAIR_OUT.
-    const cx = add(fromInt(flight.bw - 1 + sx * flight.run), mul(fromInt(-sx), STAIR_OUT));
-    const cz = add(fromInt(flight.bh - 1 + sz * flight.run), mul(fromInt(-sz), STAIR_OUT));
-    out.push(at(flight.url, STAIR_TURN[flight.up], cx, cz, ONE, FLOOR_SURFACE));
+    out.push(at(
+      flight.url, STAIR_TURN[flight.up],
+      fromInt(flight.bw - 1 + sx * flight.run), fromInt(flight.bh - 1 + sz * flight.run),
+    ));
   } else if (isStairFloor(c.floor)) {
     if (!insideFlight(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
   } else if (c.floor !== 'none' && inFloor) {
