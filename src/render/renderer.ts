@@ -814,11 +814,12 @@ export class Renderer {
     this.drawVerbFx(w, alpha, localId);
     this.updateFrameBias(localPos, dtMs / 1000); // slide the target onto the lit room (boss #1/#2)
     this.updateCamera(dtMs / 1000, wsum, cx, cy, cz, minX, maxX, minZ, maxZ);
-    // OCCLUSION CUTAWAY: after the camera is posed, fade walls between it and the local player.
+    // OCCLUSION CUTAWAY: after the camera is posed, cut a hole through whatever stands between it and
+    // the local player. A screen-space `discard`, not a fade — so there is no dt to pass.
     if (this.dungeon) {
       // the cut is a SCREEN-SPACE circle, so it needs the drawing-buffer size and the device ratio
       const sz = this.renderer.getSize(this._screenSize);
-      this.dungeon.occlude(this.camera, localPos, dtMs / 1000,
+      this.dungeon.occlude(this.camera, localPos,
         { w: sz.x, h: sz.y, dpr: this.renderer.getPixelRatio() });
     }
     this.drawOffscreenIndicators(w, localId, anchorId);

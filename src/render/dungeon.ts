@@ -113,21 +113,12 @@ const CUT_DEPTH_BIAS = 0.0008;
 /** Centre the hole on the player's CHEST rather than their feet, so it frames them. */
 const CUT_EYE_RAISE = 1.0;
 
-/** Occlusion cutaway: how fast a wall fades out/in when it (un)blocks the player (/s). */
-const OCCLUDE_FADE_RATE = 9;
-/** Min opacity a wall fades to while it occludes the local player. */
-const OCCLUDE_MIN_OPACITY = 0.12;
-/** Horizontal radius (world u) around the player within which a wall can count as occluding. */
-const OCCLUDE_RADIUS = 5.5;
-
 /** A wall/doorway mesh that participates in occlusion cutaway (issue 1). */
 interface WallRec {
   obj: THREE.Object3D;
   x: number; z: number;
   /** 'X' = a wall on an east/west face (spans Z); 'Z' = north/south face (spans X). */
   axis: 'X' | 'Z';
-  /** current occlusion fade ∈ [OCCLUDE_MIN..1]; 1 = fully solid. */
-  occ: number;
 }
 
 /**
@@ -632,8 +623,11 @@ export class Dungeon {
       // cloneMaterial, not m.clone(): a bare clone drops onBeforeCompile and the whole piece loses
       // its tiling shader. See src/lab/tiling.ts.
       const cl = cloneMaterial(m);
-      cl.userData = { ...cl.userData, occ: true };
-      cl.transparent = true;
+      /* NOT `transparent = true`. That was the old opacity fade, and it outlived it: a fragment
+         `discard` does not blend, so the cutout needs nothing from the transparent pass — while being
+         IN that pass costs a back-to-front sort of every wall, every frame, and there are ~12.5k of
+         them. It survived because the loop that set it back to false could never run (see `occlude`),
+         so the two defects hid each other. */
       this.patchCutout(cl);
       host.mats.push(cl);
       return cl;
@@ -648,7 +642,7 @@ export class Dungeon {
     // Occlusion face axis (approx from the quarter-turn: 0/180 face ±Z, 90/270 face ±X) — good enough
     // for the cutaway; a corner unit picks one axis. Render==collision doesn't depend on this.
     const faceAxis: 'X' | 'Z' = (((u.turn % 2) + 2) % 2 === 0) ? 'Z' : 'X';
-    this.walls.push({ obj: o, x, z, axis: faceAxis, occ: 1 });
+    this.walls.push({ obj: o, x, z, axis: faceAxis });
   }
 
   /**
@@ -1223,14 +1217,24 @@ export class Dungeon {
 
 
   /**
-   * OCCLUSION CUTAWAY (issue 1): fade out any wall that sits BETWEEN the camera and the
-   * local player so the player is always visible (isometric cutaway); restore walls that no
-   * longer block. A wall occludes if it is within OCCLUDE_RADIUS of the player horizontally,
-   * is NEARER the camera than the player (along the camera→player axis), and is on the
-   * correct facing side (its outward axis faces the camera). Fades are eased for smoothness.
+   * OCCLUSION CUTAWAY (issue 1): cut a REAL HOLE through anything between the camera and the local
+   * player, so the player is always visible.
+   *
+   * A HOLE, NOT A FADE. This used to select walls by proximity and facing and ease their opacity
+   * down, and the selection was always going to be approximate — it worked on whole walls when the
+   * thing in the way is a few pixels of one. Now the player is projected to screen space and every
+   * patched material `discard`s inside a circle around that point, in front of a depth threshold. No
+   * wall is chosen, nothing fades, and nothing has per-wall state to restore.
+   *
+   * That also removed a whole class of bug rather than fixing one: a `discard` neither blends nor
+   * suppresses depth writes, so the old fade's habit of dropping walls into the transparent pass —
+   * where a wall's far-face bricks could draw over its near face — is now unreachable by
+   * construction.
+   *
+   * Everything it needs is in `uCut` (x, y, radius, depth). No `dt`: there is nothing to animate.
    */
   occlude(
-    camera: THREE.Camera, player: { x: number; y: number; z: number }, _dt: number,
+    camera: THREE.Camera, player: { x: number; y: number; z: number },
     screen?: { w: number; h: number; dpr: number },
   ): void {
     if (!screen || screen.w <= 0 || screen.h <= 0) { this.cutUniform.value.set(0, 0, 0, 1); return; }
@@ -1250,17 +1254,11 @@ export class Dungeon {
     const depth = (this._v.z * 0.5 + 0.5) - CUT_DEPTH_BIAS;
     this.cutUniform.value.set(px, py, radius, depth);
 
-    /* The walls' own opacity is no longer touched. It was the old fade, and leaving it half-applied
-       would leave ghosts standing wherever the player last walked. */
-    for (const wr of this.walls) {
-      if (wr.occ === 1) continue;
-      wr.occ = 1;
-      wr.obj.traverse((o) => {
-        const mat = (o as THREE.Mesh).material as (THREE.Material & { opacity: number; transparent: boolean; depthWrite: boolean }) | undefined;
-        if (!mat || mat.userData?.['occ'] !== true) return;
-        mat.opacity = 1; mat.transparent = false; mat.depthWrite = true;
-      });
-    }
+    /* Nothing to restore. The walls' own materials are never touched now — the hole lives entirely in
+       `uCut` and the fragment shader reads it, so there is no per-wall state to get left half-applied
+       and no ghosts to clean up after. The loop that used to stand here could not run at all: it began
+       `if (wr.occ === 1) continue`, and `occ` was pinned to 1 at construction and written nowhere
+       else. */
   }
 
   /**
