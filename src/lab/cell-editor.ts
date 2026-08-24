@@ -40,7 +40,7 @@ import {
   FIELD_KEYS, type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
-import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
+import { stairChoiceAt, stairChoiceText, stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
 import { clearLevelAt, duplicateLevelAt, putLevel, sliceLevel, swapLevels } from './cell-levels.ts';
 import {
@@ -1020,6 +1020,13 @@ function stairReport(): string[] {
       if (!flight) {
         const fault = stairFault(here, stride(), H + 1, x, y);
         if (fault) out.push(`⚠ stairs at (${x},${y}): ${stairFaultText(fault)}`);
+        // and WHY a flight points the way it does — the question an author actually has when one
+        // faces somewhere unexpected
+        const f = stairFlight(here, stride(), H + 1, x, y);
+        if (f) {
+          const why = stairChoiceAt(here, stride(), H + 1, x, y);
+          out.push(`stairs at (${x},${y}) climb ${f.up}` + (why ? ` — ${stairChoiceText(why)}` : ''));
+        }
         continue;
       }
       const mesh = flight.url.split('/').pop()!.replace('.gltf.glb', '');

@@ -12,7 +12,7 @@
 // argue about an entrance nobody can reach.
 
 import { describe, it, expect } from 'vitest';
-import { stairFlight } from './cell-place.ts';
+import { stairFlight, stairFault, stairFaultText } from './cell-place.ts';
 import { openCell, type Cell } from './cell.ts';
 
 const W = 6, H = 6;
@@ -104,8 +104,14 @@ describe('a corner staircase climbs toward the hole in the ceiling', () => {
     expect(stairFlight(cells, W, H, 1, 1, above)).toMatchObject({ up: 'N' });
   });
 
-  it('the ceiling only breaks TIES — it never overrides an unambiguous flight', () => {
-    // north closed, south open, and BOTH flanks open: one reading only, whatever is overhead
+  it('the ceiling never OVERRIDES an unambiguous flight — but a sealed head is a FAULT', () => {
+    /* north closed, south open, both flanks open: one reading only, whatever is overhead.
+       This test used to assert the flight still drew as N. Its intent — that a hole in the wrong place
+       cannot drag an unambiguous flight round — still holds and is asserted below. What changed is what
+       happens when the head IS sealed: on a FORCED axis the foot and the ceiling were never consulted
+       at all, so a flight would quietly climb into the deck above. It reports a fault now instead of
+       drawing something that does not work. Reversing is not the alternative: that would put the foot
+       where the wall is. */
     const plain: Cell[] = [];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -115,8 +121,18 @@ describe('a corner staircase climbs toward the hole in the ceiling', () => {
         plain.push(c);
       }
     }
-    // a hole over the SOUTH end must not drag the flight round
-    const above = ceilingWithHoleAt([[1, 2], [2, 2]]);
-    expect(stairFlight(plain, W, H, 1, 1, above)).toMatchObject({ up: 'N' });
+    // a hole over the SOUTH end leaves this flight's own head sealed
+    const wrongHole = ceilingWithHoleAt([[1, 2], [2, 2]]);
+    expect(stairFlight(plain, W, H, 1, 1, wrongHole)).toBeNull();          // refuses, does not flip
+    const fault = stairFault(plain, W, H, 1, 1, wrongHole);
+    expect(fault).toMatchObject({ kind: 'sealed-ceiling', up: 'N' });
+    expect(stairFaultText(fault!)).toContain('deck above');
+
+    // and it was NEVER dragged round to S — the ceiling does not choose the direction
+    expect(stairFlight(plain, W, H, 1, 1, wrongHole)?.up).not.toBe('S');
+
+    // put the hole over its actual head and the same flight draws, unchanged
+    const rightHole = ceilingWithHoleAt([[1, 1], [2, 1]]);
+    expect(stairFlight(plain, W, H, 1, 1, rightHole)).toMatchObject({ up: 'N' });
   });
 });

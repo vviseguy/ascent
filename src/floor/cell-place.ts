@@ -418,10 +418,143 @@ function ceilingOpen(
  * evidence there is about which way it really goes. You can argue about which end is the head; you
  * cannot argue about an entrance nobody can reach.
  */
+/**
+ * WHY A FLIGHT POINTS THE WAY IT DOES, recorded on the way past.
+ *
+ * The direction comes from up to three signals of different strength, and when a flight faces a way
+ * an author did not expect the useful question is never "what did it pick" but "what did it weigh".
+ * Module-level and overwritten per call, which is fine because the only reader asks immediately
+ * afterwards on the same cell — this is an EXPLANATION, not state anything depends on.
+ */
+export interface StairSignals {
+  dir: Dir; score: number; foot: number; ceiling: boolean; ownHead: boolean;
+  /** Manhattan distance from this reading's head to the stair block on the storey above; null if none. */
+  toNext?: number | null;
+}
+export interface StairChoice {
+  /** false when only one axis qualified, so the walls decided alone and nothing else was consulted. */
+  contested: boolean;
+  v: StairSignals;
+  h: StairSignals | null;
+  tie: boolean;
+  /** the weighted signals tied and CONTINUITY with the flight above settled it */
+  brokenByNext?: boolean;
+}
+let lastChoice: StairChoice | null = null;
+
+/**
+ * DOES THIS READING CARRY ON UPWARD — the only signal that knows a spiral is a spiral.
+ *
+ * Walls, floor and ceiling can all be perfectly symmetric at a corner, and then nothing above decides
+ * anything: `spiral stairs` has a flight where both readings score identically on every other signal
+ * and the direction falls to an arbitrary tiebreak. But a spiral is a SEQUENCE, and that is asymmetric
+ * even when the local geometry is not — the head of one flight should land near the FOOT of the next.
+ *
+ * So: find the stair block on the storey above and prefer the direction whose head ends up nearest it.
+ * Returns a distance, smaller being better, or null when there is nothing above to aim at.
+ *
+ * ITS POSITION, NEVER ITS DIRECTION. Asking the flight above which way IT climbs invites storey k to
+ * ask k+1 while k+1 asks k, and neither can answer. Position is unambiguous and it is enough.
+ */
+function continuesUpward(
+  above: readonly (Cell | null)[] | undefined, w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir, mat: FloorMaterial,
+): number | null {
+  if (!above) return null;
+  // where THIS reading puts its head
+  const [dx, dy] = STEP[d];
+  const hx = x + (bw - 1) / 2 + dx * (bw / 2);
+  const hy = y + (bh - 1) / 2 + dy * (bh / 2);
+
+  /* THE NEAREST stair cell above, not the centre of all of them. A storey of a spiral has more than
+     one flight, and their centroid sits in the middle of the building — equidistant from both readings
+     and therefore useless, which is exactly how this first failed to break the tie it was written for.
+     The relevant flight is the one you would actually arrive at. */
+  let best: number | null = null;
+  for (let cy = 0; cy < h; cy++) {
+    for (let cx = 0; cx < w; cx++) {
+      const c = above[cy * w + cx];
+      if (!c || c.floor !== mat) continue;
+      const dist = Math.abs(hx - cx) + Math.abs(hy - cy);
+      if (best === null || dist < best) best = dist;
+    }
+  }
+  return best;
+}
+
+/**
+ * HOW GOOD A READING IS. The one scorer — the decision and the explanation both call THIS, never a
+ * copy of it. An explanation that can disagree with the decision is worse than no explanation, and
+ * this codebase has paid for that twice already (`openingAt` vs `moduleAt` cost eleven wall types;
+ * `edgeDraw`'s overloaded null put an endcap in a quarter of all doorways).
+ *
+ * THE FOOT IS WORTH FOUR, NOT THREE, and the difference matters. The foot is graded 0/1/2, so at x3
+ * an ordinary-floor entrance with nothing else (6) TIES a stairs entrance with an open ceiling and its
+ * own head (3+2+1 = 6) — and the first is plainly the better reading. At x4 it is 8 against 7. The
+ * property to preserve when touching these numbers: A REAL FLOOR ENTRANCE ALONE MUST OUTWEIGH EVERY
+ * OTHER SIGNAL COMBINED.
+ */
+function score(
+  cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
+  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
+): number {
+  return entryReachable(cells, w, h, x, y, bw, bh, d) * 4
+    + (ceilingOpen(above, w, h, x, y, bw, bh, d) ? 2 : 0)
+    + (endContinues(cells, w, h, x, y, bw, bh, d) ? 0 : 1);
+}
+
+/** `score` plus the continuity tiebreak, as a sortable pair. Continuity is consulted ONLY when the
+ *  scores are equal — it is a tiebreak, not a fourth weighted signal, because a flight that carries on
+ *  upward is no use if nobody can walk on to it. */
+function rank(
+  cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
+  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir, mat: FloorMaterial,
+): { score: number; toNext: number | null } {
+  return {
+    score: score(cells, above, w, h, x, y, bw, bh, d),
+    toNext: continuesUpward(above, w, h, x, y, bw, bh, d, mat),
+  };
+}
+
+function signals(
+  cells: readonly (Cell | null)[], above: readonly (Cell | null)[] | undefined,
+  w: number, h: number, x: number, y: number, bw: number, bh: number, d: Dir,
+): { foot: number; ceiling: boolean; ownHead: boolean } {
+  return {
+    // 2 = ordinary floor, 1 = only more stairs, 0 = nothing to enter from. See `entryReachable`.
+    foot: entryReachable(cells, w, h, x, y, bw, bh, d),
+    ceiling: ceilingOpen(above, w, h, x, y, bw, bh, d),
+    ownHead: !endContinues(cells, w, h, x, y, bw, bh, d),
+  };
+}
+
+/** The reasoning behind the flight at (x,y), or null if there is none there. Call right after
+ *  `stairFlight` on the same cell. */
+export function stairChoiceAt(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+  above?: readonly (Cell | null)[],
+): StairChoice | null {
+  lastChoice = null;
+  flightGeometry(cells, w, h, x, y, above);
+  return lastChoice;
+}
+
+/** One line an author can read. */
+export function stairChoiceText(c: StairChoice): string {
+  const one = (s: StairSignals): string =>
+    `${s.dir}(foot ${s.foot === 2 ? 'FLOOR' : s.foot === 1 ? 'only stairs' : 'NO GROUND'}, ceiling ${s.ceiling ? 'open' : 'not open'}, `
+    + `head ${s.ownHead ? 'its own' : 'runs past'}${s.score >= 0 ? ` = ${s.score}` : ''}, toNext ${s.toNext ?? 'n/a'})`;
+  if (!c.contested) return `only one axis had a closed end, so the walls decided: ${one(c.v)}`;
+  const tail = !c.tie ? ''
+    : c.brokenByNext ? ' — tied on every signal, settled by which head lands nearer the flight above'
+      : ' — TIED on everything and nothing above to aim at, so it took the vertical reading';
+  return `${one(c.v)} vs ${one(c.h!)}${tail}`;
+}
+
 function entryReachable(
   cells: readonly (Cell | null)[], w: number, h: number,
   x: number, y: number, bw: number, bh: number, d: Dir,
-): boolean {
+): number {
   // one cell beyond the foot, across the whole width of it
   const [sx, sy] = STEP[d];
   const beyond: [number, number][] = [];
@@ -432,11 +565,20 @@ function entryReachable(
     const col = d === 'W' ? x + bw - 1 : x;
     for (let j = 0; j < bh; j++) beyond.push([col - sx, y + j]);
   }
-  // ONE walkable neighbour is enough — a flight entered from a doorway is entered from one cell
-  return beyond.some(([cx, cy]) => {
+  /* GRADED, because not all ground is an entrance.
+     ORDINARY floor at the foot is a real way in — someone walks along it and steps on. More STAIRS at
+     the foot is not: that is the middle of a staircase, and treating it as an entrance made a flight
+     surrounded by stair cells look equally enterable from every side, so two readings tied on the
+     strongest signal and the direction fell to an arbitrary tiebreak. Void or solid rock is no
+     entrance at all.
+     One neighbour is enough — a flight entered through a doorway is entered from one cell. */
+  let best = 0;
+  for (const [cx, cy] of beyond) {
     const c = cellAt(cells, w, h, cx, cy);
-    return !!c && c.floor !== 'none' && c.floor !== 'rock';
-  });
+    if (!c || c.floor === 'none' || c.floor === 'rock') continue;
+    best = Math.max(best, isStairFloor(c.floor) ? 1 : 2);
+  }
+  return best;
 }
 
 /** Everything both the placer and the diagnostic need, worked out ONCE so they cannot disagree. */
@@ -472,8 +614,19 @@ function flightGeometry(
   if (!vAxis && !hAxis) return { fault: { kind: 'undecidable', mat, bw, bh } }; // nothing to go on
 
   let vertical: boolean;
-  if (vAxis !== hAxis) {
+  const contested = vAxis === hAxis;
+  if (!contested) {
+    /* ONE AXIS QUALIFIES, so the walls settle it on their own and the floor evidence is never
+       consulted. Recorded anyway, because "the walls left no choice" is itself the answer to "why is
+       it pointing that way" and an author staring at a flight deserves to be told that rather than
+       left to infer it. */
     vertical = vAxis;
+    const only: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
+    lastChoice = {
+      contested: false,
+      v: { dir: only, score: score(cells, above, w, h, x, y, bw, bh, only), ...signals(cells, above, w, h, x, y, bw, bh, only) },
+      h: null, tie: false,
+    };
   } else {
     /* BOTH axes look like a climb, which is what a staircase in a corner looks like. Two things can
        tell them apart, and the CEILING is the better one, so it is asked first.
@@ -505,15 +658,24 @@ function flightGeometry(
 
        Scored rather than ordered so a direction winning two weak signals can still lose to the strong
        one — which is the whole reason for weighting instead of a chain of ifs. */
-    const score = (d: Dir): number =>
-      (entryReachable(cells, w, h, x, y, bw, bh, d) ? 4 : 0)
-      + (ceilingOpen(above, w, h, x, y, bw, bh, d) ? 2 : 0)
-      + (endContinues(cells, w, h, x, y, bw, bh, d) ? 0 : 1);
-
-    const vScore = score(vDir), hScore = score(hDir);
-    // a tie takes the vertical reading — arbitrary, but FIXED, and the editor reports which way it
-    // chose so an author can see it and move a wall
-    vertical = vScore >= hScore;
+    const v = rank(cells, above, w, h, x, y, bw, bh, vDir, mat);
+    const hh = rank(cells, above, w, h, x, y, bw, bh, hDir, mat);
+    const tied = v.score === hh.score;
+    /* Equal on every weighted signal, so ask which reading CARRIES ON UPWARD — the head that lands
+       nearer the next flight is the one the author drew. Only then, and only when there is something
+       above to aim at, does it fall back to the arbitrary vertical reading. */
+    let byNext: boolean | null = null;
+    if (tied && v.toNext !== null && hh.toNext !== null && v.toNext !== hh.toNext) {
+      byNext = v.toNext < hh.toNext;
+    }
+    lastChoice = {
+      contested: true,
+      v: { dir: vDir, score: v.score, toNext: v.toNext, ...signals(cells, above, w, h, x, y, bw, bh, vDir) },
+      h: { dir: hDir, score: hh.score, toNext: hh.toNext, ...signals(cells, above, w, h, x, y, bw, bh, hDir) },
+      tie: tied,
+      brokenByNext: byNext !== null,
+    };
+    vertical = byNext ?? v.score >= hh.score;
   }
 
   const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
@@ -529,6 +691,28 @@ function flightGeometry(
      because the block's other cells abstain from drawing ground of their own (`insideFlight`).
      Failing here instead sends the whole block to per-cell stone: visible, walkable, and
      `stairFaultText` tells the author which sizes exist. */
+  /* THE CHOSEN READING HAS TO BE USABLE, and on a FORCED axis nothing checked.
+     When both axes qualify the scoring picks the better one; when only one does, the walls settle it
+     and the foot and ceiling were never consulted at all — so a flight could climb into a solid deck,
+     or sit with its entrance in the void, and nothing said a word.
+     A FAULT rather than a reversal. Reversing puts the foot where the wall is, and the walls are the
+     one thing that is not ambiguous here, so the honest answer is to tell the author their flight does
+     not work rather than to draw a different wrong one. Only ever with the storey above IN HAND: no
+     `above` means the question was not asked, not that the answer was bad.
+
+     ONLY ON A FORCED AXIS. When both axes qualified, the scoring already WEIGHED the foot and the
+     ceiling and picked the better reading — faulting there would reject cases it deliberately resolved,
+     and would break a structure that currently ships. A contested reading that still looks poor is a
+     WARNING for the readout, not a refusal to draw. */
+  if (!contested) {
+    if (entryReachable(cells, w, h, x, y, bw, bh, up) === 0) {
+      return { fault: { kind: 'no-entry', mat, up } };
+    }
+    if (above && !ceilingOpen(above, w, h, x, y, bw, bh, up)) {
+      return { fault: { kind: 'sealed-ceiling', mat, up } };
+    }
+  }
+
   if (!STAIR_MESHES.some((m) => m.mat === mat && m.run === run && m.across === width)) {
     return { fault: { kind: 'no-mesh', mat, run, width } };
   }
@@ -565,7 +749,11 @@ export function stairFlight(
 export type StairFault =
   | { kind: 'ragged'; mat: FloorMaterial }
   | { kind: 'undecidable'; mat: FloorMaterial; bw: number; bh: number }
-  | { kind: 'no-mesh'; mat: FloorMaterial; run: number; width: number };
+  | { kind: 'no-mesh'; mat: FloorMaterial; run: number; width: number }
+  /** Its entrance faces void, solid rock or off the map — nobody can walk on to it. */
+  | { kind: 'no-entry'; mat: FloorMaterial; up: Dir }
+  /** It climbs into the deck of the storey above instead of a hole through it. */
+  | { kind: 'sealed-ceiling'; mat: FloorMaterial; up: Dir };
 
 export function stairFault(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
@@ -581,6 +769,14 @@ export function stairFaultText(f: StairFault): string {
   if (f.kind === 'undecidable') {
     return 'cannot tell which way it climbs — one END must be walled and the opposite one open, '
       + 'so there is a top to climb toward and a bottom to walk in at';
+  }
+  if (f.kind === 'no-entry') {
+    return `its entrance faces ${f.up === 'N' ? 'south' : f.up === 'S' ? 'north' : f.up === 'W' ? 'east' : 'west'} `
+      + 'and there is no ground there — nobody can walk on to it';
+  }
+  if (f.kind === 'sealed-ceiling') {
+    return `it climbs ${f.up} into the deck above instead of a hole through it — open the ceiling over `
+      + 'the flight, or move a wall so it climbs the other way';
   }
   const forMat = STAIR_MESHES.filter((m) => m.mat === f.mat);
   const runs: number[] = [...new Set<number>(forMat.map((m) => m.run))].sort();
