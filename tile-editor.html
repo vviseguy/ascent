@@ -34,7 +34,12 @@
       #grid .wallLayer, #grid .floorLayer { cursor: crosshair; }
       #grid.mode-section .floorLayer { pointer-events: none; } /* section: only the 9 wall sections take clicks */
       #grid.mode-floor .wallLayer { pointer-events: none; }    /* floor: clicks fall through to the corners */
-    </style>
+    
+  /* page-nav clearance: the switcher pill sits at top-left, so the panel starts below it.
+     A LAST rule rather than a property inside #panel — that rule sets `padding` shorthand
+     further down, which silently reset an earlier padding-top. */
+  #panel { padding-top: 42px; }
+</style>
   </head>
   <body>
     <div id="app">

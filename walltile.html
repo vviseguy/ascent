@@ -31,7 +31,12 @@
       #readout .legend { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c; color: #889; font-size: 12px; }
       .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
       .chk { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #9aa; }
-    </style>
+    
+  /* page-nav clearance: the switcher pill sits at top-left, so the panel starts below it.
+     A LAST rule rather than a property inside #panel — that rule sets `padding` shorthand
+     further down, which silently reset an earlier padding-top. */
+  #panel { padding-top: 42px; }
+</style>
   </head>
   <body>
     <div id="view"></div>
