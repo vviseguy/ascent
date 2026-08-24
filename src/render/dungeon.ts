@@ -37,6 +37,8 @@ import { DungeonMaterials, classifySurface } from './materials.ts';
 // in-game dungeon and the lab use the SAME coloring engine and can't drift apart (the old
 // per-triangle retexture/theme path is gone). See src/lab/CLAUDE.md (authoritative).
 import { applyRecolor, ensureTilingTextures, cloneMaterial } from '../lab/recolor.ts';
+import { applyGroupAnchors } from '../lab/group-anchors.ts';
+import { setVaryStrength, varyFromParam } from '../lab/texture-catalog.ts';
 // Phase-4b (docs/16 §10): the remastered tile-unit pieces are referenced BY URL from the IR's
 // `WorldPlacement.unit`. PIECE is the sim-side registry naming those urls (pure string data) — the
 // renderer preloads them as templates keyed by url and clones them through the same recolor path.
@@ -262,6 +264,10 @@ export class Dungeon {
     const lift = Number(params.get('fogLift'));
     if (Number.isFinite(lift) && lift >= 0 && lift <= 4) this.fogLift.value = lift;
     this.bareTemplates = params.get('bare') === '1';
+    // ?vary=0..100 — the per-group texture phase (group-anchors.ts). Full strength by default; 0
+    // puts every surface back on the one continuous world projection, which is the A/B control for
+    // "is this floor made of stones or of wallpaper" without a rebuild.
+    setVaryStrength(varyFromParam(params.get('vary')));
 
     // THE TILING ARRAYS MUST EXIST BEFORE THE FIRST RECOLOR.
     // applyRecolor bakes colour + the ORM slot, then hands the material to patchTilingDetail — which
@@ -296,6 +302,11 @@ export class Dungeon {
     const unitLoaded = await Promise.all(unitUrls.map(async (url) => {
       const g = await loader.loadAsync(stripFragment(url));
       if (wantsOpen(url)) openDoorLeaves(g.scene);
+      // PER-GROUP TEXTURE ANCHORS, on the TEMPLATE. Every placement clones this scene and so shares
+      // its geometry, which is exactly right: the anchor is in OBJECT space and the vertex shader
+      // pushes it through each instance's own modelMatrix, so 18,000 floor meshes differentiate
+      // themselves off one baked attribute. Doing it per placement would bake 18,000 geometries.
+      if (!this.rawColoring && !this.classicShell) applyGroupAnchors(g.scene, stripFragment(url));
       if (!this.rawColoring && !this.classicShell) applyRecolor(g.scene, url, 'position');
       g.scene.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -347,6 +358,7 @@ export class Dungeon {
     // so recolor's folder/object cascade resolves; 'position' = the same swatch-id method the lab
     // uses. recolor assigns the baked material on every mesh + sets shadows. If the model has no
     // atlas (returns null), fall back to PBR-by-class so the piece is never left untextured.
+    applyGroupAnchors(scene, DIR + url);
     const resolved = applyRecolor(scene, DIR + url, 'position');
     if (!resolved) scene.traverse((o) => this.applyMaterial(tileKey, o as THREE.Mesh));
     scene.traverse((o) => {

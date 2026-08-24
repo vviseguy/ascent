@@ -56,7 +56,7 @@ import { buildSurfacePanel, syncSurfacePanel, type SurfacePanelHandle } from './
 import { dock, restoreDrawers, setDrawersVisible } from './drawers.ts';
 import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
-import { setConfig, getConfig, configFromParam, overlayConfigParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, overlayConfigParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam, setVaryStrength, getVaryStrength, varyFromParam, varyToParam } from './texture-catalog.ts';
 
 import { mountPageNav } from './page-nav.ts';
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
@@ -283,6 +283,7 @@ async function boot(): Promise<void> {
   captureCatalogDefaults();
   setRelief(reliefFromParam(params.get('relief')));
   setAOStrength(aoFromParam(params.get('ao')));
+  setVaryStrength(varyFromParam(params.get('vary')));
   const hud = document.getElementById('hud');
 
   // Source is a WorldObject (?object=) or, by default, a LabElement (?element=).
@@ -612,10 +613,12 @@ async function boot(): Promise<void> {
     function writeSurfaceUrl(): void {
       const tex = configToParam(getConfig());
       const rel = reliefToParam(getRelief());
+      const vry = varyToParam(getVaryStrength());
       const ao = aoToParam(getAOStrength());
       const u = new URLSearchParams(location.search);
       if (tex) u.set('tex', tex); else u.delete('tex');
       if (rel) u.set('relief', rel); else u.delete('relief');
+      if (vry) u.set('vary', vry); else u.delete('vary');
       if (ao) u.set('ao', ao); else u.delete('ao');
       const prof = profileBar?.current()?.id;
       if (prof) u.set('profile', prof); else u.delete('profile');
@@ -686,7 +689,14 @@ async function boot(): Promise<void> {
         refit: () => refit(),
         // sourceHash, NOT the live root: with faces already hidden the root IS the filtered mesh,
         // and storing that hash makes the next cold load reject the edit as "geometry changed".
-        save: (groups) => saveSurfaces(surfaceUrl, { geom: faces!.sourceHash(), hidden: faces!.hidden(), groups: [...groups] }),
+        // Rebuild AFTER a successful save: a group's `vary` override is baked into the mesh at
+        // build time (group-anchors.ts), so nothing on screen moves until the model is rebuilt.
+        // Saving and then seeing no change is indistinguishable from the save not working.
+        save: async (groups) => {
+          const r = await saveSurfaces(surfaceUrl, { geom: faces!.sourceHash(), hidden: faces!.hidden(), groups: [...groups] });
+          if (r.ok) await rebuildObject();
+          return r;
+        },
       });
     }
 

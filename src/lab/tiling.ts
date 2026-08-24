@@ -35,9 +35,10 @@
 
 import * as THREE from 'three';
 import {
-  TEXTURE_BY_ID, CONFIGURABLE_PRESETS, getConfig, getRelief, getAOStrength,
-  type Preset, type TextureOption,
+  TEXTURE_BY_ID, CONFIGURABLE_PRESETS, getConfig, getRelief, getAOStrength, getVaryStrength,
+  DEFAULT_VARY, type Preset, type TextureOption,
 } from './texture-catalog.ts';
+import { GROUP_ANCHOR_ATTR, VARY_CODE } from './group-anchors.ts';
 
 /** preset -> a fixed tiling SLOT (1..12), baked into ORM.r by recolor's bake. 0 = untextured. */
 export const PRESET_SLOT: Record<Preset, number> = {
@@ -260,12 +261,26 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
   const cfg = getConfig();
   // uSlot[slot] = (layer, 1/scale, 1/meanLuma, colourMode). y = 0 marks "this slot has no texture".
   const slots: THREE.Vector4[] = Array.from({ length: SLOT_COUNT }, () => new THREE.Vector4(0, 0, 1, 0));
+  // uVary[slot] = the TEXTURE's variation permission — the default a group inherits when it does not
+  // override one. Untextured slots stay at `none`: nothing can move a texture that is not there.
+  const vary: number[] = Array.from({ length: SLOT_COUNT }, () => VARY_CODE.none);
   for (const p of CONFIGURABLE_PRESETS) {
     const o = TEXTURE_BY_ID.get(cfg[p].texture);
     const li = o ? arr.layer.get(o.id) : undefined;
     if (!o || li === undefined) continue;
     slots[PRESET_SLOT[p]] = new THREE.Vector4(li, 1 / o.scale, arr.inv.get(o.id) ?? 1, o.color === 'albedo' ? 1 : 0);
+    vary[PRESET_SLOT[p]] = VARY_CODE[o.vary ?? DEFAULT_VARY];
   }
+
+  // A mesh with no anchors baked into it must render EXACTLY as it did before groups existed. GL's
+  // default generic vertex attribute is (0,0,0,1) and w = 1 is `none`, so the fallback is already
+  // right — but three only pushes a default the MATERIAL names, so name it rather than trusting
+  // whatever the previous draw happened to leave in the register.
+  const withDefaults = mat as { defaultAttributeValues?: Record<string, number[]> };
+  withDefaults.defaultAttributeValues = {
+    ...withDefaults.defaultAttributeValues,
+    [GROUP_ANCHOR_ATTR]: [0, 0, 0, VARY_CODE.none],
+  };
 
   mat.onBeforeCompile = (shader) => {
     shader.uniforms['uTexArr'] = { value: arr.diff };
@@ -274,11 +289,31 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
     shader.uniforms['uSlot'] = { value: slots };
     shader.uniforms['uRelief'] = { value: getRelief() };
     shader.uniforms['uAOStr'] = { value: getAOStrength() };
+    shader.uniforms['uVary'] = { value: vary };
+    shader.uniforms['uVaryStr'] = { value: getVaryStrength() };
 
-    // VERTEX: carry world position + world normal for the per-fragment planar projection.
+    // VERTEX: carry world position + world normal for the per-fragment planar projection, plus the
+    // group ANCHOR pushed through this instance's own modelMatrix — which is the entire reason two
+    // placements of one tile differentiate themselves with no per-instance uniform anywhere.
+    //
+    // `flat`, not smooth. The anchor is constant across a group, so interpolating it returns ALMOST
+    // the same value everywhere — and almost is fatal: a hash turns a 1e-7 difference into a
+    // completely different phase, so a smoothly interpolated anchor makes every triangle of a paver
+    // its own stone. `flat` is also free.
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\n  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vWNor = normalize(mat3(modelMatrix) * objectNormal);');
+      .replace('#include <common>', ['#include <common>',
+        'varying vec3 vWPos;',
+        'varying vec3 vWNor;',
+        `attribute vec4 ${GROUP_ANCHOR_ATTR};`,
+        'flat varying vec3 vGAnchor;',
+        'flat varying float vGVary;',
+      ].join('\n'))
+      .replace('#include <project_vertex>', ['#include <project_vertex>',
+        '  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        '  vWNor = normalize(mat3(modelMatrix) * objectNormal);',
+        `  vGAnchor = (modelMatrix * vec4(${GROUP_ANCHOR_ATTR}.xyz, 1.0)).xyz;`,
+        `  vGVary = ${GROUP_ANCHOR_ATTR}.w;`,
+      ].join('\n'));
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', [
@@ -291,7 +326,19 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         `uniform vec4 uSlot[${SLOT_COUNT}];`,
         'uniform float uRelief;',
         'uniform float uAOStr;',
+        'flat varying vec3 vGAnchor;',
+        'flat varying float vGVary;',
+        `uniform float uVary[${SLOT_COUNT}];`,
+        'uniform float uVaryStr;',
         'const vec3 TLUMA = vec3(0.299, 0.587, 0.114);',
+        // A hash with no trig in it (Hoskins' hash33). sin()-based hashes drift between drivers at
+        // large inputs, and a world anchor is a large input; this one is exact-ish everywhere and
+        // costs about the same.
+        'vec3 hash33(vec3 p3){',
+        '  p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));',
+        '  p3 += dot(p3, p3.yxz + 33.33);',
+        '  return fract((p3.xxy + p3.yxx) * p3.zyx);',
+        '}',
         // Box-planar world UV + the tangent frame that UV parameterises. Plane picked from the
         // dominant world-normal axis, scaled to metres/tile; KayKit faces are axis-aligned, so one
         // plane per face is exact.
@@ -301,18 +348,36 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         // then cross(T,B) equals -Y / -X / +Z for the three cases — so every up-facing surface, and
         // every face on the negative side of its axis, gets a mirrored frame and its bumps light as
         // dents. The correction has to mirror an axis to restore handedness — see below for which.
-        'void planarFrame(float inv, out vec2 uv, out vec3 T, out vec3 B, out vec3 Ng){',
-        '  vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; Ng = normalize(vWNor);',
-        '  if ( wn.y >= wn.x && wn.y >= wn.z ) { uv = wp.xz; T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
-        '  else if ( wn.x >= wn.z )            { uv = wp.zy; T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
-        '  else                                { uv = wp.xy; T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
+        // `auv` is the group ANCHOR through the SAME projection, so a rotation can turn the
+        // texture about the middle of its own stone instead of sweeping it in from the world origin.
+        'void planarFrame(float inv, out vec2 uv, out vec2 auv, out vec3 T, out vec3 B, out vec3 Ng){',
+        '  vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; vec3 ap = vGAnchor * inv; Ng = normalize(vWNor);',
+        '  if ( wn.y >= wn.x && wn.y >= wn.z ) { uv = wp.xz; auv = ap.xz; T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
+        '  else if ( wn.x >= wn.z )            { uv = wp.zy; auv = ap.zy; T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
+        '  else                                { uv = wp.xy; auv = ap.xy; T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
         // Mirror U, never V. Box-planar hands the front and back of a wall the SAME uv (both are
         // Z-dominant) with OPPOSITE normals, so on one of them the frame is left-handed and the
         // relief lights inside-out. Either axis fixes the handedness — but seeing a surface from
         // the other side is a HORIZONTAL mirror, so flipping U corrects it while leaving the
         // pattern the right way up. Flipping V corrects the lighting and stands the texture on its
         // head, which is worse: wrong relief reads as odd, upside-down masonry reads as broken.
-        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { T = -T; uv.x = -uv.x; }',
+        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { T = -T; uv.x = -uv.x; auv.x = -auv.x; }',
+        '}',
+        // PER-GROUP PHASE. `mode` is 1 none / 2 shift / 3 shift+rotate (group-anchors.ts VARY_CODE).
+        //
+        // Rotating the UV without rotating the tangent frame with it would un-register the normal
+        // map from the albedo and light the grain across the bumps. Rotate the pair by the same
+        // angle and handedness survives — cross(cT-sB, sT+cB) == cross(T,B) for every angle — so
+        // relief keeps pointing the way the calibration texture says it should.
+        'void groupPhase(float mode, inout vec2 uv, vec2 auv, inout vec3 T, inout vec3 B){',
+        '  if ( uVaryStr <= 0.0 || mode < 1.5 ) return;',
+        // Quantise before hashing: two anchors a thousandth of a metre apart are the same decision,
+        // and a hash would call them different stones.
+        '  vec3 h = hash33( floor( vGAnchor * 128.0 + 0.5 ) * 0.0078125 );',
+        '  float th = mode > 2.5 ? floor( h.z * 4.0 ) * 1.5707963 : 0.0;',
+        '  float c = cos(th), s = sin(th);',
+        '  uv = mat2( c, s, -s, c ) * ( uv - auv ) + auv + h.xy * uVaryStr;',
+        '  vec3 T2 = c * T - s * B; B = s * T + c * B; T = T2;',
         '}',
       ].join('\n'))
       // after the baked albedo: apply grain / albedo and stash surface terms for the chunks below.
@@ -325,8 +390,10 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         '  int tslot = int( texture2D( roughnessMap, vRoughnessMapUv ).r * 255.0 + 0.5 );',
         `  vec4 sd = uSlot[ clamp( tslot, 0, ${SLOT_COUNT - 1} ) ];`,
         '  if ( sd.y > 0.0 ) {',
-        '    vec2 tuv; vec3 _T; vec3 _B; vec3 _Ng;',
-        '    planarFrame( sd.y, tuv, _T, _B, _Ng );',
+        '    vec2 tuv; vec2 _auv; vec3 _T; vec3 _B; vec3 _Ng;',
+        '    planarFrame( sd.y, tuv, _auv, _T, _B, _Ng );',
+        // The group's own override wins; 0 means "whatever this material TYPE's texture allows".
+        `    groupPhase( vGVary < 0.5 ? uVary[ clamp( tslot, 0, ${SLOT_COUNT - 1} ) ] : vGVary, tuv, _auv, _T, _B );`,
         '    vec3 tcol = texture( uTexArr, vec3( tuv, sd.x ) ).rgb;',
         '    vec4 surf = texture( uSurfArr, vec3( tuv, sd.x ) );',
         // GRAIN: normalised luminance pattern around 1, modulating the baked colour.
@@ -378,5 +445,10 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
   //
   // If you ever make the generated SOURCE depend on the material again, this key must encode
   // whatever varies, or you will resurrect the unbound-uniform bug.
+  //
+  // Per-group variation was deliberately built so it does NOT: the phase is a per-VERTEX attribute
+  // plus two uniforms (uVary, uVaryStr), so every material still emits byte-identical source and
+  // the program count stays flat. That is also why the anchor could not be a per-instance uniform —
+  // one material per instance is exactly the regression this key exists to prevent.
   mat.customProgramCacheKey = () => 'recolorTiled1';
 }

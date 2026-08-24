@@ -28,6 +28,7 @@ import { fitBoxesWithStats, aabbToFootprintBox, type FitStats } from './box-fit.
 import { presentSwatchHexes, type RetextureRule } from './retexture.ts';
 import { applyRecolor, ensureTilingTextures, type ResolvedSwatch } from './recolor.ts';
 import { applyHiddenFaces } from './face-surfaces.ts';
+import { applyGroupAnchors } from './group-anchors.ts';
 
 /** A collision box in OBJECT-LOCAL space (centre + half-extents, metres). */
 export interface FootprintBox {
@@ -172,6 +173,13 @@ export function meshObject(spec: MeshObjectSpec): WorldObject {
       // box-fit all run on this model, and collision in particular must not keep boxing a brick the
       // artist deleted. Clones share geometry by reference, so this swaps in a filtered clone
       // rather than mutating the cached template.
+      // GROUP ANCHORS BEFORE HIDING, and the order is load-bearing: the anchor pass parks the true
+      // original geometry in userData so every stored triangle index still numbers what it was
+      // authored against, and applyHiddenFaces then filters the anchored copy (filterGeometry
+      // carries attributes by reference, so the new one rides along). The other order would make the
+      // anchored rebuild look like the "source" and the geometry-hash guard would reject its own
+      // store. See group-anchors.ts.
+      applyGroupAnchors(model, spec.meshUrl);
       applyHiddenFaces(model, spec.meshUrl);
 
       // SWATCH SAMPLE FIRST — presentSwatchHexes reads each triangle's ORIGINAL atlas colour, so it

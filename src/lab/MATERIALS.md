@@ -135,6 +135,67 @@ counts (programs, draws, fetches) transfer.
   at bake time as `pixelL / swatchRefL`). For scanned materials where the colour variation IS the
   asset — the Poly Haven woods — because a luminance-only read throws exactly that away.
 
+### Per-GROUP variation: same material, a different stone ([group-anchors.ts](group-anchors.ts))
+
+World-space projection is what makes a wall's masonry continue across the panel beside it. On a
+floor of octagonal pavers the same property is the bug: the pavers sit on a lattice commensurate
+with the texture's repeat, so every paver in the tower shows the same patch of stone at the same
+offset. Eighteen thousand identical stones read as **wallpaper**, not as masonry.
+
+The fix is one rule:
+
+```
+phase = hash(anchor)        anchor = the group's area-weighted centroid, in WORLD space
+```
+
+**Same anchor -> coordinated; different anchor -> differentiated.** That covers both directions at
+once, and it needs no per-instance state: the anchor is baked per VERTEX in OBJECT space
+(`aGroupAnchor`, vec4) and carried to world space by `modelMatrix` in the vertex shader, so two
+placements of one tile in two different cells land on two different world anchors and differentiate
+themselves. A group is the carve-mode facet at 75° — one paver, one protruding brick — or a
+hand-saved region that overrides it (SURFACES.md).
+
+- **A per-instance UNIFORM was rejected.** It would force a material per instance, and that is
+  precisely the regression the shared `customProgramCacheKey` exists to prevent. Measured after:
+  **8 programs** on the contact sheet and **1 shader carrying `uTexArr`** in the game — the same
+  numbers as before, because every material still emits byte-identical source and differs only in
+  uniform values. If you ever make the SOURCE depend on the material, extend the key (tiling.ts).
+- **The varying is `flat`.** The anchor is constant across a group, so a smooth varying returns
+  *almost* the same value per fragment — and a hash turns 1e-7 into a different phase, which makes
+  every triangle of a paver its own stone.
+- **A rotation turns the tangent frame with it.** `cross(cT-sB, sT+cB) == cross(T,B)` for every
+  angle, so handedness survives and relief stays registered to the albedo. Verified with the
+  `calibration` texture: at `?vary=0` every paver's arrow points the same way (the old continuous
+  slab); at full strength each paver has its own quarter turn and the glyphs still light as RIDGES,
+  which they would not if T/B had stayed put.
+
+**Permission lives on the TEXTURE** (`TextureOption.vary`), because "may this rotate" is a fact
+about the material: `none` | `shift` (default) | `shift+rotate`. `shift+rotate` uses QUARTER turns —
+90° maps a square-repeating texture's lattice onto itself, so the tiling stays seamless and joints
+stay orthogonal to the world; a free angle differentiates more and looks like a mistake instantly.
+Which textures get it was decided by looking at the albedos side by side, not by taste: masonry and
+brick are laid in horizontal COURSES and a quarter turn stands them on end (rendered, that reads as
+vertical streaking — a stringier material, not a second stone), worn iron's rust runs downhill, and
+plank grain has a direction by definition. Concrete, marble and cobbles turn freely. A saved group
+may override its type (`SurfaceGroup.vary`, the per-row dropdown in the SURFACES panel).
+
+**Strength is a dial, not a boolean** — `Vary` in the panel, `?vary=0..100`, and the game honours it
+too. At **0** the shader emits exactly the projection it did before groups existed, so "did this
+change anything else" is one screenshot pair rather than a rebuild. It defaults to full.
+
+**NOT done, deliberately: coordination ACROSS meshes.** Four tiles' corner pieces meeting to form
+one diamond stay four groups with four phases. `cell-tower.ts` collapses aligned 2x2 blocks of
+matching floor into a single natively-4u mesh — ~18,000 of 26,000 meshes — conditionally and
+data-dependently, so anything keyed on per-tile seam points produces a visible discontinuity exactly
+at the merged/unmerged boundary. A group is always wholly inside one mesh, which is why this half is
+safe and that half is not.
+
+**The known trade, so nobody rediscovers it as a bug:** a facet that spans a whole mesh face — the
+flat front of a wall panel — now shifts relative to the panel butted against it, because they are
+different meshes with different anchors. On a paver that discontinuity IS the feature; on a long
+wall run it is a change. The levers are the per-texture `vary` (set a texture to `none` and its
+surfaces go back to one continuous slab) and the strength dial.
+
 **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
 is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;
 [texture-settings.ts](texture-settings.ts) is the in-app menu (object mode). A change re-bakes live
