@@ -58,6 +58,7 @@ import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
 import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
+import { mountPageNav } from './page-nav.ts';
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
 // canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
 // some (headless SwiftShader, odd drivers). Disabling createImageBitmap makes GLTFLoader use
@@ -821,3 +822,6 @@ async function boot(): Promise<void> {
 }
 
 void boot();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();

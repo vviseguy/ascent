@@ -23,6 +23,7 @@ import { DIRS, FLOOR_CORNERS, OWNED_EDGES, type Dir, type Seg, type Centre, type
 import { tilePlacements } from './wall-tile-assets.ts';
 import { instance } from './tile-render.ts';
 
+import { mountPageNav } from './page-nav.ts';
 /* ------------------------------- value palettes ------------------------------ */
 
 const SEGS: Seg[] = ['none', 'wall', 'barrier'];
@@ -521,3 +522,6 @@ render();
 
 (window as unknown as { __TE_READY?: boolean }).__TE_READY = true;
 (function loop(): void { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();

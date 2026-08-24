@@ -86,6 +86,11 @@
   #modal h3 { margin: 0 0 10px; font-size: 14px; }
   #modal p { margin: 0 0 14px; color: #9aa3ad; font-size: 12px; }
   #modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* page-nav clearance: the switcher pill sits at top-left, so the panel starts below it.
+     A LAST rule rather than a property inside #panel — that rule sets `padding` shorthand
+     further down, which silently reset an earlier padding-top. */
+  #panel { padding-top: 42px; }
 </style>
 </head>
 <body>

@@ -53,6 +53,7 @@ import { buildGrid, CELL } from './cell-preview.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
 
+import { mountPageNav } from './page-nav.ts';
 /* --------------------------------- palette ---------------------------------- */
 // The channel alphabet, the hatches and the legend all live in `cell-visual.ts`, so the grid, the key
 // and the brush strip cannot drift apart — all three read the same tables.
@@ -1472,3 +1473,6 @@ initSplit();
 buildPanel();   // draw immediately; the store fetch only fills the two lists
 void refresh();
 wirePan();
+
+// the switcher across every authoring page (src/lab/page-nav.ts)
+mountPageNav();
