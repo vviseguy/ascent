@@ -19,6 +19,7 @@
 //   &angle=<deg> &pitch=<deg>  camera around / above
 //   &zoom=<f>                  distance multiplier
 //   &stack=<n>&rise=<h>        n storeys h apart (default FLOOR_HEIGHT) — does a flight REACH the next?
+//   &arrows=1                  draw the DECIDED climb direction over each flight, plus a compass
 //
 // `window.__CELL_READY` flips true when the last GLB has landed and a frame has been drawn.
 
@@ -26,6 +27,8 @@ import * as THREE from 'three';
 import { buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
 import { previewCell } from '../floor/cell-field.ts';
 import { getStructure, levelsOf, listStructures } from '../floor/cell-structures.ts';
+import { stairFlight } from '../floor/cell-place.ts';
+import { isStairFloor } from '../floor/cell.ts';
 import { orientStructure } from '../floor/cell-orient.ts';
 import { generateEmergent, generateEmergentTower } from '../floor/cell-emergent.ts';
 import { resolveFloor } from '../floor/cell-defray.ts';
@@ -48,6 +51,9 @@ const num = (k: string, d: number): number => { const v = Number(q.get(k)); retu
 
 interface Subject {
   cells: (Cell | null)[]; w: number; h: number; extent: { w: number; h: number }; label: string;
+  /** The storey directly above the BOTTOM one, for deciding stair directions — see `subject`. It is
+   *  supplied even when only one storey is drawn, because the decision does not depend on the view. */
+  decideAbove?: readonly (Cell | null)[];
   /** Extra storeys to draw above this one, bottom-up. A multi-level structure IS a building. */
   above?: (Cell | null)[][];
 }
@@ -163,6 +169,15 @@ function subject(): Subject {
     // the stored grid is the POINT LATTICE, so it is one wider and one taller than the floor extent
     cells: slice(bottom), w: lw, h: lh, extent: { w: st.w, h: st.h },
     ...(shown > 1 ? { above: Array.from({ length: levels - 1 }, (_, i) => slice(i + 1)) } : {}),
+    /* WHAT IS KNOWN, not what is DRAWN — and they are different things.
+       A stair flight's direction is decided partly by the storey above it, so a picture of ONE storey
+       must still be told what sits over it or it draws a different staircase than the tower builds.
+       This was silently wrong in both directions: `--level=n` dropped `above` entirely, and even a
+       full multi-storey render never passed it into `gridPlacements` at all — every upper storey was
+       built as an independent grid that knew nothing about the one over IT. So the visual gate on
+       `cell-place.ts` has been showing flights decided without a ceiling, which is exactly the class of
+       thing a screenshot is supposed to catch. */
+    ...(bottom + 1 < levels ? { decideAbove: slice(bottom + 1) } : {}),
     label: `${name}  ${st.w}x${st.h}`
       + (levels > 1 ? (pick === null ? `  ${levels} storeys` : `  storey ${pick + 1}/${levels}`) : '')
       + (turn || flip ? `  turn ${turn}${flip ? ' flipped' : ''}` : ''),
@@ -173,7 +188,11 @@ async function main(): Promise<void> {
   const s = subject();
   window.__CELL_INFO = s.label;
   const cap = document.getElementById('cap');
-  if (cap) cap.textContent = s.label;
+  if (cap) {
+    cap.textContent = s.label
+      + (q.get('arrows') === '1' ? '   |   GREEN arrow = the climb direction the code chose, RED ball = its FOOT' : '')
+      + '   |   compass: MAGENTA = north (-Z), CYAN = east (+X)';
+  }
 
   const host = document.getElementById('view')!;
   const scene = new THREE.Scene();
@@ -184,12 +203,15 @@ async function main(): Promise<void> {
   const fill = new THREE.DirectionalLight(0x8899ff, 0.4); fill.position.set(-6, 5, -4); scene.add(fill);
   scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 
-  const group = await buildGrid(s.cells, s.w, s.h, s.extent);
+  // EACH deck is told what is over IT, so every flight is decided the way the tower decides it
+  const overBottom = s.decideAbove ?? s.above?.[0];
+  const group = await buildGrid(s.cells, s.w, s.h, s.extent, overBottom ? { above: overBottom } : {});
   scene.add(group);
 
   // the structure's OWN upper storeys, one FLOOR_HEIGHT apart — the same spacing the tower uses
   for (const [i, up] of (s.above ?? []).entries()) {
-    const g = await buildGrid(up, s.w, s.h, s.extent);
+    const over = s.above?.[i + 1];
+    const g = await buildGrid(up, s.w, s.h, s.extent, over ? { above: over } : {});
     g.position.y = toFloat(FLOOR_HEIGHT) * (i + 1);
     scene.add(g);
   }
@@ -207,10 +229,68 @@ async function main(): Promise<void> {
      ruler: "the flight sits half a cell south" is invisible without it, and it is the whole reason to
      look at a picture rather than at the numbers. The lattice is (w × h) cells wide, and `buildGrid`
      centres the FULL lattice on the origin — so the ruler must be centred the same way. */
+  /* WHICH WAY DOES THE CODE THINK EACH FLIGHT CLIMBS? `?arrows=1` draws it.
+     Everything else here shows what got PLACED; nothing showed what was DECIDED, so a direction bug
+     and a placement bug looked identical in a screenshot and the only way to tell them apart was to
+     read the numbers and trust them. An arrow over each flight makes the decision visible in the same
+     frame as its consequence: if the arrow and the treads disagree, the fault is downstream of the
+     scoring; if they agree and both look wrong, it is the scoring.
+     A COMPASS goes in regardless, because "wrong way" is unreadable without one — an isometric camera
+     maps north to a screen diagonal that changes with `--angle`, and every discussion of this so far
+     has foundered on which way is up in the picture. */
+  const compass = (dir: THREE.Vector3, colour: number, at: THREE.Vector3, len: number): void => {
+    scene.add(new THREE.ArrowHelper(dir.clone().normalize(), at, len, colour, len * 0.3, len * 0.2));
+  };
+
+  if (q.get('arrows') === '1') {
+    const DIRV: Record<string, THREE.Vector3> = {
+      N: new THREE.Vector3(0, 0, -1), S: new THREE.Vector3(0, 0, 1),
+      W: new THREE.Vector3(-1, 0, 0), E: new THREE.Vector3(1, 0, 0),
+    };
+    // every level that is drawn, so a multi-storey structure shows all its flights
+    const decks: { cells: readonly (Cell | null)[]; above?: readonly (Cell | null)[]; y: number }[] =
+      [{ cells: s.cells, ...(overBottom ? { above: overBottom } : {}), y: 0 }];
+    for (const [i, up] of (s.above ?? []).entries()) {
+      const over = s.above?.[i + 1];
+      decks.push({ cells: up, ...(over ? { above: over } : {}), y: toFloat(FLOOR_HEIGHT) * (i + 1) });
+    }
+    for (const deck of decks) {
+      for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
+        const c = deck.cells[y * s.w + x];
+        if (!c || !isStairFloor(c.floor)) continue;
+        const same = (cx: number, cy: number): boolean =>
+          cx >= 0 && cy >= 0 && cx < s.w && cy < s.h && deck.cells[cy * s.w + cx]?.floor === c.floor;
+        if (same(x - 1, y) || same(x, y - 1)) continue;            // not the block's origin
+        const fl = stairFlight(deck.cells, s.w, s.h, x, y, deck.above);
+        if (!fl) continue;
+        const cx = (x + (fl.bw - 1) / 2 - (s.w - 1) / 2) * CELL;
+        const cz = (y + (fl.bh - 1) / 2 - (s.h - 1) / 2) * CELL;
+        const mid = new THREE.Vector3(cx, deck.y + 5.2, cz);
+        const v = DIRV[fl.up]!;
+        // GREEN points the way it climbs, from over the foot to over the head
+        scene.add(new THREE.ArrowHelper(v, mid.clone().addScaledVector(v, -2.2), 4.4, 0x2ee06a, 1.3, 0.9));
+        // RED ball sits over the FOOT — the end you walk in at
+        const foot = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 12),
+          new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+        foot.position.copy(mid).addScaledVector(v, -3.0);
+        scene.add(foot);
+      }
+    }
+  }
+
   const gw = s.w * CELL, gh = s.h * CELL;
   const ruler = new THREE.GridHelper(Math.max(gw, gh), Math.max(s.w, s.h), 0x3b6ea5, 0x2f3742);
   ruler.position.y = -0.02;
   scene.add(ruler);
+
+  /* THE COMPASS. Magenta = NORTH (-Z), cyan = EAST (+X), planted at the north-west corner of the
+     ruler. Without it a screenshot cannot be argued about: the camera yaw is a flag. */
+  {
+    const corner = new THREE.Vector3(-gw / 2 - 1.5, 0.1, -gh / 2 - 1.5);
+    const len = Math.max(3, Math.min(gw, gh) * 0.22);
+    compass(new THREE.Vector3(0, 0, -1), 0xff3bd0, corner, len);   // N
+    compass(new THREE.Vector3(1, 0, 0), 0x3bd0ff, corner, len);    // E
+  }
 
   const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   const wpx = Math.floor(host.clientWidth) || 900, hpx = Math.floor(host.clientHeight) || 620;

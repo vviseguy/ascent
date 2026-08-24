@@ -13,6 +13,7 @@
 //
 //   --turns        one shot per orientation (0..3 + flipped) — placement must survive all eight
 //   --angle=deg --pitch=deg --zoom=f
+//   --arrows       draw the climb direction the code CHOSE over each flight, plus a compass
 //   --out=dir      default cell-shots
 //
 // Output: cell-shots/<subject>[-t<turn>][-f].png
@@ -72,6 +73,7 @@ const shots = [];
 const camera = `angle=${flags.get('angle') ?? 35}&pitch=${flags.get('pitch') ?? 38}&zoom=${flags.get('zoom') ?? 1.15}` + (flags.has('focus') ? `&focus=${flags.get('focus')}` : '')
   + (flags.has('stack') ? `&stack=${flags.get('stack')}` : '')
   + (flags.has('rise') ? `&rise=${flags.get('rise')}` : '')
+  + (flags.has('arrows') ? `&arrows=1` : '')
   + (flags.has('level') ? `&level=${flags.get('level')}` : '')
   + (flags.has('levels') ? `&levels=${flags.get('levels')}` : '');
 
