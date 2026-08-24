@@ -314,8 +314,28 @@ const STAIR_MESHES = [
 ] as const satisfies readonly { url: string; mat: FloorMaterial; run: number; across: number; walls: number }[];
 
 
-/** Stairs rise toward -Z natively, so N is the unturned case. NOT the table walls use — a wall runs
- *  along X, so its unturned case is E. */
+/**
+ * Stairs rise toward -Z natively, so N is the unturned case. NOT the table walls use — a wall runs
+ * along X, so its unturned case is E.
+ *
+ * MEASURED, not assumed (`tmp/glb-climb4.mjs`). It sat here as a bare assertion next to a handedness
+ * note that makes a point of having been measured, which is exactly the kind of asymmetry worth
+ * distrusting. Correlating vertex height against each horizontal axis, over tread-height geometry only
+ * so the tall side walls cannot vote: every one of the six stair meshes gives a dominant NEGATIVE
+ * r(Z,Y) — -0.52 for `stairs`, `stairs_wide` and `stairs_narrow`, -0.24 for the handed pair, -0.11 for
+ * `stairs_walled` — with the top tread at low Z in all six. They climb toward -Z.
+ *
+ * Two traps in checking this, both of which gave a confidently wrong answer first:
+ *   - a CENTROID is dragged by the side wall, which is tall and sits on one side. It reported
+ *     `stairs_wall_left` climbing WEST, which is just where its wall is.
+ *   - treads are BOXES, so vertices exist only at their corners. Slicing the mesh and taking the
+ *     highest vertex per slice finds nothing at all in between and reads as flat.
+ *
+ * The turn index is +90 degrees (`TURN_YAW`/`TURN_RAD` are both [0, PI/2, PI, -PI/2]), so -Z at turn 1
+ * points -X = W, which is what this table says. Worth stating because a WALL RUN IS SYMMETRIC UNDER
+ * 180 DEGREES: a sign error in the turn convention is invisible on walls and would show up only on an
+ * asymmetric piece like a staircase.
+ */
 const STAIR_TURN = { N: 0, W: 1, S: 2, E: 3 } as const;
 /** Unit step per direction, for pushing the pivot back up-slope. */
 const STEP: Record<Dir, readonly [number, number]> = { N: [0, -1], S: [0, 1], W: [-1, 0], E: [1, 0] };
