@@ -222,6 +222,15 @@ noticing, two of them in the file it was editing. After ANY merge, re-run the fu
 result: a clean textual merge is not a working merge, especially when the incoming commits touch your
 files.
 
+**CHECK WHAT YOUR BRANCH TRACKS BEFORE YOU PULL** — `git branch -vv`, and expect `[origin/main]`.
+Work lands on `main` here, but several local branches still track their own long-dead remote: at the
+time of writing `feat/emergent-gen` sat exactly AT `origin/main` while tracking an `origin/*` ref 58
+commits stale. `git pull --rebase` there does the obedient thing and rewrites all 58 onto the dead
+base, silently moving you off main's line — the tree stays clean, the tests still pass, and nothing
+says a word. Recovered by branching at the pre-rebase SHA from the reflog rather than resetting.
+So: verify the upstream, and prefer `git pull --rebase origin main` — naming the branch you mean beats
+trusting whatever the ref happens to point at.
+
 **THE AUTHORING STORE MOVES UNDER YOU.** `src/floor/cell-structures.json` is written by a human through
 a live dev server WHILE sessions test against it. A before/after comparison that straddles a save is
 not a comparison, and it fails silently — both runs look valid and the conclusion is wrong. It has
