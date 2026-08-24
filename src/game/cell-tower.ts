@@ -36,7 +36,7 @@
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
 import { blocks, isStairFloor, type Cell } from '../floor/cell.ts';
-import { gridPlacements, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
+import { gridPlacements, openingAt, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
 import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
 import { getApproved, type ApprovedBox } from './approved-assets.ts';
 import {
@@ -240,6 +240,40 @@ export let lastFallbackCount = 0;
  * Read STRAIGHT off the 2u walls rather than projected from a slot lattice, so it agrees with what is
  * actually drawn instead of approximating it.
  */
+/**
+ * WHAT STOPS SIGHT at this cell — see `CellTile.sightMask` for why this is not `wallMask`.
+ *
+ * Only a full-height wall blocks. Deliberately NOT here:
+ *   - the walkability term, so looking out over a balcony or a shaft sees what is beyond;
+ *   - barriers, which are waist high (`blocks` already says so);
+ *   - openings, which you can see through even though the segments either side are walls.
+ *
+ * Bits match `wallMask`: 1=+X 2=-X 4=+Z 8=-Z.
+ */
+export function sightMask2u(cells: readonly (Cell | null)[], w: number, h: number, index: number): number {
+  const col = index % w, row = Math.floor(index / w);
+  const at = (cx: number, cy: number): Cell | null =>
+    cx < 0 || cy < 0 || cx >= w || cy >= h ? null : cells[cy * w + cx] ?? null;
+  const me = at(col, row);
+  if (!me) return 0;                     // off the map stops nothing; the caller bounds the trace
+  const south = at(col, row + 1), east = at(col + 1, row);
+
+  /* An opening is centred on a POINT and covers the two collinear edges either side of it, so an edge
+     is seen through if a module sits at either of its endpoints. Same rule `cell-place` uses to decide
+     which wall segments an opening replaces. */
+  const seeThroughH = (px: number, py: number): boolean =>
+    openingAt(cells, w, h, px, py, 'H') || openingAt(cells, w, h, px + 1, py, 'H');
+  const seeThroughV = (px: number, py: number): boolean =>
+    openingAt(cells, w, h, px, py, 'V') || openingAt(cells, w, h, px, py + 1, 'V');
+
+  let m = 0;
+  if (east && blocks(east.wallW) && !seeThroughV(col + 1, row)) m |= 1;   // +X  east
+  if (blocks(me.wallW) && !seeThroughV(col, row)) m |= 2;                 // -X  west
+  if (south && blocks(south.wallN) && !seeThroughH(col, row + 1)) m |= 4; // +Z  south
+  if (blocks(me.wallN) && !seeThroughH(col, row)) m |= 8;                 // -Z  north
+  return m;
+}
+
 export function wallMask2u(cells: readonly (Cell | null)[], w: number, h: number, index: number): number {
   const col = index % w, row = Math.floor(index / w);
   const at = (cx: number, cy: number): Cell | null =>
@@ -404,6 +438,7 @@ export function compileCellTower(
         }),
         cx: toRaw(x), cz: toRaw(z),
         wallMask: wallMask2u(f.cells, f.width, f.height, i),
+        sightMask: sightMask2u(f.cells, f.width, f.height, i),
       });
     }
 

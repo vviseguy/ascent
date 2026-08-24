@@ -281,6 +281,19 @@ export interface CellTile {
    * but the cell type is DOORWAY.
    */
   wallMask: number;
+  /**
+   * WHAT STOPS SIGHT, which is a different question from what stops movement.
+   *
+   * `wallMask` answers "can I walk this way", so it also sets a bit when the neighbour is not
+   * standable — and that is right for movement and wrong for looking. Stand at a balustrade over an
+   * open hall and every cell beyond the rail is air: unwalkable, so `wallMask` says walled, so you
+   * cannot see across your own room.
+   *
+   * This one is set only by geometry that actually blocks the eye: a full-height wall. A barrier is
+   * waist high and you see over it, an opening you see through, and empty air stops nothing.
+   * Absent (the 4u path) means "same as `wallMask`".
+   */
+  sightMask?: number;
 }
 
 /**

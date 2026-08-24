@@ -144,6 +144,8 @@ interface CellRec {
   col: number; row: number; stratum: number;
   /** which sides are walled (bit 1=+X 2=-X 4=+Z 8=-Z): a walled side blocks BFS flow. */
   wallMask: number;
+  /** which sides stop SIGHT — see `CellTile.sightMask`. Not the same as `wallMask`. */
+  sightMask: number;
   /** true for a real walkable cell (BFS only flows between walkable cells). */
   walkable: boolean;
   /** part of a stair flight — the only place the route graph climbs. */
@@ -520,7 +522,8 @@ export class Dungeon {
         if (fog) { fog.visible = !this.fogOff; sub.add(fog); }
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
-          wallMask: c.wallMask, walkable, stair: c.stair, hole: false, group: cg, fog,
+          wallMask: c.wallMask, sightMask: c.sightMask ?? c.wallMask,
+          walkable, stair: c.stair, hole: false, group: cg, fog,
           explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats,
         };
         this.cells.push(rec);
@@ -540,7 +543,7 @@ export class Dungeon {
         if (fog) { fog.visible = !this.fogOff; sub.add(fog); }
         const rec: CellRec = {
           cx, cz, sy, col: c.col, row: c.row, stratum: grid.stratum,
-          wallMask: 0, walkable: false, stair: false, hole: true, group: new THREE.Group(), fog,
+          wallMask: 0, sightMask: 0, walkable: false, stair: false, hole: true, group: new THREE.Group(), fog,
           explored: this.fogOff, reveal: this.fogOff ? 1 : 0, mats: [],
         };
         this.cells.push(rec);
@@ -1173,7 +1176,8 @@ export class Dungeon {
   private sightClear(from: CellRec, col: number, row: number): boolean {
     return traceSight(from.col, from.row, col, row, (c, r, bit) => {
       const cell = this.cellIndex.get(this.cellKey(from.stratum, c, r));
-      return cell === undefined || (cell.wallMask & bit) !== 0;   // off the map, or a wall in the way
+      // SIGHT mask, not the movement one: air and barriers do not stop the eye
+      return cell === undefined || (cell.sightMask & bit) !== 0;
     });
   }
 
