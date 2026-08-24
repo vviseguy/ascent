@@ -7,7 +7,7 @@
 // throughout: the bug was that nobody was passing anything.
 
 import { describe, it, expect } from 'vitest';
-import { generateEmergent } from './cell-emergent.ts';
+import { generateEmergent, generateEmergentTower, type EmergentFloor } from './cell-emergent.ts';
 import { resolveFloor, defray, structureWalls } from './cell-defray.ts';
 import { resolveGrid } from './cell-grid.ts';
 import { getStructure } from './cell-structures.ts';
@@ -18,21 +18,42 @@ import { openCell, type Cell } from './cell.ts';
 const NONE = segs('none');
 const W = 36, H = 28;
 
-/** Every wall a placed structure ASSERTED, and whether it is still there. */
+/**
+ * Every wall a placed structure ASSERTED, and whether it is still there.
+ *
+ * SURVEYS A TOWER, not a lone floor. A structure taller than the stack is declined, and every
+ * structure in the store is now multi-storey — so `generateEmergent` on its own places NOTHING and
+ * this survey had quietly become a measurement of an empty maze. The `drawn > 0` assertion below is
+ * what caught it, which is the only reason it is written that way.
+ */
 function survey(seed: bigint): { drawn: number; kept: number; worst: string } {
-  const r = generateEmergent({ width: W, height: H, seed });
-  const cells = resolveFloor(r);
+  const tower = generateEmergentTower({ width: W, height: H, seed, levels: 3 });
   let drawn = 0, kept = 0;
   const lost = new Map<string, number>();
+  for (const f of tower.floors) surveyFloor(f, drawn, kept, lost, (d, k) => { drawn = d; kept = k; });
+  return { drawn, kept, worst: [...lost].sort((a, b) => b[1] - a[1]).map(([n, c]) => `${n} lost ${c}`).join(', ') };
+}
+
+/** One storey's worth, folded into the running totals. */
+function surveyFloor(
+  r: EmergentFloor,
+  drawn0: number, kept0: number, lost: Map<string, number>,
+  out: (drawn: number, kept: number) => void,
+): void {
+  const cells = resolveFloor(r);
+  let drawn = drawn0, kept = kept0;
 
   for (const p of r.placed) {
     const base = getStructure(p.name);
     if (!base) continue;
     const st = orientStructure(base, p.orientation);
     const sw = st.w + 1, sh = st.h + 1;
+    // THE RIGHT LEVEL. A multi-storey structure is listed on every floor it spans, so comparing its
+    // ground floor against all of them reports half its walls missing when nothing is missing at all.
+    const off = p.level * sw * sh;
     for (let ly = 0; ly < sh; ly++) {
       for (let lx = 0; lx < sw; lx++) {
-        const f = st.cells[ly * sw + lx];
+        const f = st.cells[off + ly * sw + lx];
         if (!f) continue;
         const g = cells[(p.region.y + ly) * W + (p.region.x + lx)];
         // the outermost ring is deliberately made porous so SEAL can cut doors through it; only the
@@ -44,8 +65,7 @@ function survey(seed: bigint): { drawn: number; kept: number; worst: string } {
       }
     }
   }
-  const worst = [...lost].sort((a, b) => b[1] - a[1]).map(([n, c]) => `${n} lost ${c}`).join(', ');
-  return { drawn, kept, worst };
+  out(drawn, kept);
 }
 
 describe('cell-defray — an authored wall is not fraying', () => {
@@ -65,7 +85,8 @@ describe('cell-defray — an authored wall is not fraying', () => {
   });
 
   it('protects a segment only where a structure actually asserted one', () => {
-    const r = generateEmergent({ width: W, height: H, seed: 1n });
+    // a TOWER: every structure in the store is multi-storey now, so a lone floor places none at all
+    const r = generateEmergentTower({ width: W, height: H, seed: 1n, levels: 3 }).floors[0]!;
     const keep = structureWalls(r.placed);
     const p = r.placed[0]!;
     const st = orientStructure(getStructure(p.name)!, p.orientation);
@@ -74,7 +95,7 @@ describe('cell-defray — an authored wall is not fraying', () => {
     let asserted: [number, number] | null = null, blank: [number, number] | null = null;
     for (let ly = 0; ly < st.h && (!asserted || !blank); ly++) {
       for (let lx = 0; lx < st.w && (!asserted || !blank); lx++) {
-        const f = st.cells[ly * sw + lx]!;
+        const f = st.cells[p.level * sw * (st.h + 1) + ly * sw + lx]!;
         const at: [number, number] = [p.region.x + lx, p.region.y + ly];
         if ((f.wallN & NONE) === 0) asserted ??= at; else blank ??= at;
       }

@@ -91,6 +91,15 @@ export interface PlacedStructure {
   /** Which of the eight orientations it was placed in. */
   orientation: Orientation;
   region: Region;
+  /**
+   * WHICH STOREY OF THE STRUCTURE this is — 0 for its ground floor.
+   *
+   * A multi-storey structure appears in `placed` on every floor it spans, and without this there is
+   * no way to tell which of its lattices belongs to the floor you are holding. Anything comparing a
+   * placement against the authored structure has to slice the right level, and every attempt to
+   * recover it by guessing (best-match, or assuming 0) has been wrong.
+   */
+  level: number;
   /** The cell at its middle — the target the router must reach, so the room is enterable. */
   centre: number;
 }
@@ -281,7 +290,7 @@ function placeStructures(
 
     for (const lv of span) {
       storeys[lv]!.placed.push({
-        name, orientation: o, region,
+        name, orientation: o, region, level: lv - b,
         centre: nodeId(w, region.x + (region.w >> 1), region.y + (region.h >> 1)),
       });
       /* ONLY THE SLOTS THIS STRUCTURE ACTUALLY OPENED. Pushing the whole perimeter ring here — both

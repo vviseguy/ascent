@@ -15,6 +15,16 @@ const SEEDS = [3n, 23n, 101n];
 const run = (seed: bigint, maze?: { kind: MazeKind; braid: number; step?: number }) =>
   generateEmergent({ width: W, height: H, seed, ...(maze ? { maze } : {}) });
 
+/**
+ * The GROUND FLOOR of a tower, for anything that needs structures to actually be there.
+ *
+ * Every structure in the store is multi-storey now, and a structure taller than the stack is
+ * declined — so `generateEmergent` on its own places NOTHING, and any test that asserts something
+ * about a placement silently became a test of an empty maze. Three of them did.
+ */
+const runTower = (seed: bigint, levels = 3) =>
+  generateEmergentTower({ width: W, height: H, seed, levels });
+
 describe('cell-maze — the edge set is the walls themselves', () => {
   it('lists every shared wall exactly once', () => {
     const g = makeGrid(6, 5);
@@ -105,9 +115,9 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
   it('places structures from the authored store and nothing else', () => {
     const known = new Set(listStructures());
     for (const seed of SEEDS) {
-      const r = run(seed);
-      expect(r.stats.structuresPlaced).toBeGreaterThan(0);
-      for (const p of r.placed) {
+      const t = runTower(seed);
+      expect(t.stats.structuresPlaced).toBeGreaterThan(0);
+      for (const p of t.floors.flatMap((f) => f.placed)) {
         expect(known.has(p.name)).toBe(true);
         // stamped WHOLE, never cropped: the region is the stored POINT lattice (floor extent + 1),
         // with the axes swapped by an odd quarter-turn
@@ -122,7 +132,7 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
   it('all eight orientations really get used', () => {
     const seen = new Set<string>();
     for (let i = 0; i < 40; i++) {
-      for (const p of run(BigInt(i * 13 + 1)).placed) {
+      for (const p of runTower(BigInt(i * 13 + 1)).floors.flatMap((f) => f.placed)) {
         seen.add(`${p.orientation.turn}${p.orientation.flip ? 'F' : ''}`);
       }
     }
