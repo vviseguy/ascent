@@ -152,6 +152,29 @@ export const OPENS: readonly Open[] = ['closed', 'open'];
  * through all three and walk through none of them. Only these three are floor-rooted and body-wide.
  */
 export const PASSABLE_KINDS: readonly WallType[] = ['doorway', 'arch', 'scaffold'];
+
+/**
+ * GRATES: you see through them even CLOSED, because closed does not mean solid for these two.
+ * `gate` is a portcullis — bars on a sill — and `arch_window` is barred rather than glazed when it is
+ * shut. Everything else that is closed really is closed: a door has a leaf, a blind arch is a relief
+ * cut into solid stone, a closed window is infilled, and all three were measured, not assumed.
+ */
+export const GRATE_KINDS: readonly WallType[] = ['gate', 'arch_window'];
+
+/**
+ * CAN YOU SEE THROUGH IT — a third question, and not the same as either of the other two.
+ *
+ * There are three separate properties here and conflating any pair of them has already cost a bug:
+ *   drawn        `moduleAt`      — is a 4u module rendered at this point
+ *   walkable     `isOpenType`    — can a body get through it
+ *   SEE-THROUGH  this            — does it stop the eye
+ *
+ * An open window is a hole at sill height: see through, walk through no. A closed portcullis is bars:
+ * see through, walk through no. A closed door is neither. `solid` is not a module at all, so the run
+ * lays a plain wall and nothing gets through.
+ */
+export const seesThrough = (wt: WallType, open: Open): boolean =>
+  wt !== 'solid' && (open === 'open' || GRATE_KINDS.includes(wt));
 /** Can a body walk through this wall? BOTH halves have to agree — the kind and the state. */
 export const isOpenType = (wt: WallType, open: Open): boolean =>
   open === 'open' && PASSABLE_KINDS.includes(wt);

@@ -99,7 +99,9 @@ const MAX_TORCH_LIGHTS = 8;
  *  deeper flood reveals the current room AND several rooms out through doorways, so the
  *  lit dungeon — not the fog — dominates the screen. Still a graph flood (never bleeds
  *  through solid walls or into the inter-room VOID), so unexplored wings stay fog-gated. */
-const FOG_BFS_DEPTH = 6;
+/** How far awareness SPREADS out from anything you can see — the "around the corner" sense. Small on
+ *  purpose: it is the edge of sight, not a second way of exploring. */
+const FOG_SPREAD = 2;
 /** How far line of sight reaches. Sight is stopped by walls, so this is only a cap on the cost of
  *  the trace — a long hall reveals its whole length, a corridor reveals as far as its first turn. */
 const FOG_LOS_RANGE = 24;
@@ -395,6 +397,8 @@ export class Dungeon {
   private lastLosCell = -1;
   /** The cell the last route cull ran from — the answer only changes when the player moves cell. */
   private lastCullCell = -1;
+  /** `exploredCount` at the last cull, so a fresh reveal re-runs it. */
+  private lastCullExplored = -1;
   /**
    * THE CUT. `xy` = the player's position on screen in PHYSICAL pixels, `z` = the radius in the same
    * units (0 disables it), `w` = the player's window-space depth.
@@ -452,6 +456,7 @@ export class Dungeon {
     this.hostless = 0;
     this.lastLosCell = -1;
     this.lastCullCell = -1;
+    this.lastCullExplored = -1;
     this.noTemplate.clear();
     this.group.clear();
     this.strata = [];
@@ -1045,13 +1050,12 @@ export class Dungeon {
   }
 
   /**
-   * FOG OF WAR (issue 2 / boss #3) — REVEAL FLOWS ALONG REACHABLE CELLS.
+   * FOG OF WAR — WHAT YOU CAN SEE, PLUS A LITTLE PAST ITS EDGE.
    *
-   * Each frame: for every crew body, find the cell it stands in and BFS outward up to
-   * FOG_BFS_DEPTH steps over REACHABLE neighbours — a neighbour is reachable only if NO
-   * wall separates the two cells (wallMask) AND it is a walkable cell. This is a graph
-   * flood over connected rooms/corridors, NOT a raw distance radius, so reveal spreads
-   * THROUGH doorways into adjacent rooms but never bleeds through a solid wall.
+   * One system in two steps (`sightReveal`): an unobstructed line to everything in range, then a
+   * two-step spread from EVERYTHING VISIBLE — not from the player. Awareness leaks a couple of cells
+   * past the edge of sight, round the door frame you are looking at, rather than radiating from your
+   * feet through walls you have never laid eyes on.
    *
    * Reveal is PERSISTENT (once a cell is seen it stays seen): an explored cell shows the
    * dungeon while its BLACK FOG CUBE is hidden, and an unexplored one stays solid grid-
@@ -1068,28 +1072,15 @@ export class Dungeon {
     for (const b of bodies) {
       const start = this.cellAt(b.x, b.y, b.z);
       if (!start) continue;
-      const before = this.exploredCount;
-      this.lineOfSightReveal(start);
-      this.floodReveal(start);
-      if (this.exploredCount !== before) this.fogDirty = true;
+      this.sightReveal(start);
     }
     this.syncFogMask();
-    // 2) drive the per-cell fade + fog cube from the `explored` flag.
-    for (const cell of this.cells) {
-      if (cell.explored) {
-        cell.group.visible = true;
-        cell.reveal = 1;
-        // The black fog cube is hidden the moment the cell is explored — a pure VISIBILITY
-        // toggle (not opacity): the PBR tile materials AND the fog material are SHARED across
-        // thousands of cells, so driving per-cell opacity on them would change every cell at
-        // once. The reveal reads as the dungeon appearing as the grid-aligned ink lifts off.
-        if (cell.fog) cell.fog.visible = false;
-      } else {
-        cell.group.visible = false;
-        cell.reveal = 0;
-        if (cell.fog) cell.fog.visible = true;
-      }
-    }
+    /* VISIBILITY IS WRITTEN IN ONE PLACE, and it is not here.
+       This used to walk all eighteen thousand cells EVERY FRAME setting `.visible` from `explored`,
+       and then `cullByRoute` walked them again and overwrote the answer — two writers, one of them
+       redundant, both paying for the whole tower whether or not anything had changed. `cullByRoute`
+       is the only writer now, and it runs when the player changes cell or when something new was
+       revealed. Standing still costs nothing. */
   }
 
   /** DEV/verify only: force every cell explored (reveal the whole tower for screenshots). */
@@ -1152,12 +1143,6 @@ export class Dungeon {
   }
 
   /**
-   * BFS from `start` over REACHABLE neighbours up to FOG_BFS_DEPTH steps, marking each as
-   * explored. A move from cell A to neighbour B is allowed only when A has no wall on the
-   * side facing B (wallMask bit clear) and B is a walkable cell — i.e. they are connected
-   * (same room, or through a doorway), never wall-separated. Cheap (a few dozen cells).
-   */
-  /**
    * Everything the player can SEE from `start`, revealed at once.
    *
    * A supercover walk of the straight line to each candidate cell: step by step, and the moment a step
@@ -1167,20 +1152,55 @@ export class Dungeon {
    * Cost is bounded by FOG_LOS_RANGE, and the whole pass is skipped unless the player CHANGED CELL,
    * so standing still costs nothing.
    */
-  private lineOfSightReveal(start: CellRec): void {
+  private sightReveal(start: CellRec): void {
     const key = this.cellKey(start.stratum, start.col, start.row);
     if (this.lastLosCell === key) return;     // same cell as last frame; nothing new is visible
     this.lastLosCell = key;
+    const before = this.exploredCount;
 
+    /* ONE SYSTEM, in two steps of the same idea.
+       First what you can SEE: an unobstructed straight line to every cell in range, stopped only by
+       things that actually stop the eye. Then SPREAD a little from everything you can see — not from
+       the player. That is the difference: awareness leaks a couple of cells past the EDGE of your
+       sight, round the door frame you are looking at and past the corner you can see the face of,
+       rather than radiating from your feet through walls you have never laid eyes on.
+       It used to be two unrelated mechanisms: a sight pass and a six-step flood from the player. */
+    const seed: CellRec[] = [];
     const R = FOG_LOS_RANGE;
     for (let dr = -R; dr <= R; dr++) {
       for (let dc = -R; dc <= R; dc++) {
-        if (dc * dc + dr * dr > R * R) continue;            // a circle, not a square
-        const target = this.cellIndex.get(this.cellKey(start.stratum, start.col + dc, start.row + dr));
-        if (!target || target.explored) continue;
-        if (this.sightClear(start, start.col + dc, start.row + dr)) { target.explored = true; this.exploredCount++; }
+        if (dc * dc + dr * dr > R * R) continue;             // a circle, not a square
+        const t = this.cellIndex.get(this.cellKey(start.stratum, start.col + dc, start.row + dr));
+        if (!t) continue;
+        if (!this.sightClear(start, start.col + dc, start.row + dr)) continue;
+        if (!t.explored) { t.explored = true; this.exploredCount++; }
+        seed.push(t);
       }
     }
+
+    // the spread: a bounded BFS from EVERY visible cell at once
+    const steps: ReadonlyArray<readonly [number, number, number]> = [
+      [1, 1, 0], [2, -1, 0], [4, 0, 1], [8, 0, -1],
+    ];
+    let frontier = seed;
+    const seen = new Set<number>(seed.map((c) => this.cellKey(c.stratum, c.col, c.row)));
+    for (let depth = 0; depth < FOG_SPREAD; depth++) {
+      const next: CellRec[] = [];
+      for (const rec of frontier) {
+        for (const [bit, dc, dr] of steps) {
+          if ((rec.wallMask & bit) !== 0) continue;          // awareness does not pass a wall
+          const nb = this.cellIndex.get(this.cellKey(rec.stratum, rec.col + dc, rec.row + dr));
+          if (!nb || !nb.walkable) continue;
+          const k = this.cellKey(nb.stratum, nb.col, nb.row);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          if (!nb.explored) { nb.explored = true; this.exploredCount++; }
+          next.push(nb);
+        }
+      }
+      frontier = next;
+    }
+    if (this.exploredCount !== before) this.fogDirty = true;
   }
 
   /** Is the straight line from `from` to (col,row) unobstructed? See `traceSight`. */
@@ -1192,31 +1212,6 @@ export class Dungeon {
     });
   }
 
-  private floodReveal(start: CellRec): void {
-    // wallMask bits: 1=+X(col+1) 2=-X(col-1) 4=+Z(row+1) 8=-Z(row-1)
-    const steps: ReadonlyArray<readonly [number, number, number]> = [
-      [1, 1, 0], [2, -1, 0], [4, 0, 1], [8, 0, -1],
-    ];
-    const queue: { rec: CellRec; depth: number }[] = [{ rec: start, depth: 0 }];
-    const seen = new Set<number>([this.cellKey(start.stratum, start.col, start.row)]);
-    while (queue.length) {
-      const { rec, depth } = queue.shift()!;
-      // count it, or the mask never learns. `exploredCount` is what marks the texture dirty, and the
-      // flood used to set the flag straight — so a cell revealed ONLY by the flood stayed inked until
-      // some unrelated sight reveal happened to bump the counter.
-      if (!rec.explored) { rec.explored = true; this.exploredCount++; }
-      if (depth >= FOG_BFS_DEPTH) continue;
-      for (const [bit, dc, dr] of steps) {
-        if ((rec.wallMask & bit) !== 0) continue; // a wall on this side blocks the flow
-        const nb = this.cellIndex.get(this.cellKey(rec.stratum, rec.col + dc, rec.row + dr));
-        if (!nb || !nb.walkable) continue;
-        const key = this.cellKey(nb.stratum, nb.col, nb.row);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        queue.push({ rec: nb, depth: depth + 1 });
-      }
-    }
-  }
 
   /**
    * OCCLUSION CUTAWAY (issue 1): fade out any wall that sits BETWEEN the camera and the
@@ -1295,8 +1290,11 @@ export class Dungeon {
     const start = this.cellAt(px, py, pz);
     if (!start) return;
     const startKey = this.cellKey(start.stratum, start.col, start.row);
-    if (startKey === this.lastCullCell) return;      // nothing moved; the answer is unchanged
+    // re-run when the player MOVED CELL or when something new was revealed; otherwise the answer is
+    // unchanged and walking the whole tower would be pure waste
+    if (startKey === this.lastCullCell && this.exploredCount === this.lastCullExplored) return;
     this.lastCullCell = startKey;
+    this.lastCullExplored = this.exploredCount;
 
     const dist = this.routeDistances(start);
     for (const cell of this.cells) {
@@ -1325,7 +1323,9 @@ export class Dungeon {
    * not even ink, because a block of ink floating above or below the player is worse than an absence.
    */
   private setCellShown(cell: CellRec, shown: boolean): void {
-    cell.group.visible = shown && cell.explored;
+    const lit = shown && cell.explored;
+    cell.group.visible = lit;
+    cell.reveal = lit ? 1 : 0;
     if (cell.fog) cell.fog.visible = shown && !cell.explored;
   }
 

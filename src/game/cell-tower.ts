@@ -35,8 +35,8 @@
 
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
-import { blocks, isStairFloor, type Cell } from '../floor/cell.ts';
-import { gridPlacements, openingAt, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
+import { blocks, isStairFloor, seesThrough, type Cell } from '../floor/cell.ts';
+import { gridPlacements, moduleAt, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
 import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
 import { getApproved, type ApprovedBox } from './approved-assets.ts';
 import {
@@ -258,13 +258,17 @@ export function sightMask2u(cells: readonly (Cell | null)[], w: number, h: numbe
   if (!me) return 0;                     // off the map stops nothing; the caller bounds the trace
   const south = at(col, row + 1), east = at(col + 1, row);
 
-  /* An opening is centred on a POINT and covers the two collinear edges either side of it, so an edge
-     is seen through if a module sits at either of its endpoints. Same rule `cell-place` uses to decide
-     which wall segments an opening replaces. */
-  const seeThroughH = (px: number, py: number): boolean =>
-    openingAt(cells, w, h, px, py, 'H') || openingAt(cells, w, h, px + 1, py, 'H');
-  const seeThroughV = (px: number, py: number): boolean =>
-    openingAt(cells, w, h, px, py, 'V') || openingAt(cells, w, h, px, py + 1, 'V');
+  /* A module is centred on a POINT and covers the two collinear edges either side of it, so an edge is
+     seen through if a see-through module sits at either of its endpoints. Same geometry `cell-place`
+     uses to decide which wall segments a module replaces — but gated on `seesThrough`, not on
+     passability: a closed door stops the eye and a portcullis does not, and neither of those is the
+     same as whether you can walk through. */
+  const clear = (px: number, py: number, axis: 'H' | 'V'): boolean => {
+    const c = at(px, py);
+    return !!c && seesThrough(c.wallType, c.open) && moduleAt(cells, w, h, px, py, axis);
+  };
+  const seeThroughH = (px: number, py: number): boolean => clear(px, py, 'H') || clear(px + 1, py, 'H');
+  const seeThroughV = (px: number, py: number): boolean => clear(px, py, 'V') || clear(px, py + 1, 'V');
 
   let m = 0;
   if (east && blocks(east.wallW) && !seeThroughV(col + 1, row)) m |= 1;   // +X  east
