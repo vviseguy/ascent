@@ -103,8 +103,9 @@ const FOG_BFS_DEPTH = 6;
 /** How far line of sight reaches. Sight is stopped by walls, so this is only a cap on the cost of
  *  the trace — a long hall reveals its whole length, a corridor reveals as far as its first turn. */
 const FOG_LOS_RANGE = 24;
-/** How big the hole is, as a fraction of the smaller screen dimension. */
-const CUT_RADIUS_FRAC = 0.10;
+/** How big the hole is, as a fraction of the smaller screen dimension. Overridable live with
+ *  `?cut=<frac>` so it can be judged on a real screen rather than guessed at from a constant. */
+const CUT_RADIUS_FRAC = 0.17;
 /** Pulled toward the camera so the player's own cell and the ground they stand on are never cut. */
 const CUT_DEPTH_BIAS = 0.0008;
 /** Centre the hole on the player's CHEST rather than their feet, so it frames them. */
@@ -252,6 +253,8 @@ export class Dungeon {
     this.classicShell = params.get('shell') === 'classic';
     this.fogOff = params.get('fog') === 'off';
     this.fogBoxes = params.get('fog') === 'boxes';
+    const cut = Number(params.get('cut'));
+    if (Number.isFinite(cut) && cut >= 0 && cut <= 1) this.cutRadiusFrac = cut;
     this.bareTemplates = params.get('bare') === '1';
 
     // THE TILING ARRAYS MUST EXIST BEFORE THE FIRST RECOLOR.
@@ -426,6 +429,8 @@ export class Dungeon {
   private readonly fogTexU: { value: THREE.Texture | null } = { value: null };
   /** `?fog=boxes` restores the old drawn-over cubes, for comparison. */
   private fogBoxes = false;
+  /** The cut's radius as a fraction of the smaller screen side; `?cut=` overrides it. */
+  private cutRadiusFrac = CUT_RADIUS_FRAC;
   /**
    * Urls the IR asked for that no template was loaded for. A missing template used to be a bare
    * `return` and that is how fifteen percent of the world went missing without a word — the compiler
@@ -1186,7 +1191,7 @@ export class Dungeon {
     // otherwise the hole sits at a fraction of the right place on any HiDPI screen.
     const px = (this._v.x * 0.5 + 0.5) * screen.w * screen.dpr;
     const py = (this._v.y * 0.5 + 0.5) * screen.h * screen.dpr;
-    const radius = Math.min(screen.w, screen.h) * screen.dpr * CUT_RADIUS_FRAC;
+    const radius = Math.min(screen.w, screen.h) * screen.dpr * this.cutRadiusFrac;
     // window-space depth, pulled slightly toward the camera so the player's own cell is never cut
     const depth = (this._v.z * 0.5 + 0.5) - CUT_DEPTH_BIAS;
     this.cutUniform.value.set(px, py, radius, depth);
