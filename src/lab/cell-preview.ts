@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat } from '../sim/fixed/fixed.ts';
-import { gridPlacements, type CellPlacement } from '../floor/cell-place.ts';
+import { gridPlacements, type CellPlacement, type GridOptions } from '../floor/cell-place.ts';
 import type { Cell } from '../floor/cell.ts';
 
 /** Quarter-turn → radians, matching the authority's CCW turns (3 → −90° = 270°). */
@@ -66,9 +66,9 @@ function template(url: string): Promise<THREE.Object3D> {
 }
 
 /** Preload every mesh a grid needs, so building the scene does not pop in piece by piece. */
-export async function preloadFor(cells: readonly (Cell | null)[], w: number, h: number, floorExtent?: { w: number; h: number }): Promise<void> {
+export async function preloadFor(cells: readonly (Cell | null)[], w: number, h: number, floorExtent?: { w: number; h: number }, opts: GridOptions = {}): Promise<void> {
   const urls = new Set<string>();
-  for (const e of gridPlacements(cells, w, h, floorExtent)) for (const p of e.placements) urls.add(p.url);
+  for (const e of gridPlacements(cells, w, h, floorExtent, opts)) for (const p of e.placements) urls.add(p.url);
   await Promise.all([...urls].sort().map((u) => template(u).catch(() => new THREE.Object3D())));
 }
 
@@ -76,10 +76,10 @@ export async function preloadFor(cells: readonly (Cell | null)[], w: number, h: 
  * Build the group for a resolved grid. Placements are CELL-LOCAL, so each is offset by its cell's
  * world position — the same offset the tower applies when it lowers cells into the world.
  */
-export async function buildGrid(cells: readonly (Cell | null)[], w: number, h: number, floorExtent?: { w: number; h: number }): Promise<THREE.Group> {
+export async function buildGrid(cells: readonly (Cell | null)[], w: number, h: number, floorExtent?: { w: number; h: number }, opts: GridOptions = {}): Promise<THREE.Group> {
   const group = new THREE.Group();
-  await preloadFor(cells, w, h, floorExtent);
-  for (const { x, y, placements } of gridPlacements(cells, w, h, floorExtent)) {
+  await preloadFor(cells, w, h, floorExtent, opts);
+  for (const { x, y, placements } of gridPlacements(cells, w, h, floorExtent, opts)) {
     // cell centre in world space, with the grid centred on the origin so orbiting feels right
     const cx = (x - (w - 1) / 2) * CELL;
     const cz = (y - (h - 1) / 2) * CELL;

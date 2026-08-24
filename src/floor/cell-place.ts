@@ -382,6 +382,34 @@ function endContinues(
   return blocks(wallOn(cells, w, h, ax, ay, d)) || blocks(wallOn(cells, w, h, bx, by, d));
 }
 
+/**
+ * Can you get OFF the top of a flight that climbs `d` — is the storey above open over its head cells?
+ *
+ * A flight climbs into a wall, so the ceiling is its only exit. `floor: 'none'` up there is a hole to
+ * climb through; anything else is a deck you would hit. With no storey above (a single-level structure,
+ * or the top of the tower) there is nothing to be blocked BY, so this answers false for every
+ * direction and the caller falls through to its other rule rather than picking arbitrarily.
+ */
+function ceilingOpen(
+  above: readonly (Cell | null)[] | undefined, w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir,
+): boolean {
+  if (!above) return false;
+  const at = (cx: number, cy: number): Cell | null =>
+    cx < 0 || cy < 0 || cx >= w || cy >= h ? null : above[cy * w + cx] ?? null;
+  // the cells at the `d` end of the block — where you arrive
+  const cells: [number, number][] = [];
+  if (d === 'N' || d === 'S') {
+    const row = d === 'N' ? y : y + bh - 1;
+    for (let i = 0; i < bw; i++) cells.push([x + i, row]);
+  } else {
+    const col = d === 'W' ? x : x + bw - 1;
+    for (let j = 0; j < bh; j++) cells.push([col, y + j]);
+  }
+  // EVERY head cell must be open: a hole over half the flight is a hole you can fall down, not an exit
+  return cells.every(([cx, cy]) => at(cx, cy)?.floor === 'none');
+}
+
 /** Everything both the placer and the diagnostic need, worked out ONCE so they cannot disagree. */
 interface Geometry {
   mat: FloorMaterial;
@@ -392,6 +420,7 @@ interface Geometry {
 
 function flightGeometry(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+  above?: readonly (Cell | null)[],
 ): { ok: Geometry } | { fault: StairFault } | null {
   const mat = stairMat(cells, w, h, x, y);
   if (mat === null) return null;
@@ -417,13 +446,28 @@ function flightGeometry(
   if (vAxis !== hAxis) {
     vertical = vAxis;
   } else {
-    /* BOTH axes look like a climb, which is what a staircase in a corner looks like. Prefer the one
-       whose head wall STOPS at the block — that is the stair's own head rather than a wall it stands
-       beside. Corner of a room, where both walls run on: nothing distinguishes them, so take the
-       vertical reading and let the editor report it, which closes the loop for the author. */
-    const vOwn = !endContinues(cells, w, h, x, y, bw, bh, closed.N ? 'N' : 'S');
-    const hOwn = !endContinues(cells, w, h, x, y, bw, bh, closed.W ? 'W' : 'E');
-    vertical = vOwn === hOwn ? true : vOwn;
+    /* BOTH axes look like a climb, which is what a staircase in a corner looks like. Two things can
+       tell them apart, and the CEILING is the better one, so it is asked first.
+
+       WHERE DOES THE FLIGHT ARRIVE? It climbs into a wall — that is how its direction is derived — so
+       the only way off the top is through the storey above. One reading may arrive under a hole and
+       the other under solid floor, and a flight that climbs into a closed ceiling is simply the wrong
+       reading of the same walls. That is only answerable with the storey above in hand, which is why
+       it is threaded this far down.
+
+       Failing that (one storey, or both ends equally open above), fall back to which head wall STOPS
+       at the block: a wall that runs on past it is one the stair stands beside, not its own head. */
+    const vDir: Dir = closed.N ? 'N' : 'S';
+    const hDir: Dir = closed.W ? 'W' : 'E';
+    const vSky = ceilingOpen(above, w, h, x, y, bw, bh, vDir);
+    const hSky = ceilingOpen(above, w, h, x, y, bw, bh, hDir);
+    if (vSky !== hSky) {
+      vertical = vSky;
+    } else {
+      const vOwn = !endContinues(cells, w, h, x, y, bw, bh, vDir);
+      const hOwn = !endContinues(cells, w, h, x, y, bw, bh, hDir);
+      vertical = vOwn === hOwn ? true : vOwn;
+    }
   }
 
   const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');
@@ -447,8 +491,9 @@ function flightGeometry(
 
 export function stairFlight(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+  above?: readonly (Cell | null)[],
 ): StairFlight | null {
-  const g = flightGeometry(cells, w, h, x, y);
+  const g = flightGeometry(cells, w, h, x, y, above);
   if (!g || !('ok' in g)) return null;
   const { mat, bw, bh, up, width, run, walls } = g.ok;
 
@@ -478,8 +523,9 @@ export type StairFault =
 
 export function stairFault(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+  above?: readonly (Cell | null)[],
 ): StairFault | null {
-  const g = flightGeometry(cells, w, h, x, y);
+  const g = flightGeometry(cells, w, h, x, y, above);
   return g && 'fault' in g ? g.fault : null;
 }
 
@@ -498,12 +544,15 @@ export function stairFaultText(f: StairFault): string {
 }
 
 /** Is this cell inside a flight owned by another cell? Such a cell contributes no ground of its own. */
-function insideFlight(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number): StairFlight | null {
+function insideFlight(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
+  above?: readonly (Cell | null)[],
+): StairFlight | null {
   const mat = stairMat(cells, w, h, x, y);
   if (mat === null) return null;
   for (let oy = y; oy >= 0 && isStairs(cells, w, h, x, oy, mat); oy--) {
     for (let ox = x; ox >= 0 && isStairs(cells, w, h, ox, oy, mat); ox--) {
-      const f = stairFlight(cells, w, h, ox, oy);
+      const f = stairFlight(cells, w, h, ox, oy, above);
       if (f && x >= f.x && x < f.x + f.bw && y >= f.y && y < f.y + f.bh) return f;
     }
   }
@@ -512,9 +561,12 @@ function insideFlight(cells: readonly (Cell | null)[], w: number, h: number, x: 
 
 /** Does a WALLED flight already draw the wall on side `d` of (x,y)? Its mesh carries its own sides, so
  *  emitting the cell wall too would double them. */
-function flightCoversWall(cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, d: 'N' | 'W'): boolean {
+function flightCoversWall(
+  cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number, d: 'N' | 'W',
+  above?: readonly (Cell | null)[],
+): boolean {
   for (const [cx, cy] of [[x, y], [x - 1, y], [x, y - 1]] as [number, number][]) {
-    const f = insideFlight(cells, w, h, cx, cy);
+    const f = insideFlight(cells, w, h, cx, cy, above);
     if (f === null || f.walls === 0) continue;
     // ONLY the side the chosen mesh actually carries — a one-sided variant must not silently delete
     // the wall on the side it does not draw
@@ -624,6 +676,7 @@ export const torchFacing = (
 export function cellPlacements(
   cells: readonly (Cell | null)[], w: number, h: number, x: number, y: number,
   floorExtent?: { w: number; h: number },
+  above?: readonly (Cell | null)[],
 ): CellPlacement[] {
   const c = cellAt(cells, w, h, x, y);
   if (!c || c.floor === 'rock') return [];
@@ -641,7 +694,7 @@ export function cellPlacements(
   /* STAIRS replace the ground of a whole BLOCK with one flight, drawn by the block's origin and
      centred on it. A cell inside someone else's flight draws nothing; a `stairs` cell that is not part
      of any flight (ragged, or with no end closed) falls back to ordinary ground. */
-  const flight = stairFlight(cells, w, h, x, y);
+  const flight = stairFlight(cells, w, h, x, y, above);
   if (flight && inFloor) {
     /* The block centre, relative to the origin cell centre, in cell-local (= world) units — then pushed
        UP-SLOPE by half the run, because the mesh pivots on its top end rather than its middle. */
@@ -651,7 +704,7 @@ export function cellPlacements(
     const cz = add(fromInt(flight.bh - 1 + sz * flight.run), mul(fromInt(-sz), STAIR_OUT));
     out.push(at(flight.url, STAIR_TURN[flight.up], cx, cz, ONE, FLOOR_SURFACE));
   } else if (isStairFloor(c.floor)) {
-    if (!insideFlight(cells, w, h, x, y) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
+    if (!insideFlight(cells, w, h, x, y, above) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
   } else if (c.floor !== 'none' && inFloor) {
     out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
   }
@@ -754,6 +807,7 @@ const CORNER_TURN: Record<string, number> = { WS: 0, SE: 1, EN: 2, NW: 3 };
 export function wallEdgePlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
   floorExtent?: { w: number; h: number },
+  above?: readonly (Cell | null)[],
 ): Map<number, CellPlacement[]> {
   const fw = floorExtent?.w ?? w, fh = floorExtent?.h ?? h;
   const out = new Map<number, CellPlacement[]>();
@@ -791,7 +845,7 @@ export function wallEdgePlacements(
       if (!fam) return NO_EDGE;                                       // no wall in the model
       if (moduleAxis(cells, w, h, px, py) === 'H') return { by: 'module' };
       if (moduleAt(cells, w, h, px + 1, py, 'H')) return { by: 'module' };
-      if (flightCoversWall(cells, w, h, px, py, 'N')) return { by: 'flight' };
+      if (flightCoversWall(cells, w, h, px, py, 'N', above)) return { by: 'flight' };
       return { by: 'run', fam };
     }
     if (py >= fh) return NO_EDGE;
@@ -799,7 +853,7 @@ export function wallEdgePlacements(
     if (!fam) return NO_EDGE;
     if (moduleAxis(cells, w, h, px, py) === 'V') return { by: 'module' };
     if (moduleAt(cells, w, h, px, py + 1, 'V')) return { by: 'module' };
-    if (flightCoversWall(cells, w, h, px, py, 'W')) return { by: 'flight' };
+    if (flightCoversWall(cells, w, h, px, py, 'W', above)) return { by: 'flight' };
     return { by: 'run', fam };
   };
 
@@ -931,15 +985,26 @@ export function wallEdgePlacements(
  * The whole grid: what each cell owns, plus the walls laid across it. This is THE producer — the
  * renderer and the collision compiler both read it, so they agree by construction.
  */
+export interface GridOptions {
+  /**
+   * The storey ABOVE, when there is one. Used for ONE thing: breaking a tie between two possible stair
+   * directions. A flight climbs into a wall, so the ceiling is its only way out — of two readings of
+   * the same walls, the one arriving under a hole is right and the one arriving under solid deck is
+   * not. Nothing else consults it, and omitting it costs only that tiebreak.
+   */
+  above?: readonly (Cell | null)[];
+}
+
 export function gridPlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
   floorExtent?: { w: number; h: number },
+  opts: GridOptions = {},
 ): { x: number; y: number; placements: CellPlacement[] }[] {
-  const walls = wallEdgePlacements(cells, w, h, floorExtent);
+  const walls = wallEdgePlacements(cells, w, h, floorExtent, opts.above);
   const out: { x: number; y: number; placements: CellPlacement[] }[] = [];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const placements = cellPlacements(cells, w, h, x, y, floorExtent);
+      const placements = cellPlacements(cells, w, h, x, y, floorExtent, opts.above);
       const wp = walls.get(y * w + x);
       if (wp) placements.push(...wp);
       if (placements.length) out.push({ x, y, placements });

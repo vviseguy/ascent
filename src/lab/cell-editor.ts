@@ -1420,7 +1420,9 @@ async function rebuild3d(): Promise<void> {
   const shown = viewAll ? Array.from({ length: LEVELS }, (_, i) => i) : [L];
   const group = new THREE.Group();
   for (const i of shown) {
-    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H });
+    // the storey above breaks a tie between two possible stair directions — see `GridOptions.above`
+    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H },
+      i + 1 < LEVELS ? { above: resolvedLevel(i + 1) } : {});
     deck.position.y = toFloat(FLOOR_HEIGHT) * i;
     group.add(deck);
   }
