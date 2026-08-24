@@ -308,8 +308,13 @@ const STAIR_MESHES = [
   { url: PIECE.stairsWood, mat: 'stairs_wood', run: 3, across: 2, walls: 0 },   // 3.30 x 6.00
   { url: PIECE.stairsWide, mat: 'stairs', run: 2, across: 3, walls: 0 },        // 7.00 x 4.00 = 6u + 0.5
   { url: PIECE.stairsWalled, mat: 'stairs', run: 2, across: 2, walls: 2 },      // 5.00 x 4.00 = 4u + 0.5
-  { url: PIECE.stairsWallLeft, mat: 'stairs', run: 2, across: 2, walls: -1 },   // 4.00 x 5.00, wall at -X
-  { url: PIECE.stairsWallRight, mat: 'stairs', run: 2, across: 2, walls: 1 },   // 4.00 x 5.00, wall at +X
+  /* THE NAMES ARE THE OTHER WAY ROUND ONCE THEY ARE TURNED THE RIGHT WAY UP, and that is not a typo.
+     `MESH_YAW_FIX` gives these two OPPOSITE quarter-turns, because they are mirror images. A mirror
+     exchanges left and right, so the side each one's wall ends up on is the opposite of the side its
+     filename claims. `_left` supplies the climber's RIGHT-hand wall and `_right` the LEFT.
+     Verified by eye, which is the only way this can be checked: `cell-snap.html?assets=stairs`. */
+  { url: PIECE.stairsWallRight, mat: 'stairs', run: 2, across: 2, walls: -1 },  // wall on the climber's LEFT
+  { url: PIECE.stairsWallLeft, mat: 'stairs', run: 2, across: 2, walls: 1 },    // wall on the climber's RIGHT
   { url: PIECE.stairsBanister, mat: 'stairs', run: 2, across: 2, walls: 0 },    // 5.00 wide, 3.50 tread
 ] as const satisfies readonly { url: string; mat: FloorMaterial; run: number; across: number; walls: number }[];
 
@@ -361,6 +366,20 @@ const STAIR_TURN = { N: 0, W: 1, S: 2, E: 3 } as const;
  * this table. Until someone owns the art, correcting at the placement is the honest version: it is one
  * table, next to the constant it corrects, and it says which meshes are wrong and how.
  */
+/**
+ * WHERE A STAIR MESH'S FOOTPRINT CENTRE SITS, in its own local frame, in HALF-CELL units.
+ *
+ * MEASURED across all six (`cell-snap.html?assets=stairs`): every one spans its run from Z 0 to 4 and
+ * is centred in X, so its origin is at the middle of one END rather than at the middle of the mesh.
+ * Two units along +Z, nothing across. The same for the odd pair, whose extents are Z [-0.5, 4.5] —
+ * still centred on 2.
+ *
+ * It is a VECTOR rather than a scalar "push it up-slope by half the run" because a vector rotates and
+ * a rule of thumb does not. The old phrasing was only ever right while every mesh's local -Z was world
+ * up-slope; the moment two of them needed turning it put those flights two cells off their blocks.
+ */
+const MESH_PIVOT: readonly [number, number] = [0, 2];
+
 const MESH_YAW_FIX: Record<string, number> = {
   [PIECE.stairsWallLeft]: 3,
   [PIECE.stairsWallRight]: 1,
@@ -1018,18 +1037,20 @@ export function cellPlacements(
        NOTHING ELSE. There was a 0.05 lift onto the deck's walking surface and a 0.12 nudge downhill to
        clear wall trim; both are gone. The PIVOT correction stays — it is not a tweak, it is what puts
        the mesh on its own block at all. */
-    /* THE PIVOT CORRECTION HAS TO TURN WITH THE MESH. The offset below exists because a flight pivots
-       on its TOP end, not its middle, so it is pushed half a run up-slope to land on its own block —
-       and "up-slope" is a direction in the mesh's LOCAL frame. Give a mesh an extra quarter-turn
-       (`MESH_YAW_FIX`) and that local direction rotates too; leave the offset alone and the flight is
-       rotated correctly but placed up to two cells off its block, which reads as the stairs vanishing
-       into a wall. Rotating +90 about Y maps (x,z) -> (z,-x). */
-    const fix = MESH_YAW_FIX[flight.url] ?? 0;
-    let [sx, sz] = STEP[flight.up];
-    for (let k = 0; k < fix; k++) [sx, sz] = [sz, -sx];
+    /* CENTRE THE MESH ON ITS BLOCK — by its own footprint, not by a rule about where it pivots.
+       This used to push the mesh half a run UP-SLOPE, on the reasoning that "a flight pivots on its
+       top end". That is not what these meshes do. MEASURED, every one of them: the footprint centre
+       sits at local (0, +2) — centred across, two units along +Z — so the origin is at the middle of
+       one edge, not at the top of the run. The up-slope push happened to give the right answer only
+       while local -Z was world up-slope, and stopped the moment `MESH_YAW_FIX` turned two of them.
+       The general rule has no special case: put the origin where the footprint centre lands on the
+       block centre, which means stepping BACK along the rotated pivot vector.
+       Rotating +90 about Y maps (x,z) -> (z,-x). */
+    let [px, pz] = MESH_PIVOT;
+    for (let k = 0, t = stairTurn(flight.url, flight.up); k < t; k++) [px, pz] = [pz, -px];
     out.push(at(
       flight.url, stairTurn(flight.url, flight.up),
-      fromInt(flight.bw - 1 + sx * flight.run), fromInt(flight.bh - 1 + sz * flight.run),
+      fromInt(flight.bw - 1 - px), fromInt(flight.bh - 1 - pz),
     ));
   } else if (isStairFloor(c.floor)) {
     if (!insideFlight(cells, w, h, x, y, above) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
