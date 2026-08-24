@@ -300,14 +300,19 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         // normal. Picking the plane from abs(normal) alone ignores which WAY the face points, and
         // then cross(T,B) equals -Y / -X / +Z for the three cases — so every up-facing surface, and
         // every face on the negative side of its axis, gets a mirrored frame and its bumps light as
-        // dents. Flipping B fixes the frame; flipping V with it keeps the albedo sampling in the
-        // same parameterisation, so grain and relief stay registered to each other.
+        // dents. The correction has to mirror an axis to restore handedness — see below for which.
         'void planarFrame(float inv, out vec2 uv, out vec3 T, out vec3 B, out vec3 Ng){',
         '  vec3 wn = abs(vWNor); vec3 wp = vWPos * inv; Ng = normalize(vWNor);',
         '  if ( wn.y >= wn.x && wn.y >= wn.z ) { uv = wp.xz; T = vec3(1.,0.,0.); B = vec3(0.,0.,1.); }',
         '  else if ( wn.x >= wn.z )            { uv = wp.zy; T = vec3(0.,0.,1.); B = vec3(0.,1.,0.); }',
         '  else                                { uv = wp.xy; T = vec3(1.,0.,0.); B = vec3(0.,1.,0.); }',
-        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { B = -B; uv.y = -uv.y; }',
+        // Mirror U, never V. Box-planar hands the front and back of a wall the SAME uv (both are
+        // Z-dominant) with OPPOSITE normals, so on one of them the frame is left-handed and the
+        // relief lights inside-out. Either axis fixes the handedness — but seeing a surface from
+        // the other side is a HORIZONTAL mirror, so flipping U corrects it while leaving the
+        // pattern the right way up. Flipping V corrects the lighting and stands the texture on its
+        // head, which is worse: wrong relief reads as odd, upside-down masonry reads as broken.
+        '  if ( dot( cross( T, B ), Ng ) < 0.0 ) { T = -T; uv.x = -uv.x; }',
         '}',
       ].join('\n'))
       // after the baked albedo: apply grain / albedo and stash surface terms for the chunks below.
