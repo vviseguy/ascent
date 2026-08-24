@@ -781,9 +781,29 @@ export class Dungeon {
             float deck = uFogB.z + fst * uFogB.w;
             if (vFogWorld.y > deck + uFogLift
                 && fcol >= 0.0 && fcol < uFogA.w && frow >= 0.0 && frow < uFogB.x) {
-              float tx = (fcol + 0.5) / uFogA.w;
-              float ty = (fst * uFogB.x + frow + 0.5) / (uFogB.x * uFogB.y);
-              if (texture2D(uFogMask, vec2(tx, ty)).r < 0.5) discard;
+              /* A WALL BELONGS TO A BOUNDARY, NOT TO A CELL. It straddles the line between two of
+                 them, so its two faces land in DIFFERENT cells — and a wall between explored and
+                 unexplored ground had exactly half of it clipped, which reads as the wall simply
+                 not being there.
+                 So a fragment asks about its own cell AND about anything within a hair under half a
+                 cell of it: near a boundary that reaches across into the neighbour, and a piece
+                 sitting in the MIDDLE of a cell cannot reach anything, so it still obeys its own
+                 cell. The visibility rule propagates to the walls without the walls needing to know
+                 whose they are. */
+              float e = uFogA.z * 0.45;
+              float vis = 0.0;
+              for (int i = 0; i < 5; i++) {
+                vec2 o = i == 0 ? vec2(0.0, 0.0)
+                       : i == 1 ? vec2( e, 0.0) : i == 2 ? vec2(-e, 0.0)
+                       : i == 3 ? vec2(0.0,  e) : vec2(0.0, -e);
+                float c2 = floor((vFogWorld.x + o.x - uFogA.x) / uFogA.z + 0.5);
+                float r2 = floor((vFogWorld.z + o.y - uFogA.y) / uFogA.z + 0.5);
+                if (c2 < 0.0 || c2 >= uFogA.w || r2 < 0.0 || r2 >= uFogB.x) continue;
+                float tx = (c2 + 0.5) / uFogA.w;
+                float ty = (fst * uFogB.x + r2 + 0.5) / (uFogB.x * uFogB.y);
+                vis = max(vis, texture2D(uFogMask, vec2(tx, ty)).r);
+              }
+              if (vis < 0.5) discard;
             }
           }`,
         );
