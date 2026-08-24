@@ -145,7 +145,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 128,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -235,7 +235,7 @@
           "wallW": 2,
           "corner": 1,
           "wallType": 128,
-          "open": 3,
+          "open": 1,
           "torch": 1
         },
         {
@@ -329,7 +329,7 @@
           "torch": 1
         }
       ],
-      "savedAt": "2026-08-24T03:43:34.593Z"
+      "savedAt": "2026-08-24T04:12:26.935Z"
     },
     "spiral stairs": {
       "w": 8,
@@ -11797,281 +11797,227 @@
     },
     "walled stairs": {
       "w": 2,
-      "h": 4,
+      "h": 3,
       "levels": 2,
       "cells": [
         {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
           "floor": 32,
           "wallN": 2,
           "wallW": 2,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 32,
           "wallN": 2,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
           "wallW": 2,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 32,
           "wallN": 1,
           "wallW": 2,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 32,
           "wallN": 1,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
           "wallW": 2,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 2,
           "wallN": 1,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 2,
           "wallN": 1,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1
         },
         {
           "floor": 127,
-          "wallN": 1,
+          "wallN": 2,
           "wallW": 15,
-          "corner": 3,
+          "corner": 2,
           "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "open": 1,
+          "torch": 2
         },
         {
           "floor": 127,
-          "wallN": 1,
+          "wallN": 2,
           "wallW": 15,
           "corner": 1,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "wallType": 32,
+          "open": 2,
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
           "wallW": 15,
-          "corner": 3,
+          "corner": 2,
           "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 14,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 14,
-          "wallN": 15,
-          "wallW": 1,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "open": 1,
+          "torch": 2
         },
         {
           "floor": 1,
           "wallN": 1,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "wallW": 4,
+          "corner": 4,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 1,
           "wallN": 1,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "wallW": 4,
+          "corner": 4,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 1,
           "wallN": 1,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "wallW": 4,
+          "corner": 1,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 1,
           "wallN": 1,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "wallW": 4,
+          "corner": 1,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 1,
           "wallN": 1,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "wallW": 4,
+          "corner": 1,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
         },
         {
           "floor": 1,
           "wallN": 1,
           "wallW": 1,
           "corner": 1,
-          "wallType": 511,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 15,
+          "wallW": 4,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 4,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1
+        },
+        {
+          "floor": 127,
+          "wallN": 4,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1
         },
         {
           "floor": 127,
           "wallN": 15,
           "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
+          "corner": 1,
+          "wallType": 1,
           "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 15,
-          "corner": 3,
-          "wallType": 511,
-          "open": 3,
-          "torch": 3
+          "torch": 1
         }
       ],
-      "savedAt": "2026-08-22T21:44:09.790Z"
+      "savedAt": "2026-08-24T03:55:53.617Z"
     }
   }
 }
