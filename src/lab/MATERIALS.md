@@ -291,3 +291,33 @@ game  — 48 shaders,  1 with uTexArr     after
 One is the correct number for the game: the shared cache key means every recolored material in the
 scene resolves to a single program. If that count is ever 0, the tower is not tiled no matter what
 the lab looks like.
+
+## `?tex=` is a DELTA on `?profile=`, not an alternative
+
+The lab writes both to the URL, so a link means "this profile, with these overrides on top". The
+profile store loads over fetch, so its `setConfig` lands AFTER the initial `configFromParam` — and
+rebuilding from `DEFAULT_CONFIG` at that moment discards every type the link did not name.
+
+`overlayConfigParam` exists for that second pass: it writes the URL deltas onto the LIVE config
+rather than onto the defaults, and the profile bar’s `onApplied` calls it. Without it a shared or
+screenshotted `?tex=` link silently renders something other than what it says — which defeats the
+only reason the surface state round-trips through the URL. It cost two verification passes that
+appeared to do nothing before anyone noticed the parameter was being dropped.
+
+## The relief calibration texture
+
+`calibration` in the texture library is a measuring stick, not art: an UP arrow and the word UP on a
+known height profile. Point any preset at it and the surface answers three questions at once —
+is the pattern upright, is it mirrored, and does a ridge light as a ridge. Orientation bugs in a
+world-space projection are otherwise nearly invisible on rough stone and obvious only on sharp
+features, which is how an inverted normal survived several rounds of looking at it.
+
+Two orientation fixes live behind it, and they are INDEPENDENT — both were needed:
+
+| fix | scope | what was wrong |
+|---|---|---|
+| array upload flip | global | `DataArrayTexture` hard-sets `flipY = false`, so a canvas read put V=0 at the TOP and every normal map ran upside-down against the convention it was authored for |
+| mirror U on a left-handed frame | per face | box-planar hands the front and back of a wall the SAME uv with opposite normals; the frame is left-handed on one of them |
+
+Mirror **U**, never V. Either restores handedness, but seeing a surface from the other side is a
+horizontal mirror — flipping V corrects the lighting and stands the texture on its head.

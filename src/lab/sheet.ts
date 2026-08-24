@@ -30,7 +30,7 @@ import type { WorldObject, WorldObjectBuild } from './world-object.ts';
 import { buildTextureSettings, type TextureSettingsHandle } from './texture-settings.ts';
 import { mountProfileBar, type ProfileBarHandle } from './profile-bar.ts';
 import { captureCatalogDefaults, liveRev } from './material-profiles.ts';
-import { setConfig, getConfig, configFromParam, setRelief, reliefFromParam, setAOStrength, aoFromParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, overlayConfigParam, setRelief, reliefFromParam, setAOStrength, aoFromParam } from './texture-catalog.ts';
 import { ensureTilingTextures } from './recolor.ts';
 import { APPROVED_ASSETS, approvedProfile } from '../game/approved-assets.ts';
 
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
       profileBar = mountProfileBar({
         mount,
         initial: params.get('profile'),
-        onApplied: () => { texPanel?.resync(); void rebuildAll(); },
+        onApplied: () => { overlayConfigParam(params.get('tex')); texPanel?.resync(); void rebuildAll(); },
       });
     },
     extras: [

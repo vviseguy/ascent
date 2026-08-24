@@ -165,6 +165,30 @@ export function aoFromParam(param: string | null): number {
   return param != null && Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.7;
 }
 
+/**
+ * Overlay a `?tex=` string onto the LIVE config instead of onto the defaults.
+ *
+ * `?tex=` and `?profile=` are not alternatives — the URL writes both, so a link means "this profile,
+ * with these deltas on top". The profile store loads asynchronously, so its `setConfig` lands AFTER
+ * the initial `configFromParam`, and rebuilding from DEFAULT_CONFIG at that point silently discards
+ * every type the link did not mention. That is not a cosmetic ordering wrinkle: it made shared and
+ * screenshotted `?tex=` links quietly render something other than what they say, which defeats the
+ * only reason the state round-trips through the URL at all.
+ */
+export function overlayConfigParam(param: string | null): void {
+  if (!param) return;
+  const cfg = getConfig();
+  for (const entry of param.split(',')) {
+    const [p, tex, r, m] = entry.split(':');
+    if (!p || !(p in cfg)) continue;
+    const key = p as Preset;
+    if (tex && TEXTURE_BY_ID.has(tex)) cfg[key].texture = tex;
+    const rn = Number(r), mn = Number(m);
+    if (Number.isFinite(rn)) cfg[key].roughness = Math.min(1, Math.max(0, rn / 100));
+    if (Number.isFinite(mn)) cfg[key].metalness = Math.min(1, Math.max(0, mn / 100));
+  }
+}
+
 export function configFromParam(param: string | null): RecolorConfig {
   const cfg = structuredClone(DEFAULT_CONFIG);
   if (!param) return cfg;

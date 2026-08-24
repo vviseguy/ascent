@@ -56,7 +56,7 @@ import { buildSurfacePanel, syncSurfacePanel, type SurfacePanelHandle } from './
 import { dock, restoreDrawers, setDrawersVisible } from './drawers.ts';
 import { saveSurfaces, hiddenFor } from './face-surfaces.ts';
 import { buildApproveButton, approveObject } from './approve.ts';
-import { setConfig, getConfig, configFromParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
+import { setConfig, getConfig, configFromParam, overlayConfigParam, configToParam, setRelief, getRelief, reliefFromParam, reliefToParam, setAOStrength, getAOStrength, aoFromParam, aoToParam } from './texture-catalog.ts';
 
 // Load GLB textures as <img>, not ImageBitmap: the recolor BAKE reads the atlas pixels via a 2D
 // canvas, and `drawImage` works on every backend for an <img> but is refused for an ImageBitmap by
@@ -636,7 +636,9 @@ async function boot(): Promise<void> {
           initial: params.get('profile'),
           // a profile REPLACES the live config wholesale, so every widget in the panel has to be
           // pulled back into line before the re-bake — otherwise the sliders lie about what is on.
-          onApplied: () => { texPanel?.resync(); void rebuildObject(); },
+          // a link means PROFILE + deltas: re-apply the URL's tex overrides on top of the
+          // profile, or the async profile load silently discards them (see overlayConfigParam)
+          onApplied: () => { overlayConfigParam(params.get('tex')); texPanel?.resync(); void rebuildObject(); },
         });
       },
       extras: [
