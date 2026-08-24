@@ -254,6 +254,10 @@ async function boot(): Promise<void> {
   // surfaced in the HUD timing readout alongside the per-fit box-fit time.
   const buildStart = performance.now();
   const params = new URLSearchParams(location.search);
+  /** ?yaw=<deg> — rotate the OBJECT about Y. Orbiting the camera leaves every face pointing the same
+   *  way relative to the light, so it cannot answer "does this surface respond to its facing?".
+   *  Turning the object does. Diagnostic only; it does not touch the fit or the bake. */
+  const OBJECT_YAW = ((Number(params.get('yaw')) || 0) * Math.PI) / 180;
   const elIds = [...elements.keys()].sort();
   const objIds = [...objects.keys()].sort();
   const objId = params.get('object');
@@ -389,6 +393,7 @@ async function boot(): Promise<void> {
   ground.receiveShadow = true;
   scene.add(ground);
 
+  built.root.rotation.y = OBJECT_YAW;
   scene.add(built.root);
 
   // COLLISION-BOX OVERLAY: the fitted footprint as a green wireframe hugging the mesh.
@@ -593,7 +598,8 @@ async function boot(): Promise<void> {
         disposeBuiltMaterials(built.root); // free the previous bake's textures (geometry is shared)
         built = next;
         footprint = next.footprint;
-        scene.add(built.root);
+        built.root.rotation.y = OBJECT_YAW;
+  scene.add(built.root);
         refit(); // re-fit boxes on the new root (also renders)
         onObjectRebuilt?.(); // the face picker holds mesh refs; the swap just invalidated them
       } finally {
