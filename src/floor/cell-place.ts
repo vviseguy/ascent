@@ -410,6 +410,35 @@ function ceilingOpen(
   return cells.every(([cx, cy]) => at(cx, cy)?.floor === 'none');
 }
 
+/**
+ * Can you get ON to a flight that climbs `d` — is there ground to walk in from at its FOOT?
+ *
+ * The foot is the open end, opposite the climb. Being unwalled is not enough: a flight whose entry
+ * faces a void, solid rock, or the edge of the map is one nobody can use, and that is the strongest
+ * evidence there is about which way it really goes. You can argue about which end is the head; you
+ * cannot argue about an entrance nobody can reach.
+ */
+function entryReachable(
+  cells: readonly (Cell | null)[], w: number, h: number,
+  x: number, y: number, bw: number, bh: number, d: Dir,
+): boolean {
+  // one cell beyond the foot, across the whole width of it
+  const [sx, sy] = STEP[d];
+  const beyond: [number, number][] = [];
+  if (d === 'N' || d === 'S') {
+    const row = d === 'N' ? y + bh - 1 : y;          // the foot row is the END OPPOSITE the climb
+    for (let i = 0; i < bw; i++) beyond.push([x + i, row - sy]);
+  } else {
+    const col = d === 'W' ? x + bw - 1 : x;
+    for (let j = 0; j < bh; j++) beyond.push([col - sx, y + j]);
+  }
+  // ONE walkable neighbour is enough — a flight entered from a doorway is entered from one cell
+  return beyond.some(([cx, cy]) => {
+    const c = cellAt(cells, w, h, cx, cy);
+    return !!c && c.floor !== 'none' && c.floor !== 'rock';
+  });
+}
+
 /** Everything both the placer and the diagnostic need, worked out ONCE so they cannot disagree. */
 interface Geometry {
   mat: FloorMaterial;
@@ -459,15 +488,32 @@ function flightGeometry(
        at the block: a wall that runs on past it is one the stair stands beside, not its own head. */
     const vDir: Dir = closed.N ? 'N' : 'S';
     const hDir: Dir = closed.W ? 'W' : 'E';
-    const vSky = ceilingOpen(above, w, h, x, y, bw, bh, vDir);
-    const hSky = ceilingOpen(above, w, h, x, y, bw, bh, hDir);
-    if (vSky !== hSky) {
-      vertical = vSky;
-    } else {
-      const vOwn = !endContinues(cells, w, h, x, y, bw, bh, vDir);
-      const hOwn = !endContinues(cells, w, h, x, y, bw, bh, hDir);
-      vertical = vOwn === hOwn ? true : vOwn;
-    }
+
+    /* WEIGHTED, because the three signals are not equally good evidence.
+
+       THE FOOT OUTWEIGHS EVERYTHING. A flight whose entry faces void, solid rock or the edge of the
+       map is one nobody can walk on to, and that settles the question outright — you can argue about
+       which end is the head, you cannot argue about an entrance nobody can reach.
+
+       THE CEILING IS NEXT. A flight climbs into a wall, so the storey above is its only exit; of two
+       readings the one arriving under a hole works and the one arriving under solid deck does not.
+       Strong, but only answerable when there IS a storey above.
+
+       THE HEAD WALL IS THE WEAKEST, and was the original rule: a wall that runs on past the block is
+       one the stair stands beside rather than its own head. A reasonable guess, and the one to fall
+       back on when nothing better is available.
+
+       Scored rather than ordered so a direction winning two weak signals can still lose to the strong
+       one — which is the whole reason for weighting instead of a chain of ifs. */
+    const score = (d: Dir): number =>
+      (entryReachable(cells, w, h, x, y, bw, bh, d) ? 4 : 0)
+      + (ceilingOpen(above, w, h, x, y, bw, bh, d) ? 2 : 0)
+      + (endContinues(cells, w, h, x, y, bw, bh, d) ? 0 : 1);
+
+    const vScore = score(vDir), hScore = score(hDir);
+    // a tie takes the vertical reading — arbitrary, but FIXED, and the editor reports which way it
+    // chose so an author can see it and move a wall
+    vertical = vScore >= hScore;
   }
 
   const up: Dir = vertical ? (closed.N ? 'N' : 'S') : (closed.W ? 'W' : 'E');

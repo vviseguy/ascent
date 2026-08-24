@@ -1,10 +1,15 @@
 // WHICH WAY DOES A CORNER STAIRCASE CLIMB?
 //
 // A flight climbs toward its walled end, so a block walled on two ADJACENT sides reads two ways and
-// the walls alone cannot say which. The old tiebreak asked which head wall stops at the block; that is
-// a decent guess and it is blind to the thing that actually settles it — a flight climbs INTO a wall,
-// so the ceiling is its only way out. Of two readings, the one arriving under a hole works and the one
-// arriving under solid deck does not.
+// the walls alone cannot say which. Three signals break it, WEIGHTED rather than ordered:
+//
+//   4  the FOOT is reachable   — is there ground to walk in from at the open end?
+//   2  the CEILING is open     — a flight climbs into a wall, so the storey above is its only exit
+//   1  the head wall is its OWN — a wall running on past the block is one it stands beside
+//
+// Scored rather than chained so a direction winning two weak signals can still lose to the strong
+// one. The foot outweighs the rest on purpose: you can argue about which end is the head, you cannot
+// argue about an entrance nobody can reach.
 
 import { describe, it, expect } from 'vitest';
 import { stairFlight } from './cell-place.ts';
@@ -73,6 +78,30 @@ describe('a corner staircase climbs toward the hole in the ceiling', () => {
   it('a solid ceiling over BOTH ends does not flip a coin — it defers, deterministically', () => {
     const solid = ceilingWithHoleAt([]);
     expect(stairFlight(corner(), W, H, 1, 1, solid)?.up).toBe(stairFlight(corner(), W, H, 1, 1)?.up);
+  });
+
+  it('the FOOT outweighs the ceiling — an entrance nobody can reach loses', () => {
+    /* North is made attractive by the ceiling (a hole over its head) and impossible at the foot: the
+       cells south of the block, where you would walk in from, are solid rock. West stays walkable.
+       The reading you can actually use must win. */
+    const cells = corner();
+    for (const x of [1, 2]) cells[3 * W + x]!.floor = 'rock';   // south of the block — north's foot
+    const above = ceilingWithHoleAt([[1, 1], [2, 1]]);          // ...and the ceiling favours north
+    expect(stairFlight(cells, W, H, 1, 1, above)).toMatchObject({ up: 'W' });
+  });
+
+  it('a foot facing VOID is as unusable as one facing rock', () => {
+    const cells = corner();
+    for (const x of [1, 2]) cells[3 * W + x]!.floor = 'none';
+    expect(stairFlight(cells, W, H, 1, 1)).toMatchObject({ up: 'W' });
+  });
+
+  it('ONE walkable neighbour at the foot is enough — a doorway is one cell wide', () => {
+    const cells = corner();
+    cells[3 * W + 1]!.floor = 'rock';                            // block half of north's entry
+    // north's foot is still reachable through (2,3), so the ceiling gets to decide as before
+    const above = ceilingWithHoleAt([[1, 1], [2, 1]]);
+    expect(stairFlight(cells, W, H, 1, 1, above)).toMatchObject({ up: 'N' });
   });
 
   it('the ceiling only breaks TIES — it never overrides an unambiguous flight', () => {
