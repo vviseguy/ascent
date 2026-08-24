@@ -17,6 +17,7 @@
 // check re-derives reachability from the finished tiles with none of that machinery. If the domain
 // bookkeeping were wrong, the two would disagree.
 
+import { storeFingerprint } from './cell-structures.ts';
 import { generateEmergent, resolveEmergent, type EmergentConfig } from './emergent.ts';
 import { buildCornerGraph, reachableFromSet, cornerCount, cornerId, cornerReachable } from './corner-graph.ts';
 import { tileOpening } from './wall-tile.ts';
@@ -182,6 +183,8 @@ controls.push({
 }
 
 console.log('ASCENT emergent generator - STANDALONE PROOF');
+// WHICH CONTENT this ran against — the store is authored live while sessions test against it.
+console.log(`store: ${storeFingerprint()}`);
 console.log(`floors generated            : ${floors}`);
 console.log(`  deterministic (2 runs)    : ${deterministic}/${floors}`);
 console.log(`  settled (no undecided)    : ${settled}/${floors}`);

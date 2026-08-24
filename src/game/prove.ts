@@ -40,6 +40,7 @@ import { clone, restoreInto } from '../sim/world/snapshot.ts';
 import { buildTower } from './scene.ts';
 import { compileCellTower } from './cell-tower.ts';
 import { generateEmergentTower } from '../floor/cell-emergent.ts';
+import { storeFingerprint } from '../floor/cell-structures.ts';
 import { resolveFloor } from '../floor/cell-defray.ts';
 import { drawOffer, boonById } from './boons.ts';
 import { generateFloor } from '../floor/generate.ts';
@@ -393,6 +394,9 @@ console.log('[8] END-TO-END — real Anchor climbs stratum 0 -> 1 (stick + jump 
 // statement: the check's own answer is handed to physics to falsify, and the graph does not
 // model lateral blockers, so the two really can disagree.
 console.log('[9] THE 2u TOWER — compiled route, then a real Anchor walking it');
+// WHICH CONTENT THIS RAN AGAINST. The store is authored live while sessions test against it; without
+// this, a comparison that straddles a save looks like a comparison. See `storeFingerprint`.
+console.log(`      store: ${storeFingerprint()}`);
 {
   const seeds: bigint[] = [0x5a17ed_1234n, 1000n, 8919n, 16838n];
   let routeOk = true;

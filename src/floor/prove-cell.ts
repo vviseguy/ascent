@@ -10,7 +10,7 @@
 import { generateEmergent, generateEmergentTower, resolveEmergent, type EmergentResult } from './cell-emergent.ts';
 import { buildCellGraph, reachableFrom } from './cell-graph.ts';
 import { domainSize, FIELD_KEYS, hasConflict } from './cell-field.ts';
-import { listStructures } from './cell-structures.ts';
+import { listStructures, storeFingerprint } from './cell-structures.ts';
 import type { Cell } from './cell.ts';
 
 let floors = 0, settled = 0, deterministic = 0, exitOk = 0, roomsOk = 0, wholeOk = 0;
@@ -91,6 +91,8 @@ controls.push({
 }
 
 console.log('ASCENT 2u cell generator — STANDALONE PROOF');
+// WHICH CONTENT this ran against — the store is authored live while sessions test against it.
+console.log(`store: ${storeFingerprint()}`);
 console.log(`floors generated             : ${floors}`);
 console.log(`  fully SETTLED              : ${settled}/${floors}   (no domain left undecided)`);
 console.log(`  DETERMINISTIC              : ${deterministic}/${floors}`);

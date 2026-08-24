@@ -129,6 +129,28 @@ export const STORED_VALUE_SETS = store.valueSets;
 export const STRUCTURE_VERSION = store.version;
 /** Names in a FIXED order — sorted, so any iteration over structures is deterministic. */
 export const listStructures = (): string[] => Object.keys(store.structures).sort();
+
+/**
+ * WHICH CONTENT A RESULT WAS MEASURED AGAINST.
+ *
+ * This store is authored by a human through a live dev server WHILE sessions are testing against it,
+ * so it moves under you. A before/after comparison that straddles a save is not a comparison at all,
+ * and it fails silently: both runs look valid and the conclusion is wrong. It has already happened —
+ * an isolation blaming one structure was run across an edit to a different one, twice.
+ *
+ * So anything whose result depends on the CONTENT prints this. A stale comparison then shows up as two
+ * different fingerprints instead of two numbers that seem to disagree for no reason.
+ *
+ * Deliberately cheap and human-readable rather than a hash: when it changes you can SEE what changed.
+ */
+export function storeFingerprint(): string {
+  const parts = listStructures().map((n) => {
+    const st = store.structures[n]!;
+    const saved = (st as { savedAt?: string }).savedAt;
+    return `${n} ${st.w}x${st.h}L${levelsOf(st)}${saved ? `@${saved.slice(11, 16)}` : ''}`;
+  });
+  return `v${store.version} [${parts.join(', ')}]`;
+}
 /**
  * A structure, normalised on the way OUT rather than trusted from the file. Two things happen here:
  *

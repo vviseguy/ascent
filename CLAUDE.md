@@ -203,6 +203,43 @@ The abstract-piece pipeline they formed is gone; the tile lattice replaced it wh
 the Structure/Slot model are all unbuilt. `docs/13 §6` is the authoritative BUILT-vs-DESIGNED list.
 Check it before assuming a mechanism exists.
 
+## Working alongside other sessions
+
+This repo is routinely driven by SEVERAL concurrent Claude sessions plus a human authoring content in
+the cell editor. Three things follow, and the first two are lessons the sibling `creeda-pilot` paid
+for in lost work.
+
+**ISOLATE IN A WORKTREE, BEFORE THE FIRST COMMIT.** Sessions sharing one checkout share one HEAD, and
+it moves between your own consecutive git commands. In creeda-pilot a session's HEAD advanced between
+its `commit` and its `push`, so the push carried another session's commit onto its PR — and when that
+PR squashed first it absorbed the work and the original merged EMPTY. `git worktree add ../ascent-<slug>`
+off `origin/main`, and do everything there. In a shared tree, push an explicit SHA
+(`git push origin <sha>:branch`), never `HEAD:branch`.
+
+**PULL, DO NOT JUST FETCH** — at the start of a session and again before pushing. `git fetch` updates
+the remote-tracking ref and leaves your working tree behind; this session sat 5 commits behind without
+noticing, two of them in the file it was editing. After ANY merge, re-run the full gate on the MERGED
+result: a clean textual merge is not a working merge, especially when the incoming commits touch your
+files.
+
+**THE AUTHORING STORE MOVES UNDER YOU.** `src/floor/cell-structures.json` is written by a human through
+a live dev server WHILE sessions test against it. A before/after comparison that straddles a save is
+not a comparison, and it fails silently — both runs look valid and the conclusion is wrong. It has
+already produced a confident, wrong attribution twice. So:
+- every content-dependent proof prints `storeFingerprint()`; if two runs disagree, check the
+  fingerprints before believing the difference;
+- ONE session owns the editor server and the store at a time. Others treat it as read-only input.
+
+**ONE SERVER PER WORKTREE, and you cannot restart someone else's.** `.claude/launch.json` already names
+them by area with distinct ports (`ascent-main` 5191, `ascent-gen` 5183, `ascent-tex` 5192). Add an
+entry for a new worktree rather than sharing a port; `preview_stop` will not touch another session's
+server, and vite cannot hot-reload `vite.config.ts` anyway.
+
+**PREFER MESSAGING TO LOCKING.** When two sessions genuinely need the same file, say so and coordinate —
+do not add a lock. On 2026-08-23 two sessions both had `cell-place.ts` open; the exchange caught a real
+arithmetic collision in the stair weights and an explanation function that had drifted from the decision
+it explained. A lock would have prevented the contact, and the contact was worth more than the collision.
+
 ## Documentation layout
 Root [CLAUDE.md](CLAUDE.md) stays GENERAL — the map, the non-negotiables, the cross-cutting rules.
 Anything specific to one area lives in that area's own `CLAUDE.md`, which acts as a router when the
