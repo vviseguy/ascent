@@ -50,14 +50,19 @@
   svg { display: block; }
 
   /* the brush strip — pinned above the schematic so what you are painting is never scrolled away */
-  #brushbar { position: sticky; top: -22px; z-index: 3; display: flex; align-items: center; gap: 9px;
+  #brushbar { position: sticky; top: -22px; z-index: 3; display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
               background: #1b1f25; border: 1px solid #2b3038; border-radius: 8px;
               padding: 7px 11px; margin: -6px 0 16px; }
   #brushbar .bb-label { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: #7c8794; }
   #brushbar .bb-mode { font-weight: 600; }
   #brushbar .bb-vals { color: #9aa3ad; }
   #brushbar .bb-hint { margin-left: auto; color: #6f7780; font-size: 11px; }
-  #brushbar .bb-levels { display: flex; align-items: center; gap: 4px; padding-left: 11px;
+  #brushbar .bb-levels select { font: inherit; padding: 2px 5px; border-radius: 5px;
+    background: #1b1f25; color: inherit; border: 1px solid #2b3038; }
+  /* the storey strip carries add / duplicate / drop / copy-from / reorder / clear, which is more
+     than fits a narrow pane — it wraps rather than running off the edge, and the hint gives up
+     its auto-margin when it does. */
+  #brushbar .bb-levels { display: flex; align-items: center; gap: 4px; padding-left: 11px; flex-wrap: wrap;
                          border-left: 1px solid #2b3038; }
   #brushbar .bb-levels button { padding: 3px 8px; line-height: 1; }
   .lvchip { min-width: 22px; text-align: center; padding: 4px 6px; border-radius: 5px;

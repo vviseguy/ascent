@@ -42,6 +42,7 @@ import {
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
 import { stairFault, stairFaultText, stairFlight } from '../floor/cell-place.ts';
 import { abstainUnowned, ownsFloor, ownsWallN, ownsWallW } from '../floor/cell-structures.ts';
+import { clearLevelAt, duplicateLevelAt, putLevel, sliceLevel, swapLevels } from './cell-levels.ts';
 import {
   CASING, cornerInk, cornerStrength, floorInk, floorValueColor, floorValueHatch, legend,
   openingIsPlain, openingRings, openState, patternDefs, segInk, segValueColor,
@@ -388,6 +389,48 @@ function removeLevel(): void {
 
 function setLevel(n: number): void {
   L = Math.max(0, Math.min(LEVELS - 1, n));
+  buildPanel();
+}
+
+/**
+ * COPYING STOREYS. The arithmetic lives in `cell-levels.ts`, pure and tested — the operations are all
+ * "deep-copy a block and put it somewhere", and the failure that matters (two storeys left sharing
+ * field objects, so painting one moves the other) is invisible to any content check. These wrappers
+ * are the undo + repaint around it.
+ */
+
+/** Insert a COPY of the current storey directly above it, and move to it. */
+function duplicateLevel(): void {
+  pushUndo();
+  cells = duplicateLevelAt(cells, levelSize(), L);
+  LEVELS++;
+  L++;
+  buildPanel();
+}
+
+/** Replace the current storey's contents with another storey's. The one you are ON is the target, so
+ *  this reads as "fill this floor from that one" rather than needing two pickers. */
+function copyLevelFrom(src: number): void {
+  if (src === L || src < 0 || src >= LEVELS) return;
+  pushUndo();
+  cells = putLevel(cells, levelSize(), L, sliceLevel(cells, levelSize(), src));
+  buildPanel();
+}
+
+/** Swap this storey with its neighbour — reordering a stack without repainting either floor. */
+function moveLevel(dir: -1 | 1): void {
+  const other = L + dir;
+  if (other < 0 || other >= LEVELS) return;
+  pushUndo();
+  cells = swapLevels(cells, levelSize(), L, other);
+  L = other;
+  buildPanel();
+}
+
+/** Blank the current storey without disturbing the ones above or below it. */
+function clearLevel(): void {
+  pushUndo();
+  cells = clearLevelAt(cells, levelSize(), L, fullField);
   buildPanel();
 }
 
@@ -818,8 +861,32 @@ function buildBrushBar(): void {
       onclick: () => setLevel(i),
     }, String(i)));
   }
-  lv.append(h('button', { onclick: addLevel, title: 'add a storey above' }, '+'));
+  lv.append(h('button', { onclick: addLevel, title: 'add a BLANK storey above' }, '+'));
+  lv.append(h('button', { onclick: duplicateLevel, title: 'duplicate this storey above (a copy, not a link)' }, '⧉'));
   if (LEVELS > 1) lv.append(h('button', { onclick: removeLevel, title: 'drop the top storey' }, '−'));
+
+  if (LEVELS > 1) {
+    // FILL THIS STOREY FROM ANOTHER. The one you are on is the target, so one picker is enough.
+    const from = h('select', {
+      title: 'replace this storey with a copy of another',
+      onchange: (ev: Event) => {
+        const sel = ev.target as HTMLSelectElement;
+        const n = Number(sel.value);
+        sel.selectedIndex = 0;                       // it is an action, not a setting
+        if (Number.isFinite(n)) copyLevelFrom(n);
+      },
+    }) as HTMLSelectElement;
+    from.append(h('option', { value: '' }, 'copy from…'));
+    for (let i = 0; i < LEVELS; i++) {
+      if (i !== L) from.append(h('option', { value: String(i) }, `storey ${i}`));
+    }
+    lv.append(from);
+
+    lv.append(h('button', { onclick: () => moveLevel(1), title: 'swap with the storey above', disabled: L >= LEVELS - 1 }, '↑'));
+    lv.append(h('button', { onclick: () => moveLevel(-1), title: 'swap with the storey below', disabled: L <= 0 }, '↓'));
+  }
+  lv.append(h('button', { onclick: clearLevel, title: 'blank THIS storey only' }, 'clear'));
+
   if (LEVELS > 1) {
     lv.append(h('span', {
       class: `lvchip wide${viewAll ? ' on' : ''}`, title: '3D: show every storey, or only this one',
@@ -1353,7 +1420,9 @@ async function rebuild3d(): Promise<void> {
   const shown = viewAll ? Array.from({ length: LEVELS }, (_, i) => i) : [L];
   const group = new THREE.Group();
   for (const i of shown) {
-    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H });
+    // the storey above breaks a tie between two possible stair directions — see `GridOptions.above`
+    const deck = await buildGrid(resolvedLevel(i), stride(), H + 1, { w: W, h: H },
+      i + 1 < LEVELS ? { above: resolvedLevel(i + 1) } : {});
     deck.position.y = toFloat(FLOOR_HEIGHT) * i;
     group.add(deck);
   }

@@ -144,6 +144,7 @@ const meshNameOf = (url: string): string =>
 
 export function cellWorldPlacements(
   cells: readonly (Cell | null)[], w: number, h: number,
+  above?: readonly (Cell | null)[],
 ): WorldPlacement[] {
   const out: WorldPlacement[] = [];
   let fallbacks = 0;   // pieces collided from the measured table because nothing has box-fit them
@@ -176,7 +177,7 @@ export function cellWorldPlacements(
     }
   }
 
-  for (const { x, y, placements } of gridPlacements(cells, w, h)) {
+  for (const { x, y, placements } of gridPlacements(cells, w, h, undefined, above ? { above } : {})) {
     const { x: ccx, z: ccz } = cellCentre2u(w, h, y * w + x);
     for (const p of placements) {
       if (merged[y * w + x] === 1 && isGroundPiece(p.url)) continue; // drawn by its 4u block
@@ -446,7 +447,8 @@ export function compileCellTower(
       });
     }
 
-    const wallPlacements = cellWorldPlacements(f.cells, f.width, f.height);
+    // the storey above, so a flight in a corner climbs toward the hole rather than the deck
+    const wallPlacements = cellWorldPlacements(f.cells, f.width, f.height, floors[idx + 1]?.cells);
     emitPerimeter(solids, wallPlacements, f.width, f.height, baseY);
     const grid: StratumCellGrid = {
       stratum: idx, width: f.width, height: f.height,
