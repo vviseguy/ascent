@@ -12,6 +12,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat } from '../sim/fixed/fixed.ts';
 import { gridPlacements, stairFlight, type CellPlacement, type GridOptions } from '../floor/cell-place.ts';
 import { isStairFloor, type Cell } from '../floor/cell.ts';
+import { applyOneSided } from './one-sided.ts';
 
 /** Quarter-turn → radians, matching the authority's CCW turns (3 → −90° = 270°). */
 const TURN_RAD = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
@@ -201,8 +202,19 @@ async function instance(p: CellPlacement, cx: number, cz: number): Promise<THREE
   if (p.inverted === true) node.rotation.x = Math.PI;
   const s = toFloat(p.scale);
   node.scale.setScalar(s);
+  /* A SLAB IS ONLY THERE FROM THE SIDE IT FACES. Floor and lid are the same tile, one turned over, so
+     without this a floor shows its underside to the room below and a lid shows its back to the room
+     above — most obvious with `all` storeys up, where a section reads as a stack of paving. */
+  if (isSurfacePiece(p.url)) applyOneSided(node, p.inverted !== true, sideCache);
   return node;
 }
+
+/** Ground and lids — the pieces that have a side they face. Walls and dressing look right from
+ *  anywhere and must not be touched. */
+const isSurfacePiece = (url: string): boolean => /floor_/.test(url);
+/** One material per source per side, for the lifetime of the module — templates are shared, so this
+ *  cannot live per grid without making a material per storey. */
+const sideCache = new Map<string, THREE.Material>();
 
 /** A visible stand-in when a GLB is missing, so a gap in the catalog reads as a gap rather than as
  *  nothing having been placed. */

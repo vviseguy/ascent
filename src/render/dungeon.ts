@@ -26,6 +26,7 @@
 // ============================================================================
 
 import { openDoorLeaves, stripFragment, wantsOpen } from '../lab/cell-preview.ts';
+import { applyOneSided } from '../lab/one-sided.ts';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat, fromRaw } from '../sim/fixed/fixed.ts';
@@ -467,6 +468,9 @@ export class Dungeon {
    * The same `discard` the fog clip uses, for the same reason: it removes the geometry rather than
    * painting over it, so there is no blending, no sort order, and no depth-write games to get wrong.
    */
+  /** One material per source per side — see `one-sided.ts`. */
+  private readonly sideCache = new Map<string, THREE.Material>();
+
   private stairTex: THREE.DataTexture | null = null;
   private stairData: Uint8Array = new Uint8Array(0);
   private readonly stairTexU: { value: THREE.Texture | null } = { value: null };
@@ -662,6 +666,10 @@ export class Dungeon {
     // a lid hangs upside down — a half-turn about X, which carries the normals round with it
     o.rotation.x = u.inverted === true ? Math.PI : 0;
     o.scale.setScalar(toFloat(u.scale));
+    /* A SLAB IS ONLY THERE FROM THE SIDE IT FACES — see `one-sided.ts`. Applied BEFORE the cutaway
+       clone below, so the piece ends up with one material carrying both patches rather than two
+       materials disagreeing about which is live. */
+    if (/floor_/.test(u.url)) applyOneSided(o, u.inverted !== true, this.sideCache);
     // Clone this unit's materials so the occlusion cutaway drives THIS piece's opacity alone (the
     // recolor material is shared across every piece). Mirrors placeWall. View-only.
     const cloneMat = (m: THREE.Material): THREE.Material => {
