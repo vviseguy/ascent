@@ -38,7 +38,7 @@ import {
   TEXTURE_BY_ID, CONFIGURABLE_PRESETS, getConfig, getRelief, getAOStrength, getVaryStrength,
   DEFAULT_VARY, type Preset, type TextureOption,
 } from './texture-catalog.ts';
-import { GROUP_ANCHOR_ATTR, VARY_CODE } from './group-anchors.ts';
+import { GROUP_ANCHOR_ATTR, VARY_CODE, ANCHOR_QUANT } from './group-anchors.ts';
 
 /** preset -> a fixed tiling SLOT (1..12), baked into ORM.r by recolor's bake. 0 = untextured. */
 export const PRESET_SLOT: Record<Preset, number> = {
@@ -261,8 +261,10 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
   const cfg = getConfig();
   // uSlot[slot] = (layer, 1/scale, 1/meanLuma, colourMode). y = 0 marks "this slot has no texture".
   const slots: THREE.Vector4[] = Array.from({ length: SLOT_COUNT }, () => new THREE.Vector4(0, 0, 1, 0));
-  // uVary[slot] = the TEXTURE's variation permission — the default a group inherits when it does not
-  // override one. Untextured slots stay at `none`: nothing can move a texture that is not there.
+  // uVary[slot] = the TEXTURE's variation PERMISSION — what an authored group is allowed to do when
+  // it does not name a `vary` of its own. It is a ceiling, not a trigger: nothing consults it unless
+  // a saved SurfaceGroup put VARY_INHERIT in the anchor's w channel (group-anchors.ts). Untextured
+  // slots stay at `none` regardless — nothing can move a texture that is not there.
   const vary: number[] = Array.from({ length: SLOT_COUNT }, () => VARY_CODE.none);
   for (const p of CONFIGURABLE_PRESETS) {
     const o = TEXTURE_BY_ID.get(cfg[p].texture);
@@ -272,10 +274,11 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
     vary[PRESET_SLOT[p]] = VARY_CODE[o.vary ?? DEFAULT_VARY];
   }
 
-  // A mesh with no anchors baked into it must render EXACTLY as it did before groups existed. GL's
-  // default generic vertex attribute is (0,0,0,1) and w = 1 is `none`, so the fallback is already
-  // right — but three only pushes a default the MATERIAL names, so name it rather than trusting
-  // whatever the previous draw happened to leave in the register.
+  // A mesh with no anchors baked into it must render EXACTLY as it did before groups existed — and
+  // that is the COMMON case, not the edge case: group-anchors.ts bakes nothing at all unless someone
+  // saved a group on the mesh. GL's default generic vertex attribute is (0,0,0,1) and w = 1 is
+  // `none`, so the fallback is already right — but three only pushes a default the MATERIAL names,
+  // so name it rather than trusting whatever the previous draw happened to leave in the register.
   const withDefaults = mat as { defaultAttributeValues?: Record<string, number[]> };
   withDefaults.defaultAttributeValues = {
     ...withDefaults.defaultAttributeValues,
@@ -373,7 +376,7 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         '  if ( uVaryStr <= 0.0 || mode < 1.5 ) return;',
         // Quantise before hashing: two anchors a thousandth of a metre apart are the same decision,
         // and a hash would call them different stones.
-        '  vec3 h = hash33( floor( vGAnchor * 128.0 + 0.5 ) * 0.0078125 );',
+        `  vec3 h = hash33( floor( vGAnchor * ${ANCHOR_QUANT}.0 + 0.5 ) * ${1 / ANCHOR_QUANT} );`,
         '  float th = mode > 2.5 ? floor( h.z * 4.0 ) * 1.5707963 : 0.0;',
         '  float c = cos(th), s = sin(th);',
         '  uv = mat2( c, s, -s, c ) * ( uv - auv ) + auv + h.xy * uVaryStr;',
@@ -393,6 +396,7 @@ export function patchTilingDetail(mat: THREE.MeshStandardMaterial, shade: THREE.
         '    vec2 tuv; vec2 _auv; vec3 _T; vec3 _B; vec3 _Ng;',
         '    planarFrame( sd.y, tuv, _auv, _T, _B, _Ng );',
         // The group's own override wins; 0 means "whatever this material TYPE's texture allows".
+        // Anything nobody authored arrives here as 1 (`none`) and groupPhase returns untouched.
         `    groupPhase( vGVary < 0.5 ? uVary[ clamp( tslot, 0, ${SLOT_COUNT - 1} ) ] : vGVary, tuv, _auv, _T, _B );`,
         '    vec3 tcol = texture( uTexArr, vec3( tuv, sd.x ) ).rgb;',
         '    vec4 surf = texture( uSurfArr, vec3( tuv, sd.x ) );',

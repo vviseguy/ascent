@@ -33,9 +33,9 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
               texture-catalog.ts  the texture library + per-type config + URL codec
               material-profiles.ts  named, inheritable sets of that config
   mesh    ──  face-surfaces.ts    hidden-triangle data + the geometry-hash guard
-              facets.ts           the facet PARTITION, pure — shared by the picker and the baker
+              facets.ts           the facet PARTITION + centroid, pure — the picker's overlay, the baker's anchor
               face-select.ts      the interactive picker (hover / grow / hide)
-              group-anchors.ts    bakes each group's anchor into the mesh (per-group texture phase)
+              group-anchors.ts    bakes each SAVED group's anchor into the mesh (per-group texture phase)
               box-fit.ts          the collision voxelizer (auto edge density)
   publish ──  approve.ts          freeze fit + materials → src/game/approved-assets.json
   chrome  ──  drawers.ts, texture-settings.ts, profile-bar.ts, surface-panel.ts,
@@ -50,7 +50,8 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
 | which texture a material TYPE wears | `DEFAULT_CONFIG` in texture-catalog.ts, or the in-app menu |
 | which TYPE a swatch resolves to | the 4-layer cascade in recolor.ts — see MATERIALS.md |
 | how a surface responds to light | tiling.ts (relief / roughness / AO) |
-| whether each carved stone varies | `TextureOption.vary` in texture-catalog.ts, the `Vary` slider / `?vary=` — see MATERIALS.md |
+| CHECK a surface's orientation, or whether two surfaces share a phase | the `calibration` / `gradient` test textures — see MATERIALS.md |
+| whether a carved stone varies | save it as a GROUP in the SURFACES panel — only authored groups vary; then `TextureOption.vary` / the `Vary` slider / `?vary=` — see MATERIALS.md |
 | a whole named look, shared or inherited | material-profiles.json + profile-bar.ts |
 | remove geometry from an asset | the SURFACES panel — see SURFACES.md |
 | add a texture | drop files in `public/textures/`, add a `TEXTURES` entry, **run `npm run tex:seams`** |
@@ -70,9 +71,13 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
 5. **Look at it.** Every change in this folder is a change to something visual; screenshot it
    headlessly before claiming it works. Verifying only in-session missed two persistence bugs that
    a cold reload caught immediately.
-6. **The lab's facet partition and the shader's are ONE partition.** `facets.ts` exists so that
-   `show groups` tints exactly the regions `group-anchors.ts` varies. Two implementations that
-   agreed on the day they were written is the failure mode; there is one, and both call it.
+6. **Texture variation applies ONLY to hand-saved groups; everything else is the identity
+   transform.** The tiling projection is world-space planar, so abutting faces are already
+   continuous — continuity is free and variation is what breaks it. A first cut varied every
+   carve@75 auto facet and pulled every wall run apart; the auto partition is the SELECTION AID
+   (`show groups` is how you find the pavers worth saving), never the render scope.
+   `group-anchors.ts` bakes nothing at all into a mesh with no saved group, so it reaches the
+   renderer as the identical geometry object. See MATERIALS.md.
 7. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
    and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
    were emitted in every mode they ate floor paint and selection drags along every border. They are

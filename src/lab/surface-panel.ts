@@ -249,8 +249,9 @@ export function buildSurfacePanel(opts: SurfacePanelOpts): SurfacePanelHandle {
       const n = document.createElement('span');
       n.textContent = `${triCountOf(g)} tri`;
       Object.assign(n.style, { opacity: '.6', flex: '0 0 auto' } as Partial<CSSStyleDeclaration>);
-      // VARY — this group's own texture-phase permission (group-anchors.ts). Blank inherits the
-      // material TYPE's, which is what almost every group should do; the override is for the one
+      // VARY — this group's own texture-phase permission (group-anchors.ts). Saving a group is what
+      // opts a region INTO variation at all; this only says how much. Blank inherits the material
+      // TYPE's answer, which is what almost every group should do; the override is for the one
       // region where the material's own answer is wrong (a plank panel set into a stone wall).
       const vry = document.createElement('select');
       vry.title = 'texture variation for this group (blank = whatever the material type allows)';
