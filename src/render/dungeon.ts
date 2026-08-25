@@ -188,6 +188,15 @@ export function traceSight(
   return false;
 }
 
+/**
+ * SHOULD THIS PIECE BE CUT WHERE A STAIRCASE STANDS?
+ *
+ * Everything except the staircase itself and the ground. A flight must not clip ITSELF, and the deck
+ * under a flight is already suppressed at emission (`insideFlight`) — cutting it again would open a
+ * hole through the storey rather than tidy an overlap.
+ */
+const cutsForStairs = (url: string): boolean => !/stairs|floor_/.test(url);
+
 export class Dungeon {
   readonly group = new THREE.Group();
   private readonly tpl = new Map<string, THREE.Object3D>();
@@ -294,7 +303,9 @@ export class Dungeon {
         m.castShadow = true; m.receiveShadow = true;
         // ONE choke point: patch the TEMPLATE, and `cloneMaterial` carries `onBeforeCompile` into
         // every per-piece clone, so the clip reaches all of them without a second traversal.
-        for (const mm of Array.isArray(m.material) ? m.material : [m.material]) this.patchFogClip(mm);
+        for (const mm of Array.isArray(m.material) ? m.material : [m.material]) {
+          this.patchFogClip(mm, cutsForStairs(url));
+        }
       });
       return [url, g.scene] as const;
     }));
@@ -341,7 +352,9 @@ export class Dungeon {
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
-      for (const mm of Array.isArray(m.material) ? m.material : [m.material]) this.patchFogClip(mm);
+      for (const mm of Array.isArray(m.material) ? m.material : [m.material]) {
+        this.patchFogClip(mm, cutsForStairs(url));
+      }
     });
     return Promise.resolve();
   }
@@ -428,6 +441,24 @@ export class Dungeon {
   /** How far above its deck the ink starts, so the floor slab beneath it still shows. `?fogLift=`. */
   private readonly fogLift = { value: 0.14 };
   private readonly fogTexU: { value: THREE.Texture | null } = { value: null };
+
+  /**
+   * WHERE A STAIRCASE STANDS, one byte per cell per storey — the same grid the fog mask uses, so it
+   * costs one texture and one tap rather than a second coordinate system.
+   *
+   * A stair mesh is 5.00 across a 4.00 block: half a unit of banister and side wall hangs over each
+   * flank by design, and where a room wall stands under the raised end of a flight the two occupy the
+   * same space and interpenetrate. Suppressing the wall outright leaves a hole in its run; moving the
+   * stair breaks its alignment with the block. Cutting the wall exactly where the block is keeps both
+   * — the wall run continues either side, and the staircase has the space it needs.
+   *
+   * The same `discard` the fog clip uses, for the same reason: it removes the geometry rather than
+   * painting over it, so there is no blending, no sort order, and no depth-write games to get wrong.
+   */
+  private stairTex: THREE.DataTexture | null = null;
+  private stairData: Uint8Array = new Uint8Array(0);
+  private readonly stairTexU: { value: THREE.Texture | null } = { value: null };
+  private readonly stairOn = { value: 0 };
   /** `?fog=boxes` restores the old drawn-over cubes, for comparison. */
   private fogBoxes = false;
   /** The cut's radius as a fraction of the smaller screen side; `?cut=` overrides it. */
@@ -724,6 +755,28 @@ export class Dungeon {
     this.fogGridB.value.set(h, n, baseY, rise > 0 ? rise : NATIVE_WALL_H);
     this.fogOn.value = 1;
     this.fogDirty = true;
+
+    /* THE STAIR MASK rides the same grid. `cells[i].stair` is already set by the compiler — the cells
+       a flight's block covers — so this is a copy, not a computation, and it cannot drift from the
+       flights the placer actually emitted. NOT DILATED, unlike the fog mask: dilation there makes a
+       wall show when either of its tiles is explored, which is right for visibility and would be
+       wrong here — it would eat a wall a whole cell away from any staircase. */
+    this.stairData = new Uint8Array(w * h * n);
+    for (let si = 0; si < n; si++) {
+      const g = grids[si];
+      if (!g) continue;
+      for (let i = 0; i < g.cells.length && i < w * h; i++) {
+        if (g.cells[i]?.stair === true) this.stairData[si * w * h + i] = 255;
+      }
+    }
+    const stex = new THREE.DataTexture(this.stairData, w, h * n, THREE.RedFormat, THREE.UnsignedByteType);
+    stex.magFilter = THREE.NearestFilter;
+    stex.minFilter = THREE.NearestFilter;
+    stex.unpackAlignment = 1;
+    stex.needsUpdate = true;
+    this.stairTex = stex;
+    this.stairTexU.value = stex;
+    this.stairOn.value = 1;
   }
 
   /** Push the `explored` flags into the mask texture. Only when something actually changed. */
@@ -773,8 +826,11 @@ export class Dungeon {
    * stage grows a varying for it. The fragment then maps that position to a cell and throws itself
    * away if the cell is unexplored — an absence, not a black surface drawn in front.
    */
-  private patchFogClip(mat: THREE.Material): void {
+  private patchFogClip(mat: THREE.Material, stairCut = false): void {
     if (mat.userData['fogPatched'] === true) return;
+    /* PER TEMPLATE, not per instance. Templates are keyed by URL and a URL is either a staircase or it
+       is not, so one uniform per material is enough and no cloning is needed. */
+    const cutU = { value: stairCut ? 1 : 0 };
     const prev = mat.onBeforeCompile?.bind(mat);      // CHAIN: the lab's tiling shader is already here
     mat.onBeforeCompile = (shader, renderer): void => {
       prev?.(shader, renderer);
@@ -783,6 +839,9 @@ export class Dungeon {
       shader.uniforms['uFogB'] = this.fogGridB;
       shader.uniforms['uFogOn'] = this.fogOn;
       shader.uniforms['uFogLift'] = this.fogLift;
+      shader.uniforms['uStairMask'] = this.stairTexU;
+      shader.uniforms['uStairOn'] = this.stairOn;
+      shader.uniforms['uStairCut'] = cutU;
 
       shader.vertexShader = 'varying vec3 vFogWorld;\n' + shader.vertexShader.replace(
         '#include <begin_vertex>',
@@ -791,10 +850,25 @@ export class Dungeon {
       shader.fragmentShader =
         'uniform sampler2D uFogMask;\nuniform vec4 uFogA;\nuniform vec4 uFogB;\n'
         + 'uniform float uFogOn;\nuniform float uFogLift;\n'
+        + 'uniform sampler2D uStairMask;\nuniform float uStairOn;\nuniform float uStairCut;\n'
         + 'varying vec3 vFogWorld;\n'
         + shader.fragmentShader.replace(
           'void main() {',
           `void main() {
+          /* CUT THIS PIECE WHERE A STAIRCASE STANDS. Only pieces that opted in (uStairCut) — a
+             staircase must not clip itself, and the deck is already suppressed under a flight.
+             NO BACKTICKS IN HERE: this GLSL is a JS template literal. */
+          if (uStairOn > 0.5 && uStairCut > 0.5) {
+            float scol = floor((vFogWorld.x - uFogA.x) / uFogA.z + 0.5);
+            float srow = floor((vFogWorld.z - uFogA.y) / uFogA.z + 0.5);
+            float sst  = floor((vFogWorld.y - uFogB.z + 0.05) / uFogB.w);
+            sst = clamp(sst, 0.0, uFogB.y - 1.0);
+            if (scol >= 0.0 && scol < uFogA.w && srow >= 0.0 && srow < uFogB.x) {
+              float sx = (scol + 0.5) / uFogA.w;
+              float sy = (sst * uFogB.x + srow + 0.5) / (uFogB.x * uFogB.y);
+              if (texture2D(uStairMask, vec2(sx, sy)).r > 0.5) discard;
+            }
+          }
           if (uFogOn > 0.5) {
             float fcol = floor((vFogWorld.x - uFogA.x) / uFogA.z + 0.5);
             float frow = floor((vFogWorld.z - uFogA.y) / uFogA.z + 0.5);
@@ -823,7 +897,7 @@ export class Dungeon {
     };
     // the same cache-key rule as `patchCutout` — this changes the generated source too
     const prevKey = mat.customProgramCacheKey?.bind(mat);
-    mat.customProgramCacheKey = (): string => `${prevKey?.() ?? ''}|fogclip`;
+    mat.customProgramCacheKey = (): string => `${prevKey?.() ?? ''}|fogclip|sc${cutU.value}`;
 
     mat.userData['fogPatched'] = true;
     mat.needsUpdate = true;

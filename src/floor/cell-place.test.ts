@@ -382,7 +382,11 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     });
     const l = stairFlight(leftWall, SW, SH, 1, 1)!;
     expect(l).toMatchObject({ up: 'N', walls: -1 });
-    expect(l.url).toContain('stairs_wall_left');
+    /* THE FILENAME IS THE OPPOSITE OF THE SIDE IT SERVES, and that is deliberate — see the note on
+       `STAIR_MESHES`. These two meshes are mirror images given OPPOSITE corrective quarter-turns, and
+       a mirror exchanges left and right, so `_right` is the mesh that ends up walled on the climber's
+       LEFT. This test asserted the filename before anyone had looked at the render. */
+    expect(l.url).toContain('stairs_wall_right');
 
     // the mirror image: walls at N and E puts the wall on your RIGHT
     const rightWall = mk((c, x, y) => {
@@ -392,7 +396,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
     });
     const r = stairFlight(rightWall, SW, SH, 1, 1)!;
     expect(r).toMatchObject({ up: 'N', walls: 1 });
-    expect(r.url).toContain('stairs_wall_right');
+    expect(r.url).toContain('stairs_wall_left');   // mirrored name — see above
   });
 
   it('climbs toward its OWN head wall, not along the room wall it stands beside', () => {
