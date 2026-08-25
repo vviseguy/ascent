@@ -198,6 +198,13 @@ export const PACK_FILES: Record<string, readonly string[]> = {
     'wall_doorway_scaffold',
     'wall_doorway_sides.gltf',
     'wall_endcap.gltf',
+    /* A LOCAL DERIVATIVE of wall_endcap, trimmed to its terminal flourish so it can be tacked on
+       the end of a wall that cannot be shortened. NOT from upstream — a re-run of fetch-kaykit
+       will not recreate this line. Regenerate the asset with:
+         node scripts/glb-trim.mjs \
+           public/models/kaykit_dungeon_remastered/wall_endcap.gltf.glb \
+           public/models/kaykit_dungeon_remastered/wall_endcap_short.gltf.glb 0.80          */
+    'wall_endcap_short.gltf',
     'wall_gated.gltf',
     'wall_half.gltf',
     'wall_half_endcap.gltf',
