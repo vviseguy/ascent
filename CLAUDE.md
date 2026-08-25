@@ -76,6 +76,57 @@ generation, `src/game/` tower compilation):
 The determinism discipline is also why the riskiest code is the most testable: the sim is headless and
 pure, so it's provable without rendering or networking.
 
+## Core principles
+Each of these was paid for. The worked example is the receipt — read it before deciding the rule
+doesn't apply to your case.
+
+- **Centralize the definition; duplicate the enforcement.** A fact the engine depends on gets ONE
+  authoritative home, and the CHECKS on it are deliberately repeated at every boundary. `PIECE`
+  (`cell-place.ts`) is the good case — the only place a mesh url is spelled, anywhere. The bad cases
+  are live: collision is described **twice**, by the approved bundle (`approved-assets.json`,
+  object-local metres, box-fitted and reviewed) and by `WALL_FALLBACK` (`cell-tower.ts`, world units,
+  hand-measured), keyed by two *different* derivations of the same url; `FLOOR_URL` exists in both
+  `cell-place.ts` and `cell-tower.ts`; turn→yaw is derived in four places. Two homes for one fact is
+  two answers, and they drift silently.
+
+- **A key must be as fine as the thing it keys.** `objIdOf` strips the `#fragment`, so
+  `wall_doorway.glb` (shut) and `wall_doorway.glb#open` (leaf removed) — two different things on
+  screen — collapse to one entry in the asset store. The store then cannot give them different
+  collision, and a closed door compiles to a 2.00-wide hole a body walks straight through. When an
+  identity function throws information away, everything downstream inherits the ambiguity and nothing
+  reports it.
+
+- **Abstaining is not asserting.** Every field is a bitmask SET; `andGate` only ever narrows. A full
+  domain says "no opinion" — a pinned `none` says "this is air". Conflating them is how a widened
+  `wallType` turned 117 authored `scaffold` walls into doorways in one pass.
+
+- **Enforced contracts beat conventions.** If four call sites can forget a step, the step belongs
+  inside the thing they call. `resolveFloor` takes the FLOOR, not the grid, for exactly this reason.
+  A comment saying "call X first" is a convention; a signature that cannot be satisfied without X is
+  a contract.
+
+- **Measure the thing, not a proxy — and suspect the instrument first.** A GLB profiler that read all
+  POSITION vertices instead of only the INDEXED ones made a successful trim report as a total no-op;
+  it bit two people in one session. A piece census counted emissions but never checked placement, and
+  passed a build whose endcaps sat one whole edge off. A degradation measurement compared every storey
+  against the structure's level 0 and invented a 52% loss out of nothing. **If a measurement surprises
+  you, verify the measuring tool before you believe the measurement.**
+
+- **A store save never rides inside a code commit.** `cell-structures.json` is authored content. When
+  it changes inside a commit that also changes code, the diff reads as logic and nobody looks. That has
+  cost two bisects: PROOF 9's failure bisected to a store-only commit and was misdiagnosed twice —
+  first as content rot, then as a body wedge — when the real bug was a strict inequality in
+  `route-check.ts` that the new layout merely *exposed*. Check `git status` after anything that could
+  save the store.
+
+- **The model asserts; downstream must ask, not guess.** The recurring failure in this codebase is a
+  layer deciding on its own instead of consulting what the model already says. A route checker deciding
+  a wall wasn't there because a float comparison put the sample outside it. Collision picking a
+  footprint from a filename while the owning `Cell` sits unread in the same loop. `emitPerimeter`
+  asserting four full-height walls from `w`/`h` alone while the SEAL phase is deliberately cutting
+  doorways there. When you need a fact the model owns, reach for the model — `sightMask2u` is the
+  worked example of doing it right.
+
 ## The two sides (the hard boundary — see docs/15)
 | | **SIM** (`src/sim`, `src/floor`, `src/game`) | **VIEW / AUTHORING** (`src/render`, `src/lab`) |
 |---|---|---|
@@ -291,6 +342,15 @@ Root [CLAUDE.md](CLAUDE.md) stays GENERAL — the map, the non-negotiables, the 
 Anything specific to one area lives in that area's own `CLAUDE.md`, which acts as a router when the
 area is big enough to need more than one doc (see `src/lab/`). Design *rationale* that outlives any
 one folder goes in [`docs/`](docs/).
+
+**When docs disagree:** code > proofs/tests > area `CLAUDE.md` > root `CLAUDE.md` > `docs/*.md`.
+If a doc says a function exists and the code doesn't have it, trust the code — and fix the doc in the
+same commit you noticed it.
+
+**Read the area doc before working in that area, and update it after.** If a change shifts how the
+project works one level up, update the parent too — a new visual gate means updating both the area doc
+and the root's Run/prove section. Create a new area `CLAUDE.md` when you introduce a concern someone
+would need orienting on; not every folder needs one.
 
 **Update the area doc in the same commit as the change.** A doc that lags is worse than no doc: the
 next session trusts it. If an area doc passes ~250 lines it is probably covering two concerns —
