@@ -133,6 +133,7 @@ let loadedName: string | null = null;
  */
 const emptyField = (): CellField => ({
   floor: floors('none'),
+  ceiling: floors('none'),
   wallN: segs('none'),
   wallW: segs('none'),
   corner: corners('none'),

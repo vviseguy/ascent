@@ -95,7 +95,7 @@ describe('cell-tower — the geometry lines up', () => {
 
   it('a placement lands INSIDE the cell that owns it', () => {
     const cells: (Cell | null)[] = Array.from({ length: 9 }, () => ({
-      floor: 'stone', wallN: 'wall', wallW: 'wall', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
+      floor: 'stone', ceiling: 'none', wallN: 'wall', wallW: 'wall', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
     } as Cell));
     const out = cellWorldPlacements(cells, 3, 3);
     const half = toFloat(CELL_SIZE_2U) / 2;
@@ -111,7 +111,7 @@ describe('cell-tower — the geometry lines up', () => {
   });
 
   it('reads the wall mask straight off the 2u walls', () => {
-    const open = (): Cell => ({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' });
+    const open = (): Cell => ({ floor: 'stone', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' });
     const cells: (Cell | null)[] = Array.from({ length: 9 }, open);
     // a middle cell surrounded by floor with no walls faces nothing
     expect(wallMask2u(cells, 3, 3, 4)).toBe(0);
@@ -132,7 +132,7 @@ describe('cell-tower — the geometry lines up', () => {
 
   it('ground pieces render but do not collide — the slab under them already does', () => {
     const cells: (Cell | null)[] = Array.from({ length: 4 }, () => ({
-      floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
+      floor: 'stone', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
     } as Cell));
     for (const p of cellWorldPlacements(cells, 2, 2)) {
       if (p.unit.url.includes('floor_')) expect(p.unit.boxes).toEqual([]);

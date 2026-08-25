@@ -55,7 +55,11 @@ const componentSizes = (s: CellStructure): number[] => {
 describe('cell-orient — the coordinate maps', () => {
   it('the identity orientation changes nothing', () => {
     for (const n of NAMES) {
-      expect(JSON.stringify(orientStructure(st(n), { turn: 0, flip: false }))).toBe(JSON.stringify(st(n)));
+      /* toEqual, not stringify-and-compare. `JSON.stringify` compares KEY ORDER as well as content,
+         which is not a property anyone relies on and which broke the moment a field was added: the
+         normaliser produced `{...f, ceiling}` (last) while `fullField` builds in FIELD_KEYS order
+         (second). Same structure, different string. Structural equality asserts what is meant. */
+      expect(orientStructure(st(n), { turn: 0, flip: false })).toEqual(st(n));
     }
   });
 
@@ -95,14 +99,14 @@ describe('cell-orient — round trips', () => {
     for (const n of NAMES) {
       let s = st(n);
       for (let i = 0; i < 4; i++) s = orientStructure(s, { turn: 1, flip: false });
-      expect(JSON.stringify(s)).toBe(JSON.stringify(st(n)));
+      expect(s).toEqual(st(n));
     }
   });
 
   it('flipping twice is the identity', () => {
     for (const n of NAMES) {
       const once = orientStructure(st(n), { turn: 0, flip: true });
-      expect(JSON.stringify(orientStructure(once, { turn: 0, flip: true }))).toBe(JSON.stringify(st(n)));
+      expect(orientStructure(once, { turn: 0, flip: true })).toEqual(st(n));
     }
   });
 });

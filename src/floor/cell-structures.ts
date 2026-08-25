@@ -97,6 +97,24 @@ export const ownsFloor = (px: number, py: number, w: number, h: number): boolean
  *
  * Idempotent.
  */
+/**
+ * GIVE EVERY STORED CELL A `ceiling`, because none of them were saved with one.
+ *
+ * `ceiling` arrived after every structure in the store was authored, so the JSON has no such key and
+ * the field reads `undefined` — which is not a domain, and quietly poisons every mask operation that
+ * touches it. Normalised HERE, on the way out, for the same reason `abstainUnowned` is: the file is
+ * an old format and nothing downstream should have to know that.
+ *
+ * PINNED TO `none`, not abstaining. A structure authored before ceilings existed said nothing about
+ * them, and "nothing" here means an open room, not "help yourself" — an abstaining lid would let the
+ * generator settle a ceiling onto every cell of every old structure, roofing rooms whose authors drew
+ * them open. The editor's back-fill is how a ceiling gets added, deliberately.
+ */
+export function withCeilings(cells: readonly CellField[]): CellField[] {
+  const NONE_FLOOR = 1;   // bit 0 of the floor value set is `none` — the same set the lid draws from
+  return cells.map((f) => (f.ceiling === undefined ? { ...f, ceiling: NONE_FLOOR } : f));
+}
+
 export function abstainUnowned(cells: readonly CellField[], w: number, h: number): CellField[] {
   const s = w + 1, size = (w + 1) * (h + 1);
   const full = fullField();
@@ -105,7 +123,17 @@ export function abstainUnowned(cells: readonly CellField[], w: number, h: number
     const px = within % s, py = Math.floor(within / s);
     const n = ownsWallN(px, w), e = ownsWallW(py, h), g = ownsFloor(px, py, w, h);
     if (n && e && g) return f;
-    return { ...f, wallN: n ? f.wallN : full.wallN, wallW: e ? f.wallW : full.wallW, floor: g ? f.floor : full.floor };
+    /* `ceiling` is CELL-OWNED, exactly like `floor` — the lid of the square south-east of this point —
+       so it is owned by the same test and abstains in the same padding. Missing it here left the
+       padding claiming a lid it does not own, which is the assert-vs-abstain error this whole function
+       exists to prevent. */
+    return {
+      ...f,
+      wallN: n ? f.wallN : full.wallN,
+      wallW: e ? f.wallW : full.wallW,
+      floor: g ? f.floor : full.floor,
+      ceiling: g ? f.ceiling : full.ceiling,
+    };
   });
 }
 
@@ -166,7 +194,7 @@ export const getStructure = (name: string): CellStructure | undefined => {
   return {
     w: s.w, h: s.h,
     ...(levelsOf(s) > 1 ? { levels: levelsOf(s) } : {}),
-    cells: abstainUnowned(s.cells, s.w, s.h),
+    cells: abstainUnowned(withCeilings(s.cells), s.w, s.h),
     ...(s.from !== undefined ? { from: s.from } : {}),
   };
 };

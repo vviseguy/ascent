@@ -126,11 +126,18 @@ export function orientStructure(raw: CellStructure, o: Orientation): CellStructu
     }
   }
 
-  // FLOOR — the one field that belongs to a CELL
-  for (let cy = 0; cy < st.h; cy++) {
-    for (let cx = 0; cx < st.w; cx++) {
-      const c = mapCell(cx, cy, st.w, st.h, o);
-      cells[lv * dstLevel + c.y * dstStride + c.x]!.floor = st.cells[lv * srcLevel + cy * srcStride + cx]!.floor;
+  /* THE CELL-OWNED FIELDS — the ones that belong to a SQUARE rather than to a point or an edge.
+     `floor` and `ceiling` both do: the ground of the cell and its lid. Listed rather than looped over
+     FIELD_KEYS on purpose, because the distinction being made here is exactly which fields are
+     cell-owned; walls and corners are mapped separately above because they move differently. Adding a
+     cell-owned field means adding it here, and forgetting to is not a type error — it is a structure
+     that loses that field every time it is rotated, which is how `ceiling` first arrived broken. */
+  for (const key of ['floor', 'ceiling'] as const) {
+    for (let cy = 0; cy < st.h; cy++) {
+      for (let cx = 0; cx < st.w; cx++) {
+        const c = mapCell(cx, cy, st.w, st.h, o);
+        cells[lv * dstLevel + c.y * dstStride + c.x]![key] = st.cells[lv * srcLevel + cy * srcStride + cx]![key];
+      }
     }
   }
   }

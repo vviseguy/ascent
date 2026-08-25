@@ -31,6 +31,7 @@
 import { makeGrid, begin, stamp, commit, rollback, txConflicts, resolveGrid, type CellGrid, type Region } from './cell-grid.ts';
 import {
   previewCell, template, settleMask, segs, floors, corners, wallTypes, torches, opens, domainSize,
+  FIELD_KEYS,
   type Mask, type CellField,
 } from './cell-field.ts';
 import { nodeId } from './cell-graph.ts';
@@ -645,15 +646,13 @@ function finishStorey(
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const f = grid.cells[y * w + x]!;
-        stamp(tx, { x, y, w: 1, h: 1 }, template({
-          wallN: settleMask(f.wallN, 'wallN'),
-          wallW: settleMask(f.wallW, 'wallW'),
-          floor: settleMask(f.floor, 'floor'),
-          corner: settleMask(f.corner, 'corner'),
-          wallType: settleMask(f.wallType, 'wallType'),
-          open: settleMask(f.open, 'open'),
-          torch: settleMask(f.torch, 'torch'),
-        }));
+        /* EVERY field, from the key list — not a hand-written seven. This settle is what guarantees
+           "fully determined", so a field missing from the list is a field that silently stays
+           ambiguous, and the guarantee is only as complete as somebody's memory. `ceiling` arrived and
+           was not in it. */
+        stamp(tx, { x, y, w: 1, h: 1 }, template(
+          Object.fromEntries(FIELD_KEYS.map((k) => [k, settleMask(f[k], k)])),
+        ));
       }
     }
     if (!commit(tx)) throw new Error('emergent: settle emptied a domain — impossible, every narrowing is a subset of the surviving options');

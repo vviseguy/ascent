@@ -216,8 +216,8 @@ describe('cell-emergent — structures are the ONLY rooms, and they land as auth
   });
 
   it('a rock cell is not a place — it contributes no edges even with no walls around it', () => {
-    const solid: Cell = { floor: 'rock', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
-    const open: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
+    const solid: Cell = { floor: 'rock', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
+    const open: Cell = { floor: 'stone', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
     const cells = [open, solid, open, open, open, open, open, open, open]; // 3x3, (1,0) is rock
     const g = buildCellGraph(cells, 3, 3);
     expect(g.adj[nodeId(3, 1, 0)]).toHaveLength(0);

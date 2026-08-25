@@ -55,6 +55,7 @@ export const cornerValues = (m: Mask): Corner[] => valuesOf(CORNERS, m);
 /** A cell of domains. Five fields, all owned — there is nothing here a neighbour also stores. */
 export interface CellField {
   floor: Mask;
+  ceiling: Mask;
   wallN: Mask;
   wallW: Mask;
   corner: Mask;
@@ -63,7 +64,39 @@ export interface CellField {
   torch: Mask;
 }
 
-export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'open', 'torch'] as const;
+export const FIELD_KEYS = ['floor', 'ceiling', 'wallN', 'wallW', 'corner', 'wallType', 'open', 'torch'] as const;
+export type FieldKey = (typeof FIELD_KEYS)[number];
+
+/**
+ * ONE ROW PER FIELD — its values, its bit slot, and what it settles to when nobody claimed it.
+ *
+ * This used to be THREE parallel `Record<FieldKey, …>` tables plus the value set restated inline in
+ * four functions, and the only thing keeping them in step was that somebody remembered. It did not
+ * hold: `wallType` grew from 6 values to 15 while its slot stayed at 7, so the bit layout described a
+ * packing that would have truncated more than half of it. Nothing read those constants, so the drift
+ * was inert rather than corrupting — which is exactly why it survived. Parallel tables that must
+ * agree, and that nothing forces to agree, are a bug with a delay on it.
+ *
+ * `values` is the canonical ORDER as well as the set: bit i means `values[i]`, so reordering an enum
+ * silently rewrites every mask ever stored. Append, never insert.
+ */
+export const FIELD_SPEC = {
+  floor: { values: FLOOR_MATERIALS, word: 0, bit: 0, slot: 7, settles: 'stone' },
+  wallN: { values: SEGS, word: 0, bit: 7, slot: 4, settles: 'none' },
+  wallW: { values: SEGS, word: 0, bit: 11, slot: 4, settles: 'none' },
+  corner: { values: CORNERS, word: 0, bit: 15, slot: 3, settles: 'none' },
+  wallType: { values: WALL_TYPES, word: 0, bit: 18, slot: 9, settles: 'solid' },
+  open: { values: OPENS, word: 0, bit: 27, slot: 2, settles: 'closed' },
+  torch: { values: TORCHES, word: 0, bit: 29, slot: 2, settles: 'no' },
+  /* WORD 1 STARTS HERE. Word 0 is full — 31 of 31 usable bits — so the lid opens a second word rather
+     than squeezing. It shares the floor's value set because it is drawn from the same tiles, and it
+     settles to `none` so a cell never grows a ceiling nobody asked for. */
+  ceiling: { values: FLOOR_MATERIALS, word: 1, bit: 0, slot: 7, settles: 'none' },
+} as const satisfies Record<FieldKey, { values: readonly string[]; word: number; bit: number; slot: number; settles: string }>;
+
+/** Which word each field lives in. Derived — see `FIELD_SPEC`. */
+export const BIT_WORDS: Record<FieldKey, number> =
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, FIELD_SPEC[k].word])) as Record<FieldKey, number>;
 
 /**
  * THE BIT LAYOUT — for a packed representation, with room left over ON PURPOSE.
@@ -104,36 +137,22 @@ export const FIELD_KEYS = ['floor', 'wallN', 'wallW', 'corner', 'wallType', 'ope
  * pays a zero-extend). A second representation would buy nothing and add a second thing that can
  * disagree with the first — which is exactly the class of bug that cost us an evening.
  */
+/* DERIVED from `FIELD_SPEC`, not restated beside it. Kept as exports because the layout test and any
+   future packed representation want them by name, but there is now exactly one place to edit. */
 export const BIT_OFFSETS: Record<FieldKey, number> =
-  { floor: 0, wallN: 7, wallW: 11, corner: 15, wallType: 18, open: 27, torch: 29 };
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, FIELD_SPEC[k].bit])) as Record<FieldKey, number>;
 export const BIT_SLOTS: Record<FieldKey, number> =
-  { floor: 7, wallN: 4, wallW: 4, corner: 3, wallType: 9, open: 2, torch: 2 };
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, FIELD_SPEC[k].slot])) as Record<FieldKey, number>;
 /** Usable bits per word — 31, not 32; see the note on bit 31 above. */
 export const BITS_PER_WORD = 31;
-export const TOTAL_WORDS = 1;
-export type FieldKey = (typeof FIELD_KEYS)[number];
-
+export const TOTAL_WORDS = Math.max(...FIELD_KEYS.map((k) => FIELD_SPEC[k].word)) + 1;
 /** Every field allows everything — a cell nothing has claimed. */
-export const fullField = (): CellField => ({
-  floor: full(FLOOR_MATERIALS),
-  wallN: full(SEGS),
-  wallW: full(SEGS),
-  corner: full(CORNERS),
-  wallType: full(WALL_TYPES),
-  open: full(OPENS),
-  torch: full(TORCHES),
-});
+export const fullField = (): CellField =>
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, full(FIELD_SPEC[k].values)])) as unknown as CellField;
 
 /** A concrete cell as singleton domains. */
-export const fromCell = (c: Cell): CellField => ({
-  floor: bitOf(FLOOR_MATERIALS, c.floor),
-  wallN: bitOf(SEGS, c.wallN),
-  wallW: bitOf(SEGS, c.wallW),
-  corner: bitOf(CORNERS, c.corner),
-  wallType: bitOf(WALL_TYPES, c.wallType),
-  open: bitOf(OPENS, c.open),
-  torch: bitOf(TORCHES, c.torch),
-});
+export const fromCell = (c: Cell): CellField =>
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, bitOf(FIELD_SPEC[k].values, c[k])])) as unknown as CellField;
 
 export const cloneField = (f: CellField): CellField => ({ ...f });
 
@@ -145,15 +164,8 @@ export function template(spec: Partial<Record<FieldKey, Mask>>): CellField {
 }
 
 /** AND-gate: intersect two fields — this IS stamping one onto the other. */
-export const andGate = (a: CellField, b: CellField): CellField => ({
-  floor: a.floor & b.floor,
-  wallN: a.wallN & b.wallN,
-  wallW: a.wallW & b.wallW,
-  corner: a.corner & b.corner,
-  wallType: a.wallType & b.wallType,
-  open: a.open & b.open,
-  torch: a.torch & b.torch,
-});
+export const andGate = (a: CellField, b: CellField): CellField =>
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, a[k] & b[k]])) as unknown as CellField;
 
 /** Which fields have gone EMPTY — no legal value remains. */
 export const conflicts = (f: CellField): FieldKey[] => FIELD_KEYS.filter((k) => f[k] === 0);
@@ -174,15 +186,8 @@ export const isOpen = (f: CellField): boolean => {
  * previewed as an all-pit floor, because a bare `collapse` takes the canonical lowest option and the
  * lowest floor material happens to be `none`.)
  */
-export const SETTLE_DEFAULTS: Record<FieldKey, Mask> = {
-  wallN: maskOf(SEGS, ['none']),
-  wallW: maskOf(SEGS, ['none']),
-  floor: maskOf(FLOOR_MATERIALS, ['stone']),
-  corner: maskOf(CORNERS, ['none']),
-  wallType: maskOf(WALL_TYPES, ['solid']),
-  open: maskOf(OPENS, ['closed']),
-  torch: maskOf(TORCHES, ['no']),
-};
+export const SETTLE_DEFAULTS: Record<FieldKey, Mask> =
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, bitOf(FIELD_SPEC[k].values, FIELD_SPEC[k].settles)])) as Record<FieldKey, Mask>;
 
 /** Narrow one field to its settle default, or — if the default was ruled out — to the canonical
  *  lowest surviving option. ALWAYS returns a singleton, which is what "fully determined" requires. */
@@ -193,15 +198,8 @@ export const settleMask = (m: Mask, key: FieldKey): Mask => {
 };
 
 /** The whole field, settled. */
-export const settleField = (f: CellField): CellField => ({
-  floor: settleMask(f.floor, 'floor'),
-  wallN: settleMask(f.wallN, 'wallN'),
-  wallW: settleMask(f.wallW, 'wallW'),
-  corner: settleMask(f.corner, 'corner'),
-  wallType: settleMask(f.wallType, 'wallType'),
-  open: settleMask(f.open, 'open'),
-  torch: settleMask(f.torch, 'torch'),
-});
+export const settleField = (f: CellField): CellField =>
+  Object.fromEntries(FIELD_KEYS.map((k) => [k, settleMask(f[k], k)])) as unknown as CellField;
 
 /** What the generator will actually build from this field. Use this for any PREVIEW — a bare
  *  `collapse` shows the canonical-lowest option, which is not what ships. */
@@ -215,6 +213,12 @@ export type Pick = (field: FieldKey, options: readonly string[]) => number;
  * ONLY entropy seam; without it the canonical lowest surviving option wins, which makes the output a
  * pure function of the field.
  */
+/* COLLAPSE STAYS WRITTEN OUT, and that is a decision rather than an oversight.
+   Everything above is a per-key operation on NUMBERS, where a loop loses nothing. This is the seam
+   where a field becomes a typed `Cell`, and it is the only place the per-field types are actually
+   worth anything: written as a loop it yields `Record<FieldKey, string>` and needs a cast, which
+   would let `floor` hold a `Seg` with nothing to say so. Two lines of tedium a year is a fair price
+   for the one boundary that checks. */
 export function collapse(f: CellField, pick?: Pick): Cell | null {
   if (hasConflict(f)) return null;
   const choose = <T extends string>(key: FieldKey, vals: readonly T[], mask: Mask): T => {
@@ -224,6 +228,7 @@ export function collapse(f: CellField, pick?: Pick): Cell | null {
   };
   return {
     floor: choose('floor', FLOOR_MATERIALS, f.floor),
+    ceiling: choose('ceiling', FLOOR_MATERIALS, f.ceiling),
     wallN: choose('wallN', SEGS, f.wallN),
     wallW: choose('wallW', SEGS, f.wallW),
     corner: choose('corner', CORNERS, f.corner),

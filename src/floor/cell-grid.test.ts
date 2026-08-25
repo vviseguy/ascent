@@ -114,7 +114,7 @@ describe('cell-field — abstain vs assert', () => {
   });
 
   it('round-trips a concrete cell', () => {
-    const c: Cell = { floor: 'wood', wallN: 'barrier', wallW: 'wall', corner: 'none', wallType: 'doorway', open: 'closed', torch: 'no' };
+    const c: Cell = { floor: 'wood', ceiling: 'none', wallN: 'barrier', wallW: 'wall', corner: 'none', wallType: 'doorway', open: 'closed', torch: 'no' };
     expect(collapse(fromCell(c))).toEqual(c);
     for (const k of ['floor', 'wallN', 'wallW', 'corner', 'wallType'] as const) {
       expect(domainSize(fromCell(c)[k])).toBe(1);

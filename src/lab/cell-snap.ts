@@ -82,7 +82,7 @@ function capsBoard(): Subject {
   const cells: (Cell | null)[] = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      cells.push({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' });
+      cells.push({ floor: 'stone', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' });
     }
   }
   const at = (x: number, y: number): Cell => cells[y * W + x] as Cell;
@@ -160,7 +160,7 @@ function demo(kind: string): Subject {
   const cells: (Cell | null)[] = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const c: Cell = { floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
+      const c: Cell = { floor: 'stone', ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' };
       const inBlock = x >= 2 && x <= 3 && y >= 2 && y <= 3;
       if (inBlock) c.floor = kind === 'stairs-wood' ? 'stairs_wood' : 'stairs';
       if (y === 2 && x >= 2 && x <= 3) c.wallN = 'wall';             // north end closed: climbs north

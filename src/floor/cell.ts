@@ -217,6 +217,19 @@ export const TORCHES: readonly Torch[] = ['no', 'yes'];
 
 export interface Cell {
   floor: FloorMaterial;
+  /**
+   * THE LID — a second surface, facing DOWN, drawn from the same tiles as the floor.
+   *
+   * NOT the underside of the deck above, which is what it looks like from inside a room and is the
+   * wrong model: they are two tiles, one facing up and one facing down, that happen to describe one
+   * surface. Making the ceiling a reading of the floor above ties a room's lid to a storey that may
+   * not exist and cannot be given its own material.
+   *
+   * `none` means open to whatever is above. It settles to `none`, so nothing sprouts a ceiling it was
+   * not given: the editor's back-fill puts one in where the storey above has floor, and that is a
+   * deliberate act rather than a default.
+   */
+  ceiling: FloorMaterial;
   /** The wall along this cell's north edge: the lattice segment (x,y)→(x+1,y). */
   wallN: Seg;
   /** The wall along this cell's west edge: the lattice segment (x,y)→(x,y+1). */
@@ -234,7 +247,7 @@ export interface Cell {
 
 /** A plain open cell: stone ground, no walls, no openings. */
 export const openCell = (floor: FloorMaterial = 'stone'): Cell => ({
-  floor, wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
+  floor, ceiling: 'none', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no',
 });
 
 /** Does this wall segment stop a body? `wall` and `sloped` do; `barrier` is surmountable and `none`
