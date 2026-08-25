@@ -36,7 +36,7 @@ import {
   type Seg, type FloorMaterial, type Corner, type WallType, type Torch, type Open, type Cell, type Dir,
 } from '../floor/cell.ts';
 import {
-  fullField, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches, opens,
+  fullField, previewCell, collapse, settleField, domainSize, segs, floors, corners, wallTypes, torches, opens,
   FIELD_KEYS, type CellField, type Mask, type FieldKey,
 } from '../floor/cell-field.ts';
 import { buildCellGraph, reachableFromSet, nodeId } from '../floor/cell-graph.ts';
@@ -98,8 +98,12 @@ const brush = {
   mode: 'wall' as BrushMode,
   seg: new Set<Seg>(['wall']),
   floor: new Set<FloorMaterial>(['stone']),
-  /** The lid. Wood by default, because a ceiling read from below is boards. */
-  ceiling: new Set<FloorMaterial>(['wood']),
+  /* THE LID BRUSH STARTS ON `none` — it takes lids OFF unless you pick a material.
+     Wood is the right default for the BACK-FILL, which is answering "what goes here", and the wrong
+     one for the brush, which is answering "what do you want to change". Reaching for this brush is
+     nearly always about a shaft or an opening you want cut, and a brush that lays boards the moment
+     you touch the grid roofs the very hole you came to make. */
+  ceiling: new Set<FloorMaterial>(['none']),
   corner: new Set<Corner>(['column']),
   wallType: new Set<WallType>(['solid']),
   open: new Set<Open>(['open']),
@@ -342,7 +346,7 @@ function applyBox(b: Box): void {
       if (px > W || py > H) continue;
       if (b.kind === 'field') { if (setField(px, py, b.clear)) n++; continue; }
       // a channel that does not exist at this point is skipped, never pinned — the padding rule
-      if (b.kind === 'floor' && !hasFloor(px, py)) continue;
+      if ((b.kind === 'floor' || b.kind === 'ceiling') && !hasFloor(px, py)) continue;
       if (b.kind === 'wallN' && !hasN(px)) continue;
       if (b.kind === 'wallW' && !hasW(py)) continue;
       if (setAt(px, py, b.kind, b.clear)) n++;
@@ -609,9 +613,17 @@ function render(): void {
     }
   }
 
+  /* THE LID FAULTS, computed once for the whole pass — the same call the readout makes, so the count
+     it prints and the crosses drawn here can never disagree. */
+  const lidFaults = lidMismatches(L);
+
   // FLOOR — only where a cell exists
-  const floorKind: BoxKind | null = brush.mode === 'floor' || brush.mode === 'ceiling' ? 'floor'
-    : brush.mode === 'copy' ? 'field' : null;
+  /* THE BOX FILLS WHAT THE BRUSH PAINTS. This said `'floor'` for both, which made a right-drag in
+     ceiling mode quietly fill the GROUND — the box geometry was right, the channel was not, and the
+     two are different questions. `boxShape` still treats a lid as cell-shaped, because it is. */
+  const floorKind: BoxKind | null = brush.mode === 'floor' ? 'floor'
+    : brush.mode === 'ceiling' ? 'ceiling'
+      : brush.mode === 'copy' ? 'field' : null;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const f = cells[base() + y * stride() + x]!;
@@ -621,6 +633,13 @@ function render(): void {
       const ink = floorInk(brush.mode === 'ceiling' ? f.ceiling : f.floor);
       // `none` allowed dims the ground rather than taking a colour of its own — absence is not a
       // material, and giving it a channel would cost one of only three.
+      /* A CROSS WHERE THE LID AND THE DECK ABOVE DISAGREE.
+         They are one surface described on two storeys, so a mismatch is only visible by holding both
+         in your head — which is exactly the kind of check a plan should do for you. Drawn faintly and
+         always, not only under the lid brush: it is a fault layer, and it clears itself as you fill
+         them in. A flight's own cells are skipped — a shaft is meant to be open. */
+      const lidMismatch = lidFaults.missing.has(y * stride() + x) || lidFaults.orphan.has(y * stride() + x);
+
       const rect = svgEl('rect', {
         x: X(x) + 3, y: Y(y) + 3, width: U - 6, height: U - 6, rx: 3,
         fill: ink.certainlyVoid ? '#0d1016' : ink.fill,
@@ -631,7 +650,7 @@ function render(): void {
       });
       paintable(rect, x, y, floorKind, (gest) => {
         if (brush.mode === 'floor') applyAt(x, y, 'floor', gest.clear);
-        if (brush.mode === 'ceiling') applyAt(x, y, 'ceiling', gest.clear);
+        else if (brush.mode === 'ceiling') applyAt(x, y, 'ceiling', gest.clear);
         else if (brush.mode === 'copy') {
           // Alt is the eyedropper — and so is a plain click while nothing is held, which is what makes
           // the brush usable before anyone has read that Alt is the eyedropper.
@@ -642,6 +661,19 @@ function render(): void {
         else if (brush.mode === 'select') dragSelect(x, y, gest.press);
       });
       svg.append(rect);
+      if (lidMismatch) {
+        /* A CROSS, not a tint. The cell already carries colour for its material, strength for how
+           decided it is and hatches for its channels; another colour would have to compete with all
+           three. A stroked glyph sits on top of any of them and reads at a glance. */
+        const m = 7, cx0 = X(x) + m, cy0 = Y(y) + m, cx1 = X(x) + U - m, cy1 = Y(y) + U - m;
+        for (const [a, b2, c2, d2] of [[cx0, cy0, cx1, cy1], [cx0, cy1, cx1, cy0]] as const) {
+          svg.append(svgEl('line', {
+            x1: a, y1: b2, x2: c2, y2: d2,
+            stroke: '#e0a04a', 'stroke-width': 2, 'stroke-linecap': 'round',
+            opacity: 0.75, 'pointer-events': 'none',
+          }));
+        }
+      }
       // the two PARALLEL diagonals, riding on top of the material colour
       for (const { id, opacity } of ink.hatches) {
         svg.append(svgEl('rect', {
@@ -807,7 +839,8 @@ function boxRect(b: Box): Record<string, number> {
   const pointY = { y: Y(y0) - 15, height: (y1 - y0) * U + 30 };
   const spanX = { x: X(x0), width: (x1 - x0 + 1) * U };
   const spanY = { y: Y(y0), height: (y1 - y0 + 1) * U };
-  if (b.kind === 'floor' || b.kind === 'field') return { ...squareX, ...squareY };
+  // a lid is CELL-shaped, like the ground it faces — not a point or an edge
+  if (b.kind === 'floor' || b.kind === 'ceiling' || b.kind === 'field') return { ...squareX, ...squareY };
   if (b.kind === 'wallN') return { ...spanX, ...pointY };   // edges running east from a row of points
   if (b.kind === 'wallW') return { ...pointX, ...spanY };   // edges running south from a column
   return { ...pointX, ...pointY };                          // corner, opening, open, torch
@@ -1086,33 +1119,49 @@ function buildReadout(res: (Cell | null)[]): void {
  * flight are EXPECTED to have no lid and no floor over them. Counting those would bury the real
  * mismatches under noise on every structure that has stairs in it.
  */
-function lidReport(): string[] {
-  if (L + 1 >= LEVELS) return [];
-  const here = resolvedLevel(L), above = resolvedLevel(L + 1);
+/**
+ * WHICH CELLS OF STOREY `lv` DISAGREE WITH THE DECK ABOVE THEM — the one place that decides.
+ *
+ * Returns lattice indices, so the READOUT can count them and the PLAN can cross them out from the same
+ * answer. They were two functions for about ten minutes and immediately disagreed — the readout said
+ * twenty and the plan drew none, because one resolved through `resolvedLevel` (the display rule) and
+ * the other collapsed the raw field. Same question, two resolutions, two answers. This codebase has
+ * paid for that shape more than once today alone.
+ *
+ * Two ways to disagree, and they are different mistakes:
+ *   MISSING  floor above, no lid — the room is open to the underside of a deck that is really there.
+ *            Nearly always an omission; `⌂ lids` closes it.
+ *   ORPHAN   a lid with nothing above it. Sometimes deliberate (a soffit over a shaft), so it is
+ *            reported and never corrected.
+ *
+ * Skipped: cells the structure does not own (the padding carries borders, not ground), and a flight's
+ * own cells — a staircase climbs through a hole in the deck, so that hole is the point.
+ */
+function lidMismatches(lv: number): { missing: Set<number>; orphan: Set<number> } {
+  const missing = new Set<number>(), orphan = new Set<number>();
+  if (lv + 1 >= LEVELS) return { missing, orphan };
+  const here = resolvedLevel(lv), above = resolvedLevel(lv + 1);
   const stands = (c: Cell | null | undefined): boolean =>
     !!c && c.floor !== 'none' && c.floor !== 'rock';
-  let missing = 0, orphan = 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      /* OWNED CELLS ONLY. The lattice is one wider and one taller than the floor extent, and those
-         padding slots exist to carry the south and east BORDERS — they own no ground and no lid. They
-         abstain rather than saying `none`, so a resolved preview settles their deck to stone and their
-         lid to nothing, and every one of them reads as a missing ceiling. That is 66 phantom faults on
-         a 16x16 room, which would bury the real ones. */
       if (!hasFloor(x, y)) continue;
       const i = y * stride() + x;
-      const c = here[i], up = above[i];
-      if (!c) continue;
-      if (isStairFloor(c.floor)) continue;              // a shaft over a flight is meant to be open
-      const wantsLid = stands(up);
-      const hasLid = c.ceiling !== 'none';
-      if (wantsLid && !hasLid) missing++;
-      else if (!wantsLid && hasLid) orphan++;
+      const c = here[i];
+      if (!c || isStairFloor(c.floor)) continue;
+      const wants = stands(above[i]), has = c.ceiling !== 'none';
+      if (wants && !has) missing.add(i);
+      else if (!wants && has) orphan.add(i);
     }
   }
+  return { missing, orphan };
+}
+
+function lidReport(): string[] {
+  const { missing, orphan } = lidMismatches(L);
   const out: string[] = [];
-  if (missing) out.push(`⚠ ${missing} cell(s) have floor on storey ${L + 1} but no ceiling here — press ⌂ lids`);
-  if (orphan) out.push(`${orphan} ceiling(s) with no floor above them — deliberate, or left behind by an edit`);
+  if (missing.size) out.push(`⚠ ${missing.size} cell(s) have floor on storey ${L + 1} but no ceiling here — press ⌂ lids`);
+  if (orphan.size) out.push(`${orphan.size} ceiling(s) with no floor above them — deliberate, or left behind by an edit`);
   return out;
 }
 
@@ -1348,10 +1397,28 @@ const status = (m: string): void => {
   if (s) s.textContent = m;
 };
 
+/**
+ * Load a store, and GIVE EVERY CELL A `ceiling` on the way in.
+ *
+ * The field arrived after everything in the store was authored, so the JSON has no such key and it
+ * reads `undefined` — which is not a domain. Nothing throws: `undefined & mask` is 0, so the lid
+ * collapses to no surviving option and comes back `undefined` again, and every downstream test that
+ * asks `ceiling !== 'none'` answers YES. The editor duly reported 144 ceilings on a store with none.
+ *
+ * `cell-structures.ts` normalises this for the GENERATOR, and the editor fetches the raw file over
+ * `/__lab/` without passing through it — two doors into the same data and only one of them swept. So
+ * it is swept here too, with the same answer: pinned to `none`, because a structure authored before
+ * lids existed said nothing about them, and "nothing" here means an open room rather than "help
+ * yourself".
+ */
 async function fetchStore(kind: string): Promise<Record<string, Stored>> {
   try {
     const r = await fetch(`/__lab/${kind}`);
-    return ((await r.json()) as { structures?: Record<string, Stored> }).structures ?? {};
+    const raw = ((await r.json()) as { structures?: Record<string, Stored> }).structures ?? {};
+    for (const st of Object.values(raw)) {
+      st.cells = st.cells.map((f) => (f.ceiling === undefined ? { ...f, ceiling: NONE_FLOOR } : f));
+    }
+    return raw;
   } catch { return {}; }
 }
 
