@@ -73,8 +73,8 @@ example.
 Render a tight crop of a single flat, evenly-lit surface spanning the seam, wearing the `gradient`
 ramp texture, and it reports the biggest single-pixel step against the image's own local gradient.
 A silhouette, a shadow or a chamfer is also a step and it cannot tell them from a phase break, so
-the geometry-immune reading is the SAME crop at `?vary=0` and at full strength. MATERIALS.md has the
-worked numbers.
+the geometry-immune reading is the SAME crop at `?vary=0` and at full strength. INSTRUMENTS.md has
+the worked numbers.
 
 When testing a pointer tool, draw a marker at the cursor position before the screenshot — a
 screenshot has no cursor in it, and "is the highlight under the pointer" is otherwise unanswerable.
