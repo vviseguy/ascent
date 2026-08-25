@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, stairChoiceAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, stairChoiceAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, wallEnds, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
@@ -24,6 +24,27 @@ const allUrls = (cs: Cell[], w = W, h = H): string[] =>
   gridPlacements(cs, w, h).flatMap((e) => e.placements)
     .map((p) => p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, ''));
 
+/**
+ * HOW MANY 2u EDGES EACH PIECE COVERS — the quantity the pass order must never change.
+ *
+ * The tiling is free to choose bigger or smaller pieces (that is the whole of tiers 2 and 3), so any
+ * assertion counting PIECES is asserting about the optimiser. What the wall model asserts is a set of
+ * EDGES, and that number has to survive every re-tiling. The terminator is 0 on purpose: a nub stands
+ * at a point where a wall stops, and covers no edge of its own.
+ */
+const EDGES: Record<string, number> = {
+  wall: 2, wall_corner: 2, wall_half: 1, wall_half_endcap: 1,
+  barrier: 2, barrier_corner: 2, barrier_half: 1,
+  wall_endcap_short: 0, pillar: 0, column: 0,
+};
+const bare = (url: string): string => url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '');
+const edgesCovered = (cs: Cell[], w = W, h = H, fx?: { w: number; h: number }): number =>
+  gridPlacements(cs, w, h, fx).flatMap((e) => e.placements)
+    .reduce((n, p) => n + (EDGES[bare(p.url)] ?? 0), 0);
+/** The two pieces that FINISH a wall: a shortened last half, and the terminator for an end that has
+ *  no half to give up. Counting them together is the honest way to ask "was this end dealt with". */
+const finishes = (u: string[]): number => u.filter((n) => n === 'wall_half_endcap' || n === 'wall_endcap_short').length;
+
 describe('cell-place — one piece per thing the cell owns', () => {
   it('an open cell is just its floor', () => {
     expect(urls(grid(), 1, 1)).toEqual(['floor_tile_large']);
@@ -34,41 +55,67 @@ describe('cell-place — one piece per thing the cell owns', () => {
     expect(p.scale).toBe(32768); // 0.5 in Q16.16
   });
 
-  it('a lone wall segment is one 2u piece', () => {
-    // ...plus a cap at each of its two loose ends. The helper used to filter caps out, which is how a
-    // cap standing inside a doorway went unnoticed; these assertions now show everything emitted.
+  it('a lone wall segment is one 2u piece — the FINISHED one', () => {
+    /* `wall_half_endcap` spans x[-2,0] with its detail AT the origin, so it is finished at exactly one
+       end, and a lone segment is loose at both. The kit ships nothing finished at both ends, so the
+       second end takes the terminator instead. The helper used to filter caps out, which is how a cap
+       standing inside a doorway went unnoticed; these assertions show everything emitted. */
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_half', 'wall_endcap', 'wall_endcap']);
+      .toEqual(['floor_tile_large', 'wall_half_endcap', 'wall_endcap_short']);
   });
 
-  it('a run that stops in mid-air is CAPPED at each loose end', () => {
-    // a lone segment is loose at both ends
+  it('a run that stops in mid-air is FINISHED at each loose end, and nowhere else', () => {
+    // a lone segment is loose at both ends: one half it can give up, and one it cannot
     const lone = allUrls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }));
-    expect(lone.filter((u) => u === 'wall_endcap')).toHaveLength(2);
-    // a full row runs into the map edge at both ends — nothing to cap
+    expect(finishes(lone)).toBe(2);
+    // a full row runs into the lattice edge at both ends, and a bare grid has no border wall to meet
+    // there — so those ARE loose, and a 4-edge run has a half to spare at each of them
     const spanning = allUrls(grid((c, x, y) => { if (y === 1) c.wallN = 'wall'; }));
-    expect(spanning.filter((u) => u === 'wall_endcap')).toHaveLength(2); // a bare grid has no border wall to meet
+    expect(spanning.filter((u) => u === 'wall_half_endcap')).toHaveLength(2);
+    expect(spanning.filter((u) => u === 'wall_endcap_short')).toHaveLength(0);
+    /* NEGATIVE CONTROL — a closed ring has no ends at all, and finishing something that is not an end
+       is the failure mode every version of this rule has had. */
+    const ring = grid((c, x, y) => {
+      if ((y === 1 || y === 3) && (x === 1 || x === 2)) c.wallN = 'wall';
+      if ((x === 1 || x === 3) && (y === 1 || y === 2)) c.wallW = 'wall';
+    });
+    expect(wallEnds(ring, W, H)).toEqual([]);
+    expect(finishes(allUrls(ring))).toBe(0);
   });
 
-  it('TWO PERPENDICULAR segments become one mitered corner, not two slabs at right angles', () => {
-    // the kit's corner reaches a whole 2u edge down each leg, which is exactly what meets here
+  it('a BEND is a merge over the baseline, so a claimed edge outranks it', () => {
+    /* The kit's corner reaches a whole 2u edge down each leg — which is exactly what a bare L is made
+       of, and both of its outer points are also LOOSE ENDS. Finishing an end is irreplaceable and a
+       mitre is not, so the two-edge L comes out as two finished halves butting at the inner point.
+       This is the pass order doing its job, not a missed corner. */
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.wallN = 'wall'; c.wallW = 'wall'; } }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_corner']);
+      .toEqual(['floor_tile_large', 'wall_half_endcap', 'wall_half_endcap']);
+
+    // give each leg one more edge and the mitre is back: the ends now want edges the corner does not
+    const longer = allUrls(grid((c, x, y) => {
+      if (y === 1 && (x === 1 || x === 2)) c.wallN = 'wall';
+      if (x === 1 && (y === 1 || y === 2)) c.wallW = 'wall';
+    }));
+    expect(longer.filter((u) => u === 'wall_corner')).toHaveLength(1);
+    expect(longer.filter((u) => u === 'wall_half_endcap')).toHaveLength(2);
   });
 
-  it('a straight RUN becomes 4u pieces — one mesh per two segments, not one per segment', () => {
+  it('a straight RUN merges into 4u pieces — one mesh per two segments, not one per segment', () => {
     // four segments in a line — the grid is 4 wide, so x 0..3 is a full row of edges
     const cs = grid((c, x, y) => { if (y === 1) c.wallN = 'wall'; });
     const walls = allUrls(cs).filter((u) => u.startsWith('wall'));
-    expect(walls.filter((u) => u === 'wall')).toHaveLength(2);
+    // an edge at each end goes to finishing it; the two left in the middle are one 4u piece
+    expect(walls.filter((u) => u === 'wall')).toHaveLength(1);
+    expect(walls.filter((u) => u === 'wall_half_endcap')).toHaveLength(2);
     expect(walls.filter((u) => u === 'wall_half')).toHaveLength(0);
   });
 
-  it('an ODD run finishes with a 2u piece', () => {
+  it('an ODD number of free edges leaves a plain 2u piece — the baseline showing through', () => {
     const cs = grid((c, x, y) => { if (y === 1 && x <= 2) c.wallN = 'wall'; });
     const walls = allUrls(cs).filter((u) => u.startsWith('wall'));
-    expect(walls.filter((u) => u === 'wall')).toHaveLength(1);
+    expect(walls.filter((u) => u === 'wall_half_endcap')).toHaveLength(2);
     expect(walls.filter((u) => u === 'wall_half')).toHaveLength(1);
+    expect(walls.filter((u) => u === 'wall')).toHaveLength(0);
   });
 
   it('a barrier run uses the BARRIER family, and never mixes with the wall one', () => {
@@ -77,8 +124,14 @@ describe('cell-place — one piece per thing the cell owns', () => {
       if (y === 3 && x <= 1) c.wallN = 'wall';
     });
     const u = allUrls(cs);
-    expect(u).toContain('barrier');   // the 4u barrier, not two halves
-    expect(u).toContain('wall');
+    /* The kit ships no barrier cap and a 4.00 wall nub is not a substitute for the end of a 1.10 rail,
+       so a barrier run simply ends — and therefore keeps both of its edges for the 4u merge. The wall
+       run beside it, identical in length, spends both of its finishing itself. That asymmetry is the
+       family table, not an accident. */
+    expect(u).toContain('barrier');
+    expect(u.filter((n) => n.startsWith('barrier'))).toHaveLength(1);
+    expect(u.filter((n) => n === 'wall_half_endcap')).toHaveLength(2);
+    expect(u).not.toContain('wall');
   });
 
   it('a barrier gets the low piece, and a column the pillar', () => {
@@ -89,8 +142,9 @@ describe('cell-place — one piece per thing the cell owns', () => {
   });
 
   it('`sloped` stands in as a solid wall until its own mesh exists', () => {
+    // the WALL family, so a lone segment gets that family's finished 2u piece like any other
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'sloped'; }), 1, 1))
-      .toContain('wall_half');
+      .toContain('wall_half_endcap');
   });
 
   it('a ROCK cell lays no ground of its own — it is not a place', () => {
@@ -101,7 +155,23 @@ describe('cell-place — one piece per thing the cell owns', () => {
 
   it('a PIT emits no ground but keeps its walls', () => {
     const out = urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.floor = 'none'; c.wallN = 'wall'; } }), 1, 1);
-    expect(out).toEqual(['wall_half', 'wall_endcap', 'wall_endcap']);
+    expect(out).toEqual(['wall_half_endcap', 'wall_endcap_short']);
+  });
+
+  it('a T-JUNCTION IS A NORMAL WALL — no piece of its own, and no end to finish', () => {
+    /* Three arms meeting is not an end, so nothing is capped there, and the material reads as plain
+       stone — no aperture, no special. `wall_Tsplit` and `wall_crossing` exist in the kit and stay
+       unused on purpose: they consume arms the runs through them also want, and getting that wrong
+       leaves a GAP in a wall rather than an ugly join. */
+    const cs = grid((c, x, y) => {
+      if (y === 1) c.wallN = 'wall';                          // a full row
+      if (x === 2 && (y === 1 || y === 2)) c.wallW = 'wall';  // a stem hanging south from (2,1)
+    });
+    expect(wallEnds(cs, W, H).some((e) => e.x === 2 && e.y === 1)).toBe(false);
+    expect(new Set(allUrls(cs).filter((n) => n !== 'floor_tile_large')))
+      .toEqual(new Set(['wall', 'wall_half', 'wall_half_endcap']));
+    // three loose ends in the whole figure — the two row ends and the foot of the stem
+    expect(finishes(allUrls(cs))).toBe(3);
   });
 });
 
@@ -139,9 +209,26 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
     const cs = withOpening('doorway');
     expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
-    // beyond the span: a half, and ONE cap at its far end. The near end is not loose — the doorway
-    // continues the wall — and a cap there is the bug `cell-module.test.ts` exists to hold shut.
-    expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half', 'wall_endcap']);
+    // beyond the span: ONE 2u piece, finished at its far end. The near end is not loose — the doorway
+    // continues the wall — and a piece pushed in there is the bug `cell-module.test.ts` holds shut.
+    expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half_endcap']);
+  });
+
+  it('a module whose flanking wall does not continue is TERMINATED, not shortened', () => {
+    /* THE CASE WITH NO RUN TO SHORTEN AT ALL, and the reason the nub tier has two answers rather than
+       one. Two wall edges with a doorway at the point between them: the module claims BOTH, so each of
+       its ends is a wall end whose last piece is 4u of stone with an aperture cut in it. There is no
+       half-doorway to fall back to, so the end is terminated on the point instead. */
+    const cs = grid((c, x, y) => {
+      if (y === 2 && (x === 1 || x === 2)) c.wallN = 'wall';
+      if (x === 2 && y === 2) { c.wallType = 'doorway'; c.open = 'open'; }
+    });
+    const u = allUrls(cs);
+    expect(u.filter((n) => n === 'wall_doorway')).toHaveLength(1);
+    expect(u.filter((n) => n === 'wall_endcap_short')).toHaveLength(2);
+    expect(u.filter((n) => n.startsWith('wall_half'))).toHaveLength(0);
+    // and the terminators stand OUTSIDE the module, at ±2.0 from its centre — see the aperture suite
+    expect(wallEnds(cs, W, H).map((e) => `${e.x},${e.y}:${e.by}`)).toEqual(['1,2:module', '3,2:module']);
   });
 
   it('the axis is derived from which run actually exists', () => {
@@ -204,11 +291,9 @@ describe('cell-place — the padding carries borders, not a phantom extra layer'
     });
     /* Count EDGES covered, not pieces: the grid pass lays whole runs, so a 4u piece is two edges and
        a mitered corner is two. What the padding rule is about is which edges EXIST, and that is the
-       quantity that must not change when pieces get bigger. */
-    const EDGES: Record<string, number> = { wall: 2, wall_corner: 2, wall_half: 1, barrier: 2, barrier_corner: 2, barrier_half: 1 };
-    const walls = (fx?: { w: number; h: number }): number =>
-      gridPlacements(cs, sw, sh, fx).flatMap((e) => e.placements)
-        .reduce((n, p) => n + (EDGES[p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '')] ?? 0), 0);
+       quantity that must not change when pieces get bigger — or, since the priority order landed,
+       when they get SMALLER because a nub claimed one. See `EDGES` at the top of this file. */
+    const walls = (fx?: { w: number; h: number }): number => edgesCovered(cs, sw, sh, fx);
 
     // every point has both walls set, so without a floor extent every one is drawn
     expect(walls()).toBe(sw * sh * 2);
@@ -283,11 +368,19 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
   });
 
   it('a walled flight carries its own sides, so those walls are not drawn twice', () => {
-    const cs = block({ flanks: true });
-    const halves = (g: Cell[]): number => gridPlacements(g, SW, SH).flatMap((e) => e.placements)
-      .filter((p) => p.url.includes('wall_half')).length;
-    // four wall segments were added either side of the flight, and the mesh supplies all four
-    expect(halves(cs)).toBe(halves(block()));
+    /* COUNT EDGES, NOT PIECES. Adding the flanks changes how the NORTH wall is TILED — the flight now
+       draws the corner, so the north run's ends stop being loose and its two edges merge into one 4u
+       piece instead of becoming two finished halves. What must not move is how many edges the wall
+       layer covers, because the flight is supposed to supply all four of the ones it took. Asserting
+       on `wall_half` counts instead made this test fail on a re-tiling that never touched an edge. */
+    expect(edgesCovered(block({ flanks: true }), SW, SH)).toBe(edgesCovered(block(), SW, SH));
+    /* ...and the flank edges really are claimed by the FLIGHT, which is why the nub tier leaves their
+       ends alone. Anything added at a stair mouth is geometry in the one place a body must squeeze
+       through, and the stair mesh finishes its own sides anyway. */
+    const flanked = block({ flanks: true });
+    expect(wallEnds(flanked, SW, SH).filter((e) => e.by === 'flight').length).toBeGreaterThan(0);
+    expect(finishes(allUrls(flanked, SW, SH))).toBe(0);
+    expect(finishes(allUrls(block(), SW, SH))).toBe(2);   // without them, the north wall IS loose
   });
 
   it('SENSES a three-cell width and switches to the wide mesh', () => {
@@ -577,17 +670,25 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
    * being unfamiliar.
    */
 
-  /** Measured footprints, in world units, for the pieces a wall run can emit. */
+  /** Measured off the GLBs (`tmp/glb-bbox.mjs`), in world units, for every piece a wall pass emits.
+   *  `from` is the piece's own start along its native +X axis, relative to its pivot. */
   const FOOTPRINT: Record<string, { along: number; from: number }> = {
-    // `from` is the piece's own start along its axis, relative to its pivot
-    wall: { along: 4, from: -2 },
-    wall_half: { along: 2, from: 0 },
-    wall_half_endcap: { along: 2, from: -2 },
-    wall_endcap: { along: 1.07, from: 0 },
+    wall: { along: 4, from: -2 },              // X[-2, 2]     — centred
+    wall_half: { along: 2, from: 0 },          // X[ 0, 2]     — starts at its pivot
+    wall_half_endcap: { along: 2, from: -2 },  // X[-2, 0]     — FINISHES at its pivot
+    wall_endcap: { along: 1.07, from: 0 },     // X[ 0, 1.067] — the retired protruding stub
+    wall_endcap_short: { along: 0.297, from: -0.03 },  // X[-0.030, 0.267] — the trimmed flourish
   };
   const APERTURE = 2.0;   // the clear span of wall_doorway, measured; the module itself is 4u
 
-  /** Every placement, as a world-space interval on its own axis plus the cross-axis it sits on. */
+  /**
+   * Every placement, as a world-space interval on its own axis plus the cross-axis it sits on.
+   *
+   * THE TURN TABLE IS THE EASY THING TO GET BACKWARDS, and it was: `TURN_RAD` is [0, PI/2, PI, -PI/2]
+   * about +Y, so +X maps to +X, -Z, -X, +Z for turns 0..3. Turn 1 runs NEGATIVE along Z and turn 3
+   * POSITIVE, which is the opposite of what this helper used to say. It never showed, because the one
+   * assertion below filters to the horizontal axis and every V-axis row was discarded unread.
+   */
   const boxes = (cs: Cell[], w: number, h: number): { name: string; ax: 'H' | 'V'; lo: number; hi: number; cross: number }[] => {
     const out: { name: string; ax: 'H' | 'V'; lo: number; hi: number; cross: number }[] = [];
     for (const { x, y, placements } of gridPlacements(cs, w, h)) {
@@ -597,8 +698,8 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
         if (!fp) continue;                                   // floors, openings, stairs — not run pieces
         // cell centre is (2x, 2y); placement offsets are in half-cells, so world = centre + offset
         const cx = 2 * x + p.x / 65536, cz = 2 * y + p.z / 65536;
-        const along = p.turn === 0 || p.turn === 2 ? 'H' : 'V';
-        const dir = p.turn === 0 || p.turn === 1 ? 1 : -1;    // turns 2/3 face back along the axis
+        const along = p.turn % 2 === 0 ? 'H' : 'V';
+        const dir = p.turn === 0 || p.turn === 3 ? 1 : -1;    // turns 1/2 face back along the axis
         const base = along === 'H' ? cx : cz;
         const a = base + dir * fp.from, b = a + dir * fp.along;
         out.push({ name, ax: along, lo: Math.min(a, b), hi: Math.max(a, b), cross: along === 'H' ? cz : cx });
@@ -638,19 +739,46 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
   it('...nor when a perpendicular wall arrives at the same point', () => {
     const cs = withDoor(7, 5, 3, 2, (c, x, y) => { if (x === 3 && (y === 2 || y === 3)) c.wallW = 'wall'; });
     // the perpendicular run's own last piece is a separate design question (see openingGroups); this
-    // asserts only that no CAP is driven into the aperture
-    expect(intruders(cs, 7, 5, 3, 2).filter((n) => n.startsWith('wall_endcap'))).toEqual([]);
+    // asserts only that nothing FINISHING a wall is driven into the aperture
+    expect(intruders(cs, 7, 5, 3, 2).filter((n) => n.startsWith('wall_half_endcap') || n.startsWith('wall_endcap_short')))
+      .toEqual([]);
   });
 
-  it('a genuinely loose end STILL gets its cap — the fix must not remove all of them', () => {
+  it('a module END takes its terminator OUTSIDE the aperture, not in it', () => {
+    /* The nub tier's second answer stands ON the point where the wall stops, and the obvious way to
+       get it wrong is to stand it on the module's own point instead of at the end of its span. A
+       module spans 4u about its point, so its ends are at ±2.0 and its clear span is ±1.0 — the
+       terminator has 1.0 of daylight, and this measures it rather than trusting the arithmetic. */
+    const cs: Cell[] = [];
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 7; x++) {
+      const c = openCell();
+      if (y === 2 && (x === 2 || x === 3)) c.wallN = 'wall';
+      if (y === 2 && x === 3) { c.wallType = 'arch'; c.open = 'open'; }
+      cs.push(c);
+    }
+    expect(intruders(cs, 7, 4, 3, 2)).toEqual([]);
+    /* ...and the terminators really are there: one at each end of the lone module. The module is
+       centred on world x = 5 and spans [3, 7], so each nub sits with its mating face on an end and
+       0.267 of flourish outside it — which is the whole claim about this piece, measured. */
+    const nubs = boxes(cs, 7, 4).filter((b) => b.name === 'wall_endcap_short')
+      .map((b) => `[${b.lo.toFixed(2)}, ${b.hi.toFixed(2)}]`).sort();
+    expect(nubs).toEqual(['[2.73, 3.03]', '[6.97, 7.27]']);
+  });
+
+  it('a genuinely loose end STILL gets its finish — the fix must not remove all of them', () => {
+    // NEGATIVE CONTROL. Emitting nothing at all would pass every assertion above and be wrong.
     const lone: Cell[] = [];
     for (let y = 0; y < 4; y++) for (let x = 0; x < 6; x++) {
       const c = openCell();
       if (y === 2 && (x === 2 || x === 3)) c.wallN = 'wall';   // a stub with both ends in open air
       lone.push(c);
     }
-    const caps = gridPlacements(lone, 6, 4).flatMap((e) => e.placements)
-      .filter((p) => p.url.includes('wall_endcap'));
-    expect(caps.length).toBe(2);
+    const laid = gridPlacements(lone, 6, 4).flatMap((e) => e.placements)
+      .filter((p) => p.url.includes('wall_half_endcap'));
+    expect(laid.length).toBe(2);
+    // and NOTHING protrudes past where the model says the wall stops: the run spans world x [3,7]
+    const spans = boxes(lone, 6, 4).filter((b) => b.ax === 'H');
+    expect(Math.min(...spans.map((b) => b.lo))).toBe(3);
+    expect(Math.max(...spans.map((b) => b.hi))).toBe(7);
   });
 });

@@ -44,6 +44,8 @@ npm run cell:snap -- structure "walled stairs"      # one authored structure, fr
 npm run cell:snap -- all --turns                    # every structure x all 8 orientations
 npm run cell:snap -- floor 36x28 --seed=3 --focus=30,11,7   # a generated floor, zoomed on one cell
 npm run cell:snap -- structure "walled stairs" --stack=3    # storeys stacked: does a flight REACH?
+npm run cell:snap -- demo caps --size=1800x1250 --angle=90 --pitch=76   # EVERY place a wall can stop,
+#   sixteen captioned cases on one board — the visual gate on the wall-finishing rule (`wallEnds`).
 npm run editor:snap -- "walled stairs" --levels=2 --level=1 # the AUTHORING surface (needs `npm run dev`)
 # --angle/--pitch/--zoom move the camera; a ground ruler shows the 2u cells so an off-by-half-a-cell
 # placement is visible. It WARNS when a mesh failed to load, so a red placeholder box is never a
@@ -152,14 +154,33 @@ suppression must both ask `moduleAxis` — two hand-written conditions had alrea
 opening's axis, and a torch's facing. Each is read from the walls at draw time. Anything that is a
 fact about the walls belongs to the walls.
 
+**WALLS ARE LAID IN A STRICT PRIORITY ORDER, and the order is what makes the rule safe.** The baseline
+is one 2u half-wall on every asserted edge; everything else is an optimisation over it, taken only
+where it collides with nothing already claimed:
+1. **SPECIALS** — a 4u module (window / arch / doorway / cracked / gated / scaffold / pillar-wall) and
+   a walled flight's own sides claim their edges first. They are irreplaceable; nothing may compete.
+2. **NUBS** — `wallEnds` is the authority on where a wall actually stops. An ordinary end is
+   SHORTENED (`wall_half_endcap` replaces the last half, so nothing protrudes); an end whose last
+   piece cannot be shortened — a module, or a one-edge run that already spent its edge on its other
+   end — is TERMINATED with `wall_endcap_short`, a 0.267 flourish, and gets no collision because it
+   overhangs past what the walls assert.
+3. **BENDS, then RUNS** — `wall_corner` and the 4u `wall` are merges. Drop them and the wall is still
+   whole, just made of more pieces. Which is why a two-edge L comes out as two finished halves and no
+   mitre: finishing an end is irreplaceable and a bend is not.
+
+A **T-junction is a normal wall** — plain stone, no aperture — so it is just baseline edges meeting and
+needs no case of its own. `wall_Tsplit` / `wall_crossing` stay unused: they consume arms the runs
+through them also want, and getting that wrong leaves a GAP rather than an ugly join.
+
 Three rules that keep biting if forgotten:
 - **Abstaining ≠ asserting.** A full domain says "no opinion" and every later phase reads it as
   "help yourself"; a pinned `none` says "this is air". A room must SAY its interior is air or the
   maze carves through it.
-- **"Is there a wall here?" ≠ "does THIS PASS draw it?"** `edgeDraw` returns who owns each edge —
-  `none` / `run` / `module` / `flight` — because when it returned a bare null for all four, `armsAt`
-  read a run that stopped at a doorway as a run stopping in mid-air and capped it into the aperture.
-  A quarter of every floor's openings had a full-height stub in them.
+- **"Is there a wall here?" ≠ "does THIS PASS draw it?"** `edgeDrawnBy` returns who owns each edge —
+  `none` / `run` / `module` / `flight` — because when it returned a bare null for all four, the arm
+  count read a run that stopped at a doorway as a run stopping in mid-air and capped it into the
+  aperture. A quarter of every floor's openings had a full-height stub in them. The same four answers
+  are now also the priority tiers, so "who owns this edge" and "who may claim it" is one question.
 - **`SETTLE_DEFAULTS` in `cell-field.ts` is shared** by the generator and the editor preview. Never
   preview with a bare `collapse` — it takes the canonical-lowest option, and the lowest floor
   material is `none`, so an unclaimed floor previews as a pit rather than the stone it becomes.

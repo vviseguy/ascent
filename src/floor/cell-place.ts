@@ -36,7 +36,19 @@ const u1 = (f: string): string => `${PACK}/${f}.glb`;
 export const PIECE = {
   half: u('wall_half'),
   corner: u('wall_corner'),
+  /* RETIRED, and kept named so nobody wires it back by accident. `wall_endcap` is X[0, 1.067] — a
+     full-height stub pushed PAST the point where the model says the wall stops. It was emitted at
+     every loose end; measured across 4 seeds x 3 storeys, 610 of them, and 505 (83%) had their tip
+     inside a cell a body can stand in. Nothing places it now: an ordinary end is SHORTENED onto
+     `halfCap`, and an end that cannot be shortened takes `endcapShort`. */
   endcap: u('wall_endcap'),
+  /* A LOCAL DERIVATIVE, not a KayKit file — `scripts/glb-trim.mjs` cut `wall_endcap` at x = 0.80 and
+     re-origined it, keeping only the terminal flourish. MEASURED (`tmp/glb-bbox.mjs`, counting only
+     INDEXED vertices — the trim rewrites the index buffer and leaves POSITION alone, so a naive read
+     of the accessor still reports the uncut 1.07): X[-0.030, 0.267], 4.00 tall, 1.00 deep. Same
+     origin convention as `wall_endcap` — the mating face is x = 0 and the body extends +X — so it
+     protrudes 0.267 where the original protrudes 1.067, at full wall height and full wall depth. */
+  endcapShort: u('wall_endcap_short'),
   barrier: u('barrier'),
   barrierCorner: u('barrier_corner'),
   halfCap: u('wall_half_endcap'),
@@ -1123,27 +1135,180 @@ export function cellPlacements(
  * `wall` spans two edges end to end, and `wall_corner` joins two perpendicular ones. Both families —
  * wall and barrier — carry the same three shapes, so the rule is one rule.
  *
- * Two passes, greedy, in a fixed order so the result is deterministic:
- *   1. CORNERS. A lattice point with exactly two incident edges, perpendicular, same family, becomes
- *      one mitered piece and both edges are spent.
- *   2. RUNS. Whatever is left is walked in maximal straight lines and tiled with 4u pieces, with a 2u
- *      one for an odd last edge.
+ * THE BASELINE IS ONE 2u HALF-WALL ON EVERY ASSERTED EDGE, and everything else is an OPTIMISATION
+ * over it. That sentence is the whole design, and the pass order is what enforces it:
  *
- * Junctions of three or four arms are deliberately left to butt: `wall_Tsplit` and `wall_crossing`
- * exist and would fit, but they consume arms that the runs through them also want, and getting that
- * wrong leaves a gap in a wall rather than an ugly join. Straights and corners are where nearly all
- * the pieces are.
+ *   1. SPECIALS.  A 4u module (window, arch, doorway, cracked, gated, scaffold, pillar-wall, and the
+ *                 open/closed variants) and a walled flight's own side walls CLAIM their edges before
+ *                 anything else is considered. They are irreplaceable — there is no other mesh that
+ *                 says what they say — so nothing downstream may compete for those edges.
+ *   2. NUBS.      Genuinely loose ends get finished. See `wallEnds`.
+ *   3. BENDS,     both merges over the baseline, taken only where they collide with nothing already
+ *      then RUNS. claimed. A `wall_corner` replaces two perpendicular halves; a 4u `wall` replaces two
+ *                 collinear ones. Neither is ever REQUIRED — drop them and the wall is still whole,
+ *                 just made of more pieces.
+ *
+ * ORDER IS THE POINT. It used to be corners-then-runs-then-decorate, which meant the greedy layer ran
+ * BEFORE the pieces that cannot be substituted and could take an edge one of them needed. Putting the
+ * irreplaceable first makes "the run system competes with a T-junction / a doorway / a cap" structurally
+ * impossible rather than something each pass has to remember to check.
+ *
+ * A T-JUNCTION IS A NORMAL WALL. It reads as plain stone — no aperture, no special material — so it is
+ * just baseline edges meeting, and it needs no case of its own. `wall_Tsplit` and `wall_crossing` exist
+ * in the kit and are deliberately unused: they consume arms the runs through them also want, and
+ * getting that wrong leaves a GAP in a wall rather than an ugly join.
  */
 type WallFamily = 'wall' | 'barrier';
-const FAMILY: Record<WallFamily, { full: string; half: string; corner: string; cap: string | null }> = {
-  // `cap` is the SHORT stub the kit ends a wall with — a run that just stops mid-air looks sheared off
-  // otherwise. The barrier family has no cap of its own, so a barrier run simply ends.
-  wall: { full: PIECE.wall, half: PIECE.half, corner: PIECE.corner, cap: PIECE.endcap },
-  barrier: { full: PIECE.barrier, half: PIECE.barrierHalf, corner: PIECE.barrierCorner, cap: null },
+const FAMILY: Record<WallFamily, { full: string; half: string; corner: string; endHalf: string | null }> = {
+  /* `endHalf` is a FINISHED 2u piece — the last segment of a loose run IS one, rather than a plain
+     half with a stub added beyond it. The barrier family has none, so a barrier run simply ends: the
+     kit ships no barrier cap, and terminating a 1.10 rail with a 4.00 pillar is not a substitute. */
+  wall: { full: PIECE.wall, half: PIECE.half, corner: PIECE.corner, endHalf: PIECE.halfCap },
+  barrier: { full: PIECE.barrier, half: PIECE.barrierHalf, corner: PIECE.barrierCorner, endHalf: null },
 };
 /** `sloped` has no mesh of its own and stands in as wall, exactly as `wallPiece` has it. */
 const familyOf = (seg: Seg): WallFamily | null =>
   seg === 'barrier' ? 'barrier' : seg === 'wall' || seg === 'sloped' ? 'wall' : null;
+
+/**
+ * WHO DRAWS THIS EDGE — and the distinction is load-bearing.
+ *
+ * This used to return `WallFamily | null`, and `null` meant three different things: there is no wall
+ * here, a module covers it, or a stair flight carries it. `armsAt` needs the FIRST of those and got all
+ * three, so a run that stopped because a doorway continued the wall read as a run stopping in mid-air —
+ * and planted an endcap inside the aperture. A full-height 1.07 stub in a 2.00 doorway, on a quarter of
+ * every floor's openings, and invisible to the tests because the assertion helper filtered
+ * `wall_endcap` out.
+ *
+ * `none` means the MODEL has no wall here. Everything else means there is one, drawn by someone — and
+ * WHO draws it is exactly the priority tier that owns it: `module` and `flight` are tier 1 and cannot
+ * be substituted, `run` is the baseline that tiers 2 and 3 rewrite.
+ */
+export type EdgeDraw =
+  | { by: 'none' }
+  | { by: 'run'; fam: WallFamily }
+  | { by: 'module' }
+  | { by: 'flight' };
+const NO_EDGE: EdgeDraw = { by: 'none' };
+
+/** `edgeDrawnBy(…, 'E')` asks about the edge running EAST from the lattice point (x,y) — the one
+ *  `wallN` names; `'S'` asks about the edge running SOUTH from it, which is `wallW`. */
+export function edgeDrawnBy(
+  cells: readonly (Cell | null)[], w: number, h: number, px: number, py: number, dir: 'E' | 'S',
+  floorExtent?: { w: number; h: number }, above?: readonly (Cell | null)[],
+): EdgeDraw {
+  const fw = floorExtent?.w ?? w, fh = floorExtent?.h ?? h;
+  const c = cellAt(cells, w, h, px, py);
+  if (!c) return NO_EDGE;
+  if (dir === 'E') {
+    if (px >= fw) return NO_EDGE;                                   // no such edge on this lattice
+    const fam = familyOf(c.wallN);
+    if (!fam) return NO_EDGE;                                       // no wall in the model
+    if (moduleAxis(cells, w, h, px, py) === 'H') return { by: 'module' };
+    if (moduleAt(cells, w, h, px + 1, py, 'H')) return { by: 'module' };
+    if (flightCoversWall(cells, w, h, px, py, 'N', above)) return { by: 'flight' };
+    return { by: 'run', fam };
+  }
+  if (py >= fh) return NO_EDGE;
+  const fam = familyOf(c.wallW);
+  if (!fam) return NO_EDGE;
+  if (moduleAxis(cells, w, h, px, py) === 'V') return { by: 'module' };
+  if (moduleAt(cells, w, h, px, py + 1, 'V')) return { by: 'module' };
+  if (flightCoversWall(cells, w, h, px, py, 'W', above)) return { by: 'flight' };
+  return { by: 'run', fam };
+}
+
+/**
+ * THE FOUR ARMS OF A LATTICE POINT, in a fixed order so a census is stable.
+ *
+ * An arm is one whole edge. `E` and `S` are the two this point owns; `W` and `N` belong to the
+ * neighbour that owns them, which is why they are read one cell back.
+ */
+const ARMS = [
+  { away: 'E' as const, ex: 0, ey: 0, dir: 'E' as const, low: true },
+  { away: 'W' as const, ex: -1, ey: 0, dir: 'E' as const, low: false },
+  { away: 'S' as const, ex: 0, ey: 0, dir: 'S' as const, low: true },
+  { away: 'N' as const, ex: 0, ey: -1, dir: 'S' as const, low: false },
+];
+
+/**
+ * WHERE A WALL ACTUALLY STOPS — the complete list of places that need finishing.
+ *
+ * A lattice point with exactly ONE asserted arm is a wall end. Everything else is not: zero arms is
+ * open air, two arms is a straight or a bend, three or four is a T or a cross. The count ASKS THE
+ * MODEL (`edgeDrawnBy(…).by !== 'none'`) and not the run layer, because a wall that continues as a
+ * doorway is still a wall meeting here — counting only what the runs lay makes every doorway look like
+ * the end of the world.
+ *
+ * The subtle part is not finding the points, it is knowing WHAT ENDS THERE, because the answer decides
+ * which of two completely different finishes applies:
+ *
+ *   `by: 'run'`     an ordinary wall. Take HALF of it down and lay `wall_half_endcap` instead — a full
+ *                   2u piece finished at one end, so it replaces the last half rather than protruding
+ *                   past it. Nothing sticks out and it collides like any other wall.
+ *   `by: 'module'`  the last piece is a window / arch / doorway / cracked panel. It cannot be
+ *                   shortened — there is no half-window — so the end is TERMINATED at the point
+ *                   instead. This is the case that has no run to shorten at all: an opening whose
+ *                   flanking wall simply does not continue.
+ *   `by: 'flight'`  a walled staircase's own side wall. The mesh carries its own ends; anything added
+ *                   at a stair mouth is geometry in the one place a body has to squeeze through.
+ *
+ * `finished` is the one way a point is already dealt with: a `column` IS the end of the wall, because
+ * a pillar 1.50 across covers the whole 1.00-deep section and a nub tucked inside it is a flourish
+ * buried in stone. A `balcony` post is 0.70 x 1.40 and does NOT finish a 4.00 wall — three fifths of
+ * the section is still open air above it — so a wall ending at one is finished like any other, and
+ * `occupied` is reported for callers that care rather than acted on here.
+ */
+export interface WallEnd {
+  /** The lattice point the wall stops at. */
+  x: number;
+  y: number;
+  /** The edge that ends here, named by the point that OWNS it plus its axis. */
+  ex: number;
+  ey: number;
+  dir: 'E' | 'S';
+  /** True when (x,y) is that edge's low end, so the wall body lies on the positive side of the point. */
+  low: boolean;
+  by: 'run' | 'module' | 'flight';
+  /** The run family, when a run draws it. */
+  fam: WallFamily | null;
+  /** A column already stands here and finishes the wall — nothing more to do. */
+  finished: boolean;
+  /** Something stands here — a column or a balcony post. Reported, not acted on: see above. */
+  occupied: boolean;
+}
+
+export function wallEnds(
+  cells: readonly (Cell | null)[], w: number, h: number,
+  floorExtent?: { w: number; h: number }, above?: readonly (Cell | null)[],
+): WallEnd[] {
+  const out: WallEnd[] = [];
+  /* The lattice runs one PAST the cells on each axis: an edge running east from (w-1,y) ends at the
+     point (w,y), which owns no cell but is still where the wall stops. */
+  for (let py = 0; py <= h; py++) {
+    for (let px = 0; px <= w; px++) {
+      let n = 0;
+      let only: typeof ARMS[number] | null = null;
+      let draw: EdgeDraw = NO_EDGE;
+      for (const a of ARMS) {
+        const ax = px + a.ex, ay = py + a.ey;
+        if (ax < 0 || ay < 0) continue;
+        const d = edgeDrawnBy(cells, w, h, ax, ay, a.dir, floorExtent, above);
+        if (d.by === 'none') continue;
+        n++;
+        if (n === 1) { only = a; draw = d; }
+      }
+      if (n !== 1 || !only || draw.by === 'none') continue;
+      const corner = cellAt(cells, w, h, px, py)?.corner ?? 'none';
+      out.push({
+        x: px, y: py, ex: px + only.ex, ey: py + only.ey, dir: only.dir, low: only.low,
+        by: draw.by, fam: draw.by === 'run' ? draw.fam : null,
+        finished: corner === 'column', occupied: corner !== 'none',
+      });
+    }
+  }
+  return out;
+}
 
 /** `wall_corner`'s legs sit on W+S at turn 0; each further quarter-turn rotates the pair. */
 const CORNER_TURN: Record<string, number> = { WS: 0, SE: 1, EN: 2, NW: 3 };
@@ -1166,53 +1331,16 @@ export function wallEdgePlacements(
     if (list) list.push(p); else out.set(k, [p]);
   };
 
-  /**
-   * WHO DRAWS THIS EDGE — and the distinction is load-bearing.
-   *
-   * This used to return `WallFamily | null`, and `null` meant three different things: there is no wall
-   * here, a module covers it, or a stair flight carries it. `armsAt` needs the FIRST of those and got
-   * all three, so a run that stopped because a doorway continued the wall read as a run stopping in
-   * mid-air — and planted an endcap inside the aperture. A full-height 1.07 stub in a 2.00 doorway,
-   * on a quarter of every floor's openings, and invisible to the tests because the assertion helper
-   * filtered `wall_endcap` out.
-   *
-   * `none` means the MODEL has no wall here. Everything else means there is one, drawn by someone.
-   */
-  type EdgeDraw =
-    | { by: 'none' }
-    | { by: 'run'; fam: WallFamily }
-    | { by: 'module' }
-    | { by: 'flight' };
-  const NO_EDGE: EdgeDraw = { by: 'none' };
+  const edgeDraw = (px: number, py: number, dir: 'E' | 'S'): EdgeDraw =>
+    edgeDrawnBy(cells, w, h, px, py, dir, { w: fw, h: fh }, above);
 
-  const edgeDraw = (px: number, py: number, dir: 'E' | 'S'): EdgeDraw => {
-    const c = cellAt(cells, w, h, px, py);
-    if (!c) return NO_EDGE;
-    if (dir === 'E') {
-      if (px >= fw) return NO_EDGE;                                   // no such edge on this lattice
-      const fam = familyOf(c.wallN);
-      if (!fam) return NO_EDGE;                                       // no wall in the model
-      if (moduleAxis(cells, w, h, px, py) === 'H') return { by: 'module' };
-      if (moduleAt(cells, w, h, px + 1, py, 'H')) return { by: 'module' };
-      if (flightCoversWall(cells, w, h, px, py, 'N', above)) return { by: 'flight' };
-      return { by: 'run', fam };
-    }
-    if (py >= fh) return NO_EDGE;
-    const fam = familyOf(c.wallW);
-    if (!fam) return NO_EDGE;
-    if (moduleAxis(cells, w, h, px, py) === 'V') return { by: 'module' };
-    if (moduleAt(cells, w, h, px, py + 1, 'V')) return { by: 'module' };
-    if (flightCoversWall(cells, w, h, px, py, 'W', above)) return { by: 'flight' };
-    return { by: 'run', fam };
-  };
-
-  /** The family of an edge THIS PASS lays, or null. Run-laying and corner mitering are unchanged. */
+  /** The family of an edge THIS PASS may lay, or null. Tier 1 never reaches here. */
   const edge = (px: number, py: number, dir: 'E' | 'S'): WallFamily | null => {
     const d = edgeDraw(px, py, dir);
     return d.by === 'run' ? d.fam : null;
   };
 
-  // spent[k] marks an edge already covered by a piece; E and S are tracked separately
+  // spent[k] marks an edge already claimed by a piece; E and S are tracked separately
   const spentE = new Uint8Array(w * h), spentS = new Uint8Array(w * h);
   const isSpent = (px: number, py: number, dir: 'E' | 'S'): boolean =>
     (dir === 'E' ? spentE : spentS)[py * w + px] === 1;
@@ -1220,7 +1348,80 @@ export function wallEdgePlacements(
     (dir === 'E' ? spentE : spentS)[py * w + px] = 1;
   };
 
-  /* ---- 1. CORNERS ---- */
+  /* ================================ TIER 1 — SPECIALS ================================
+     A 4u module and a walled flight's own sides claim their edges outright, and they claim them by
+     EXISTING: `edgeDrawnBy` reports them as `module` / `flight`, `edge()` returns null for both, and
+     every later tier only ever looks at `edge()`. There is nothing to lay here — `cellPlacements`
+     draws the module itself — but the claim is the first thing that happens and no tier below can
+     reach past it. Stated rather than implied, because "the run system can never compete with a
+     special" is a property of this ordering and not of any single condition. */
+
+  /* ================================= TIER 2 — NUBS ==================================
+     Every genuinely loose end, and only those; `wallEnds` is the authority on where they are and on
+     which of the two finishes applies. Ends are taken in the lattice order `wallEnds` returns, so a
+     one-edge run loose at BOTH ends resolves the same way every time: the first end takes the edge,
+     the second finds it spent and terminates on the point instead.
+
+     TWO FINISHES, and which one applies is decided by what owns the last edge, never by taste:
+
+       SHORTEN    the ordinary case. Take half the wall down and lay `wall_half_endcap` in its place —
+                  a full 2u piece finished at one end, so it lies INSIDE the run's own extent and
+                  nothing protrudes. It is approved, it is in `WALL_FALLBACK`, and it collides like
+                  any other wall.
+       TERMINATE  when there is no half to give up: a module has no half form, and a one-edge run
+                  loose at both ends has already spent its only edge on the first of them.
+
+     THE ULTRA-SHORT NUB. Two candidates were on the table and BOTH were measured before choosing.
+     A scaled-down `wall_endcap` is not one of them: `CellPlacement.scale` is ONE scalar, so the shrink
+     that stops it protruding takes its height with it and leaves a knee-high chip on a 4.00 wall.
+     `pillar` (1.50 x 4.00 x 1.50, approved, 5 boxes) works and reads well at a doorway, but it is an
+     architectural element — it protrudes 0.75 and stands proud of both wall faces by 0.25, so it
+     announces itself where the job is to stop announcing anything.
+     `wall_endcap_short` is the one: X[-0.030, 0.267] x 4.00 x 1.00 — full wall height, exactly the
+     wall's own depth, and 0.267 of overhang against `wall_endcap`'s 1.067. It is the SAME flourish,
+     with the 0.80 of wall the original dragged along behind it cut off.
+
+     IT GETS NO COLLISION, deliberately, and the reason is NOT that giving it some breaks anything —
+     that was tried. With a `WALL_FALLBACK` entry `prove:game` is byte-for-byte the same story: the
+     same one pre-existing PROOF 9 failure, the same waypoint, the same stuck position. The proofs do
+     not decide it, so two other things do:
+       - THE RULE ALREADY WRITTEN DOWN next to `wall_endcap`'s deliberate absence from that table:
+         collision follows what the walls ASSERT, and decoration that overhangs is drawn, not
+         collided. This overhangs 0.267 past the point where the model says the wall stops. The
+         magnitude changed from `wall_endcap`'s 1.067; the KIND of thing it is did not.
+       - `WALL_FALLBACK` CANNOT EXPRESS IT HONESTLY. Its boxes are centred on the piece origin
+         (`cx: 0, hx: w/2`), and this mesh is X[-0.030, 0.267] — not centred on anything. The only
+         entry the table can hold today straddles the mating face, half of it buried in the wall it
+         caps. Adding an offset column for one 0.267 flourish is more machinery than the flourish. */
+  for (const end of wallEnds(cells, w, h, { w: fw, h: fh }, above)) {
+    if (end.finished) continue;                    // a column IS the end of the wall
+    if (end.by === 'flight') continue;             // the stair mesh carries its own ends
+    const endHalf = end.fam ? FAMILY[end.fam].endHalf : null;
+    /* ONE TURN SERVES BOTH PIECES, which is not a coincidence worth leaving unexplained: their native
+       bodies point OPPOSITE ways from the same origin — `wall_half_endcap` is x[-2,0] and runs back
+       INTO the wall, `wall_endcap_short` is x[0,0.267] and sticks OUT of it — so the rotation that
+       aims one along the wall aims the other away from it. */
+    const turn = end.low ? (end.dir === 'E' ? TURN.W : TURN.N) : (end.dir === 'E' ? TURN.E : TURN.S);
+    if (end.by === 'run' && endHalf && !isSpent(end.ex, end.ey, end.dir)) {
+      // placed on the point it finishes, turned to run back along its own edge
+      const ox = end.low || end.dir === 'S' ? NEG_ONE : ONE;
+      const oz = end.low || end.dir === 'E' ? NEG_ONE : ONE;
+      push(end.ex, end.ey, at(endHalf, turn, ox, oz));
+      spend(end.ex, end.ey, end.dir);
+    } else if (end.by === 'module' || (end.by === 'run' && endHalf)) {
+      /* Attributed to the edge's own cell, which is guaranteed to exist; the END POINT may be one
+         past the lattice, so it owns no cell of its own to be attributed to. */
+      const ox = end.x === end.ex ? NEG_ONE : ONE;
+      const oz = end.y === end.ey ? NEG_ONE : ONE;
+      push(end.ex, end.ey, at(PIECE.endcapShort, turn, ox, oz));
+    }
+  }
+
+  /* ================================= TIER 3a — BENDS =================================
+     A merge, not a requirement: two perpendicular halves become one mitered piece. Only free edges
+     are eligible, so a bend can never take an edge a module, a flight or a nub has claimed — which
+     is why an L whose two outer ends are both loose comes out as two finished halves butting at the
+     inner point rather than as one mitre with two sheared-off ends. */
   for (let py = 0; py < h; py++) {
     for (let px = 0; px < w; px++) {
       // the four arms meeting at this point, each one whole edge long
@@ -1246,24 +1447,11 @@ export function wallEdgePlacements(
     }
   }
 
-  /* ---- 2. RUNS ---- */
-  /**
-   * How many wall segments meet at a lattice point — a run that ends where nothing else does is loose
-   * and gets a cap rather than a sheared-off face.
-   *
-   * ASKS THE MODEL, NOT THIS PASS. A wall that continues as a doorway is still a wall meeting here;
-   * counting only what the run layer lays makes every doorway look like the end of the world and caps
-   * the run into it.
-   */
-  const armsAt = (px: number, py: number): number => {
-    let n = 0;
-    if (edgeDraw(px, py, 'E').by !== 'none') n++;
-    if (px > 0 && edgeDraw(px - 1, py, 'E').by !== 'none') n++;
-    if (edgeDraw(px, py, 'S').by !== 'none') n++;
-    if (py > 0 && edgeDraw(px, py - 1, 'S').by !== 'none') n++;
-    return n;
-  };
-
+  /* ================================= TIER 3b — RUNS ==================================
+     The baseline, plus the one merge left: two collinear free edges become one 4u `wall`. A stretch
+     of free edges is walked greedily from its low end, and an odd last edge is a plain 2u half — the
+     baseline showing through where no merge fits. Nothing here is reachable for an edge a module, a
+     flight, a nub or a bend has already claimed. */
   const layRun = (sx: number, sy: number, dir: 'E' | 'S', fam: WallFamily, len: number): void => {
     const stepX = dir === 'E' ? 1 : 0, stepY = dir === 'E' ? 0 : 1;
     const turn = dir === 'E' ? TURN.E : TURN.S;
@@ -1283,24 +1471,6 @@ export function wallEdgePlacements(
         i += 1;
       }
     }
-
-    /* CAPS on a loose end. `wall_endcap` is a short +X-native stub, so the low end takes it facing
-       back along the run and the high end takes it facing forward — a nub on the outside of the last
-       piece, not a replacement for it.
-       A run that ends AT A COLUMN needs none: the column is already the end of the wall, and a cap
-       tucked inside it is a nub buried in a pillar. */
-    const cap = FAMILY[fam].cap;
-    if (!cap) return;
-    const endsInColumn = (px: number, py: number): boolean =>
-      cellAt(cells, w, h, px, py)?.corner === 'column';
-    const ex = sx + stepX * len, ey = sy + stepY * len;
-    if (armsAt(sx, sy) === 1 && !endsInColumn(sx, sy)) {
-      push(sx, sy, at(cap, dir === 'E' ? TURN.W : TURN.N, ox, oz));
-    }
-    if (armsAt(ex, ey) === 1 && !endsInColumn(ex, ey)) {
-      const along = fromInt(2 * len);
-      push(sx, sy, at(cap, turn, dir === 'E' ? add(ox, along) : ox, dir === 'E' ? oz : add(oz, along)));
-    }
   };
 
   for (const dir of ['E', 'S'] as const) {
@@ -1312,7 +1482,7 @@ export function wallEdgePlacements(
         const px = dir === 'E' ? i : o, py = dir === 'E' ? o : i;
         const fam = edge(px, py, dir);
         if (!fam || isSpent(px, py, dir)) { i++; continue; }
-        // how far does this run of the SAME family go before it stops or hits a spent edge?
+        // how far does this stretch of the SAME family go before it stops or hits a claimed edge?
         let len = 0;
         while (i + len < inner) {
           const qx = dir === 'E' ? i + len : o, qy = dir === 'E' ? o : i + len;
