@@ -729,7 +729,7 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
     wall_half: { along: 2, from: 0 },          // X[ 0, 2]     — starts at its pivot
     wall_half_endcap: { along: 2, from: -2 },  // X[-2, 0]     — FINISHES at its pivot
     wall_endcap: { along: 1.07, from: 0 },     // X[ 0, 1.067] — the retired protruding stub
-    wall_endcap_short: { along: 0.297, from: -0.03 },  // X[-0.030, 0.267] — the trimmed flourish
+    wall_endcap_short: { along: 0.17, from: 0 },  // X[0.000, 0.170] — FLUSH at its pivot, all outside
   };
   const APERTURE = 2.0;   // the clear span of wall_doorway, measured; the module itself is 4u
 
@@ -810,11 +810,23 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
     }
     expect(intruders(cs, 7, 4, 3, 2)).toEqual([]);
     /* ...and the terminators really are there: one at each end of the lone module. The module is
-       centred on world x = 5 and spans [3, 7], so each nub sits with its mating face on an end and
-       0.267 of flourish outside it — which is the whole claim about this piece, measured. */
+       centred on world x = 5 and spans [3, 7], so each nub sits with its mating face ON an end and
+       0.170 of flourish outside it — which is the whole claim about this piece, measured. */
     const nubs = boxes(cs, 7, 4).filter((b) => b.name === 'wall_endcap_short')
       .map((b) => `[${b.lo.toFixed(2)}, ${b.hi.toFixed(2)}]`).sort();
-    expect(nubs).toEqual(['[2.73, 3.03]', '[6.97, 7.27]']);
+    expect(nubs).toEqual(['[2.83, 3.00]', '[7.00, 7.17]']);
+    /* AND ASSERT THE INVARIANT, not just the two numbers. The literals above went stale the moment
+       the mesh moved, and the version they replaced had the nub reaching 0.03 PAST the module's end
+       and into the aperture — the exact thing this test is named for — while still passing, because
+       a hard-coded string cannot notice that it describes a violation. `wall_endcap_short` used to
+       start at x = -0.030 rather than 0, because `glb-trim` re-origined by the cut plane instead of
+       by the geometry that survived the cut. Both ends now land exactly on the module's span. */
+    const EPS = 1e-6;
+    for (const n of boxes(cs, 7, 4).filter((b) => b.name === 'wall_endcap_short')) {
+      // wholly beyond one end of the module's [3, 7] span — never overlapping the module at all
+      const beyondNear = n.hi <= 3.0 + EPS, beyondFar = n.lo >= 7.0 - EPS;
+      expect(beyondNear || beyondFar).toBe(true);
+    }
   });
 
   it('a genuinely loose end STILL gets its finish — the fix must not remove all of them', () => {

@@ -44,6 +44,7 @@ function readAcc(i) {
 }
 
 let kept = 0, dropped = 0;
+let keptMinX = Infinity;   // the lowest X of any vertex that SURVIVED the cut
 const newBlocks = [];   // { primRef, Uint32Array }
 
 for (const mesh of g.meshes) {
@@ -55,7 +56,11 @@ for (const mesh of g.meshes) {
     for (let t = 0; t < triCount; t++) {
       const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
       const cx = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3;
-      if (cx >= CUT) { keep.push(a, b, c); kept++; } else dropped++;
+      if (cx >= CUT) {
+        keep.push(a, b, c); kept++;
+        // WHERE THE SURVIVING GEOMETRY ACTUALLY BEGINS — see the re-origin note below.
+        for (const v of [a, b, c]) if (pos[v * 3] < keptMinX) keptMinX = pos[v * 3];
+      } else dropped++;
     }
     newBlocks.push({ prim, data: new Uint32Array(keep) });
   }
@@ -73,12 +78,22 @@ for (const { prim, data } of newBlocks) {
 }
 g.buffers[0].byteLength = binOut.length;
 
-// RE-ORIGIN: fold a translation into every root node so the kept geometry starts at x = 0
+/* RE-ORIGIN so the kept geometry starts at x = 0 — BY WHAT SURVIVED, NOT BY THE CUT PLANE.
+   Triangles are dropped whole, by CENTROID, so the surviving geometry almost never begins exactly at
+   the cut: it begins at the first vertex of the first triangle that cleared it. Shifting by CUT
+   therefore leaves the piece floating `keptMinX - CUT` short of its own origin, and since these
+   pieces are placed flush against the thing they finish, that distance is a VISIBLE GAP with the
+   piece's loose decoration hanging in it.
+   That is not hypothetical: `wall_endcap_short` cut at 0.80 kept geometry starting at 0.90, so every
+   cap sat 0.100 off the wall it was capping with two brick blobs stranded in the space. Shifting by
+   `keptMinX` makes the piece flush for ANY cut value, which is what the old comment here already
+   claimed was happening. */
+const SHIFT = Number.isFinite(keptMinX) ? keptMinX : CUT;
 for (const r of g.scenes[g.scene ?? 0].nodes) {
   const nd = g.nodes[r];
-  if (nd.matrix) { nd.matrix[12] -= CUT; } else {
+  if (nd.matrix) { nd.matrix[12] -= SHIFT; } else {
     const t = nd.translation ?? [0, 0, 0];
-    nd.translation = [t[0] - CUT, t[1], t[2]];
+    nd.translation = [t[0] - SHIFT, t[1], t[2]];
   }
 }
 
