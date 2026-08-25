@@ -60,6 +60,29 @@ tactile bodies, rendered with maximal but *legible* spectacle.
 - The tilt sells "true 3D" while keeping top-down route legibility. Floors read as stacked horizontal planes;
   the tilt reveals their thickness and the chasms between them.
 
+#### 1.2a The inspection exception (`?cam=fp`) — an instrument, NOT a relaxation of the lock
+
+Everything above still holds for the game. **The lock is unchanged and nothing may reach a first-person view
+through the UI.** What exists alongside it is a debug instrument: `?cam=fp` stands the camera in the local
+player's head at FOV 70 / near 0.02, looking along a mouse-controlled yaw and pitch. It is constructed only
+when the flag is present, it is view-only, and the default camera is untouched.
+
+It exists because **§1.5's material language has no other honest gate.** Relief, per-texel roughness, AO and
+per-group texture variation are all judged at reading distance, and until this the only ways to look at a
+surface were the asset lab (one object, a turntable, no surroundings) and the game camera (a few metres up,
+looking down). Neither answers "does this wall hold up when you are standing at it".
+
+**It walks straight into three top-down assumptions, and those are findings, not defects to design around:**
+
+| what | at eye level | severity |
+|---|---|---|
+| **route-distance culling** (`Dungeon.cullByRoute`) | **there is no ceiling.** The storey above is route-far — you reach it by walking to a stairwell and back — so it is pruned, and looking up shows the void. Reproduced with every cell explored, so it is the route rule, not the ink. | real, and the mode cannot inspect a ceiling or the underside of a floor at all |
+| **unexplored-region ink** (`Dungeon.patchFogClip`) | mostly benign: the reveal is line-of-sight and unbounded along a clear line, so what you can see is already explored. A wall STRADDLING the boundary still loses its far half, and a corridor can end in an absence rather than a dark wall. | cosmetic; `?fog=off` is the escape hatch |
+| **occlusion cutaway** (`Dungeon.patchCutout`) | **inert, and correctly so.** It projects the player at `+1.0` above their centre — effectively the camera origin — whose NDC z leaves [-1,1], so `occlude` disables itself. Verified: even `?cut=0.45` punches no hole. With the camera in the player's head there is nothing between them to cut. | none |
+
+Do not "fix" these to suit the instrument. Each is the top-down grammar working as specified; the eye is
+simply standing somewhere the grammar was never asked about.
+
 ### 1.3 Palette
 
 Three orthogonal color "channels" that must never collide in hue space, so the eye can always separate them:

@@ -35,12 +35,20 @@ const MAX_TICKS_PER_FRAME = 5;
 
 export interface LoopHandle { stop(): void; readonly tick: () => number; }
 
+/**
+ * The eye-level INSPECTION camera's half of the frame (`?cam=fp`, see first-person.ts).
+ * Structural on purpose: the loop only needs "is there a pose this frame", and the mode
+ * is a debug instrument the loop should not otherwise know about.
+ */
+export interface EyeCamSource { pose(): { yaw: number; pitch: number } | null }
+
 export function startLoop(
   sim: Sim,
   renderer: Renderer,
   input: InputController,
   localPlayerId: number,
   anchorId: number,
+  eyeCam?: EyeCamSource,
 ): LoopHandle {
   let running = true;
   let acc = 0;
@@ -89,6 +97,9 @@ export function startLoop(
       Math.hypot(toFloat(fromRaw(w.vx[localPlayerId]!)), toFloat(fromRaw(w.vz[localPlayerId]!))),
       input.focusYaw, input.focusPitch,
     );
+    // ...and, when the eye-level INSPECTION camera is on, where the eye looks. Same
+    // category as the line above — a per-client view pose, never a sim input.
+    if (eyeCam) renderer.setEyeCam(eyeCam.pose());
 
     let steps = 0;
     while (acc >= MS_PER_TICK && steps < MAX_TICKS_PER_FRAME) {
