@@ -214,20 +214,26 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
     expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half_endcap']);
   });
 
-  it('a module whose flanking wall does not continue is TERMINATED, not shortened', () => {
-    /* THE CASE WITH NO RUN TO SHORTEN AT ALL, and the reason the nub tier has two answers rather than
-       one. Two wall edges with a doorway at the point between them: the module claims BOTH, so each of
-       its ends is a wall end whose last piece is 4u of stone with an aperture cut in it. There is no
-       half-doorway to fall back to, so the end is terminated on the point instead. */
+  it('a module FINISHES ITSELF — its ends get no nub at all', () => {
+    /* A MODULE IS NOT A RUN THAT STOPPED. It is a 4u piece with its own jamb and its own coping
+       course at each end, so an end that belongs to a module is already finished and there is nothing
+       for the nub tier to do. It used to get `wall_endcap_short` tacked on, and the render showed
+       what that costs: a thin sliver down the jamb plus an ASYMMETRIC overhang on the coping, on a
+       piece whose ends are symmetric by design. Compare `demo caps` — the module cases carry a clean
+       lintel on two posts now.
+       This is the DISTINCTION the tier turns on: `wall` and `wall_half` end in a raw mating face and
+       need finishing; a module does not. Both were being treated as loose ends. */
     const cs = grid((c, x, y) => {
       if (y === 2 && (x === 1 || x === 2)) c.wallN = 'wall';
       if (x === 2 && y === 2) { c.wallType = 'doorway'; c.open = 'open'; }
     });
     const u = allUrls(cs);
     expect(u.filter((n) => n === 'wall_doorway_open')).toHaveLength(1);
-    expect(u.filter((n) => n === 'wall_endcap_short')).toHaveLength(2);
+    expect(u.filter((n) => n === 'wall_endcap_short')).toHaveLength(0);
+    // NOR does anything else creep in to fill the gap — the module's own ends are the whole wall here
     expect(u.filter((n) => n.startsWith('wall_half'))).toHaveLength(0);
-    // and the terminators stand OUTSIDE the module, at ±2.0 from its centre — see the aperture suite
+    expect(u.filter((n) => n === 'wall')).toHaveLength(0);
+    // the ends ARE still ends; they are just ends the module already owns
     expect(wallEnds(cs, W, H).map((e) => `${e.x},${e.y}:${e.by}`)).toEqual(['1,2:module', '3,2:module']);
   });
 
@@ -809,12 +815,11 @@ describe('cell-place — NOTHING STANDS IN AN APERTURE', () => {
       cs.push(c);
     }
     expect(intruders(cs, 7, 4, 3, 2)).toEqual([]);
-    /* ...and the terminators really are there: one at each end of the lone module. The module is
-       centred on world x = 5 and spans [3, 7], so each nub sits with its mating face on an end and
-       0.267 of flourish outside it — which is the whole claim about this piece, measured. */
-    const nubs = boxes(cs, 7, 4).filter((b) => b.name === 'wall_endcap_short')
-      .map((b) => `[${b.lo.toFixed(2)}, ${b.hi.toFixed(2)}]`).sort();
-    expect(nubs).toEqual(['[2.73, 3.03]', '[6.97, 7.27]']);
+    /* ...and NOTHING stands at its ends either. A module is self-finishing, so a lone one draws
+       exactly one piece: itself. This used to assert two nubs at [2.73, 3.03] and [6.97, 7.27] —
+       0.267 of flourish outside each end — which was correct arithmetic for a piece that should not
+       have been placed. Kept as the negative: the aperture is clear AND the ends are bare. */
+    expect(boxes(cs, 7, 4).filter((b) => b.name === 'wall_endcap_short')).toEqual([]);
   });
 
   it('a genuinely loose end STILL gets its finish — the fix must not remove all of them', () => {
