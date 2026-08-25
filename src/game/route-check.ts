@@ -313,7 +313,18 @@ export function summitRoute(tower: CompiledTower, probe: RouteProbe = ANCHOR_PRO
         // ignore anything that does not rise more than one STEP above the surface being stepped onto:
         // that is the step itself, or the next tread — not something standing in the way
         if (F(s2.maxY) <= y0 + probe.maxStep || F(s2.minY) >= y1) continue;
-        if (x <= F(s2.minX) || x >= F(s2.maxX) || z <= F(s2.minZ) || z >= F(s2.maxZ)) continue;
+        /* A SAMPLE ON A BOX FACE IS INSIDE IT, and the strict `<=` / `>=` that used to be here is why
+           PROOF 9 spent this long red.
+           Seams are midpoints between abutting stand nodes, and walls sit on cell boundaries — so the
+           seam lands EXACTLY on a wall's face constantly, not rarely. With a strict test every sample
+           along such a seam read as outside the wall, the whole span came back clear, and the checker
+           returned a route straight through solid stone. A dimensionless point could not walk it, so
+           it was never about body radius: the body then pinned flush against that face, one radius
+           short, pushing forever.
+           Inclusive risks the opposite — a wall merely TANGENT to a seam now splits the clear run
+           rather than being ignored. Measured rather than assumed: every proof passes, and the
+           route-EXISTS checks pass across all seeds, so nothing legitimate got closed off. */
+        if (x < F(s2.minX) || x > F(s2.maxX) || z < F(s2.minZ) || z > F(s2.maxZ)) continue;
         hit = true; break;
       }
       if (hit) { run = 0; continue; }
