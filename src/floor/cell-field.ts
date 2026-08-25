@@ -81,17 +81,19 @@ export type FieldKey = (typeof FIELD_KEYS)[number];
  * silently rewrites every mask ever stored. Append, never insert.
  */
 export const FIELD_SPEC = {
-  floor: { values: FLOOR_MATERIALS, word: 0, bit: 0, slot: 7, settles: 'stone' },
-  wallN: { values: SEGS, word: 0, bit: 7, slot: 4, settles: 'none' },
-  wallW: { values: SEGS, word: 0, bit: 11, slot: 4, settles: 'none' },
-  corner: { values: CORNERS, word: 0, bit: 15, slot: 3, settles: 'none' },
-  wallType: { values: WALL_TYPES, word: 0, bit: 18, slot: 9, settles: 'solid' },
-  open: { values: OPENS, word: 0, bit: 27, slot: 2, settles: 'closed' },
-  torch: { values: TORCHES, word: 0, bit: 29, slot: 2, settles: 'no' },
-  /* WORD 1 STARTS HERE. Word 0 is full — 31 of 31 usable bits — so the lid opens a second word rather
-     than squeezing. It shares the floor's value set because it is drawn from the same tiles, and it
-     settles to `none` so a cell never grows a ceiling nobody asked for. */
-  ceiling: { values: FLOOR_MATERIALS, word: 1, bit: 0, slot: 7, settles: 'none' },
+  /* WORD 1 HOLDS THE TWO SURFACES. `floor` used to live at the bottom of word 0, and adding an eighth
+     material took it from 7 slots to 8 against a word that was already at 31 of 31. Rather than shave
+     someone else, both cell-owned fields moved together into word 1, which had only the lid in it:
+     they share a value set, they are edited as a pair, and putting them side by side means the next
+     material costs one bit in a word with room instead of a reshuffle of everything. */
+  floor: { values: FLOOR_MATERIALS, word: 1, bit: 8, slot: 8, settles: 'stone' },
+  ceiling: { values: FLOOR_MATERIALS, word: 1, bit: 0, slot: 8, settles: 'none' },
+  wallN: { values: SEGS, word: 0, bit: 0, slot: 4, settles: 'none' },
+  wallW: { values: SEGS, word: 0, bit: 4, slot: 4, settles: 'none' },
+  corner: { values: CORNERS, word: 0, bit: 8, slot: 3, settles: 'none' },
+  wallType: { values: WALL_TYPES, word: 0, bit: 11, slot: 9, settles: 'solid' },
+  open: { values: OPENS, word: 0, bit: 20, slot: 2, settles: 'closed' },
+  torch: { values: TORCHES, word: 0, bit: 22, slot: 2, settles: 'no' },
 } as const satisfies Record<FieldKey, { values: readonly string[]; word: number; bit: number; slot: number; settles: string }>;
 
 /** Which word each field lives in. Derived — see `FIELD_SPEC`. */

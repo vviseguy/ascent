@@ -84,9 +84,14 @@ export const BLOCKING_SEGS: readonly Seg[] = ['wall', 'sloped'];
  *
  * APPEND-ONLY, like `SEGS` — masks are serialised by bit position.
  */
-export type FloorMaterial = 'none' | 'stone' | 'dirt' | 'wood' | 'rock' | 'stairs' | 'stairs_wood';
+export type FloorMaterial =
+  'none' | 'stone' | 'dirt' | 'wood' | 'rock' | 'stairs' | 'stairs_wood' | 'grate';
+/* APPENDED, AND THE APPEND IS THE FEATURE. Masks are serialised by BIT POSITION, so a value added at
+   the end takes a bit no stored mask has ever set — every structure authored before this one simply
+   cannot be a grate, which is exactly the wanted answer for a material nobody has placed yet. Insert
+   it anywhere else and every mask in the store silently shifts meaning. */
 export const FLOOR_MATERIALS: readonly FloorMaterial[] =
-  ['none', 'stone', 'dirt', 'wood', 'rock', 'stairs', 'stairs_wood'];
+  ['none', 'stone', 'dirt', 'wood', 'rock', 'stairs', 'stairs_wood', 'grate'];
 
 /** The stair materials, and how deep a flight of each has to be. A stone flight climbs its storey in
  *  2 cells; the wooden one is a shallower stair and needs 3. So the material is not a skin — it

@@ -36,7 +36,7 @@
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
 import { blocks, isStairFloor, seesThrough, type Cell, type Dir } from '../floor/cell.ts';
-import { gridPlacements, moduleAt, stairFlight, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
+import { gridPlacements, moduleAt, stairFlight, FLOOR_URL, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
 import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
 import { getApproved, type ApprovedBox } from './approved-assets.ts';
 import {
@@ -77,10 +77,10 @@ const walkable = (c: Cell | null): boolean => c !== null && c.floor !== 'none' &
 
 const Z: Fixed = fromInt(0);
 const ONE: Fixed = fromInt(1);
-/** The ground mesh for a material — the same table `cell-place` draws from. */
-const FLOOR_URL: Record<'stone' | 'dirt' | 'wood', string> = {
-  stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
-};
+/* THE ground mesh table is imported, not restated. This was a second copy with its own hand-written
+   key type, and it went stale the moment a material was appended: `grate` existed in the model, in the
+   editor and in `cell-place`, and the 4u merge here still believed there were three. A copy of a table
+   is a table that can disagree. */
 
 /** Floor meshes render but do not collide — the slab under them already does, and two colliders in
  *  the same place is how a player ends up standing half a unit too high. */

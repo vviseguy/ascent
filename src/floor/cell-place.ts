@@ -94,6 +94,7 @@ export const PIECE = {
   floorStone: u('floor_tile_large'),
   floorDirt: u('floor_dirt_large'),
   floorWood: u('floor_wood_large'),
+  floorGrate: u('floor_tile_grate'),
 } as const;
 
 /** One mesh to place, CELL-LOCAL. `turn` = quarter-turns CCW; `x`/`z` are offsets from the cell
@@ -153,8 +154,10 @@ const DECK_LIFT: Fixed = fromFloatConst(0.25);
 /** The lid's origin, measured from its own storey's line — see `DECK_LIFT`. */
 const CEILING_Y: Fixed = fromFloatConst(4.05);
 
-const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
-  stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
+/** Ground mesh per material — THE table, exported because `cell-tower` kept a second copy of it and a
+ *  second copy is a thing that can disagree. Adding a material used to mean remembering both. */
+export const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
+  stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood, grate: PIECE.floorGrate,
 };
 
 /** Which 4u module an opening draws. `door` and `arch` share a mesh today. */

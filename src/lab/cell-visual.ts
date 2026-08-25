@@ -107,6 +107,11 @@ function channels<T extends string>(m: Mask, vals: readonly T[], map: Partial<Re
  *  flight is a stone-coloured cell wearing the stair hatch. */
 export const FLOOR_CHANNEL: Partial<Record<FloorMaterial, Channel>> = {
   stone: 0, dirt: 1, wood: 2, stairs: 0, stairs_wood: 2,
+  /* A grate SHARES the stone channel and is told apart by its hatch, the same trick the stair
+     materials use. There are only three channels and they are spoken for; spending one on a material
+     that is really "stone with holes in it" would cost the ability to read a mixture back to its
+     members, which is the whole point of the additive scheme. */
+  grate: 0,
 };
 const STAIRY: readonly FloorMaterial[] = ['stairs', 'stairs_wood'];
 
@@ -135,6 +140,8 @@ export function floorInk(m: Mask): FloorInk {
   const stairs = vals.filter((v) => STAIRY.includes(v));
   if (stairs.length) hatches.push({ id: 'h-stair', opacity: stairs.length === vals.length ? 0.95 : 0.45 });
   if (vals.includes('rock')) hatches.push({ id: 'h-fill', opacity: vals.length === 1 ? 0.95 : 0.45 });
+  // a grate is stone-coloured, so its DOTS are what say it is a grate rather than a slab
+  if (vals.includes('grate')) hatches.push({ id: 'h-grate', opacity: vals.length === 1 ? 0.95 : 0.45 });
   return {
     fill: rgb(channels(m, FLOOR_MATERIALS, FLOOR_CHANNEL), 'ground'),
     strength: certainty(vals.length, FLOOR_MATERIALS.length),
@@ -242,6 +249,13 @@ export function patternDefs(unit: number): string {
     <pattern id="h-fill" width="${Math.round(s / 1.5)}" height="${Math.round(s / 1.5)}"
              patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
       <line x1="0" y1="0" x2="0" y2="${s}" stroke="#000000b0" stroke-width="2.6"/>
+    </pattern>
+    <!-- A GRID, not a diagonal. Both diagonals are spoken for (a flight one way, solid fill the
+         other), and a third would read as one of them at a glance. A grate is drawn as what it is:
+         holes in a lattice. -->
+    <pattern id="h-grate" width="${s}" height="${s}" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="${s}" y2="0" stroke="#000000a0" stroke-width="1.8"/>
+      <line x1="0" y1="0" x2="0" y2="${s}" stroke="#000000a0" stroke-width="1.8"/>
     </pattern>
   </defs>`;
 }
