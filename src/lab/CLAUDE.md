@@ -78,6 +78,15 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
    (`show groups` is how you find the pavers worth saving), never the render scope.
    `group-anchors.ts` bakes nothing at all into a mesh with no saved group, so it reaches the
    renderer as the identical geometry object. See MATERIALS.md.
+8. **A group that reaches the object's outer boundary anchors ON it, and that has to stay EXACT.**
+   A paver split across two tiles is two groups in two meshes; they read as one stone only if both
+   halves hash the SAME world anchor, and a hash turns a one-ulp disagreement into a different
+   phase. Snapping a coordinate to the bounding-box face makes it a property of the template, so
+   every placement bakes the same number and two abutting tiles' faces land on the same world plane
+   — no pitch, no tolerance, no rounding. Anything that reintroduces a per-mesh quantity into a
+   snapped axis (a centroid, an average, a "close enough" epsilon on the anchor itself) breaks it
+   silently and only in a generated tower. `group-anchors.test.ts` asserts the real GLB's world
+   anchors as IEEE-754 bits for that reason. See MATERIALS.md.
 7. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
    and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
    were emitted in every mode they ate floor paint and selection drags along every border. They are

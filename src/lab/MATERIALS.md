@@ -145,7 +145,8 @@ offset. Eighteen thousand identical stones read as **wallpaper**, not as masonry
 The fix is one rule:
 
 ```
-phase = hash(anchor)        anchor = the group's area-weighted centroid, in WORLD space
+phase = hash(anchor)        anchor = the group's centroid, SNAPPED to the object's outer boundary
+                                     on every axis that reaches it — in WORLD space
 ```
 
 **Same anchor -> coordinated; different anchor -> differentiated.** That covers both directions at
@@ -212,12 +213,58 @@ may override its type (`SurfaceGroup.vary`, the per-row dropdown in the SURFACES
 too. At **0** the shader emits exactly the projection it did before groups existed, so "did this
 change anything else" is one screenshot pair rather than a rebuild. It defaults to full.
 
-**NOT done, deliberately: coordination ACROSS meshes.** Four tiles' corner pieces meeting to form
-one diamond stay four groups with four phases. `cell-tower.ts` collapses aligned 2x2 blocks of
-matching floor into a single natively-4u mesh — ~18,000 of 26,000 meshes — conditionally and
-data-dependently, so anything keyed on per-tile seam points produces a visible discontinuity exactly
-at the merged/unmerged boundary. A group is always wholly inside one mesh, which is why this half is
-safe and that half is not.
+#### A paver split across two tiles is ONE stone — the boundary snap
+
+A group is always inside one mesh; a PAVER is not. `floor_tile_large` is a 4u square of an
+octagon-and-diamond pattern with pitch 2, so of its 13 authored pavers only 5 are whole: four are
+HALF octagons on the tile's edges and four are QUARTER octagons at its corners. The octagon centred
+on a tile seam is two groups in two meshes, and the one at a tile corner is four. Anchored on their
+own centroids they hash to unrelated phases and the stone tears along the seam — which is exactly
+what shipped, and exactly what was reported.
+
+So the anchor is snapped to the placed object's outer bounding box, **axis by axis**:
+
+| the group reaches… | the anchor's coordinate on that axis |
+|---|---|
+| the LOW face only | that face |
+| the HIGH face only | that face |
+| both (it spans the object) | the midpoint of the two |
+| neither | the midpoint of the extent of the group's *boundary* vertices along it |
+| no face at all (the octagon at the tile's centre) | the area-weighted centroid, as before — and it goes on varying per placement, alone |
+
+**Why this and not a lattice snap: it needs no pitch, no tolerance and no rounding, because it is
+EXACT.** Placements come off `cell-tower.ts` as Q16.16 fixed point, so abutting tiles' touching
+vertices are exactly coincident in world space and the transform is a translation plus a
+power-of-two scale — `modelMatrix * anchor` rounds nowhere. A snapped coordinate is read off the
+shared geometry's own bounding box, which is a property of the TEMPLATE: every placement bakes the
+identical number, and two tiles' opposite faces land on the same world plane. The half-octagon
+either side of a seam therefore computes one world anchor **bit for bit**, and the four quarters at
+a corner all compute the corner point itself. On this tile the 13 anchors come out as the pattern's
+own octagon/diamond lattice, which is also why a QUARTER-TURNED tile still coordinates: that lattice
+is invariant under a quarter turn.
+
+**"Close" would have been worthless**, which is why this is a test and not a screenshot. A hash
+amplifies a one-ulp disagreement into a completely different phase, so an anchor rule that agrees to
+eleven places is indistinguishable from one that does not agree at all. Two candidates were measured
+and rejected on the real GLB before this one was built: the **area-weighted centroid** of each half
+(differs in the last bits — the two halves are congruent, not identical, and float addition is not
+associative) and the **centroid of the boundary vertices** (exact across an edge, but the four
+quarters at a corner each carry vertices from two faces shared with two DIFFERENT neighbours, so no
+symmetric function of that set is common to all four). `group-anchors.test.ts` asserts the world
+anchors of the real asset's abutting pairs as IEEE-754 bits, at both scales, on both axes, at the
+four-way corner, under a quarter turn, and at tower-sized offsets.
+
+The one measured rather than structural step is the "neither" row — the coordinate ALONG a seam. It
+is a min/max over boundary vertices, exact because the extremes are vertices ON the shared face; on
+this kit the seam edge is the widest part of every split paver. A new asset that broke that would
+fail the bit-identity test rather than a tower nobody is looking at.
+
+**What it does NOT claim.** `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one
+natively-4u mesh — ~18,000 of 26,000 — and draws the rest per 2u cell at HALF scale. A merged block's
+pavers are therefore twice the size of its unmerged neighbour's, and two stones of different sizes
+are not one stone: the anchors differ there and so do the phases, which is the honest answer and the
+same break `main` already draws. Merged-against-merged and cell-against-cell both coordinate; the
+test pins all three cases, including that the mismatched pair does NOT falsely agree.
 
 **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
 is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;
@@ -473,4 +520,24 @@ Measured on a run of three wall panels and the authored floor tile:
 | no seam in the box (control) | 4.0-4.7x | 4.0-4.7x | the scanner's noise floor on these renders |
 | UN-AUTHORED wall-panel seam | 9.7x, step 29 | 9.7x, step 29 | unchanged to the digit — and the two PNGs are **byte-identical**. The 9.7x is the panel's own edge geometry, which is why it is already there at `vary=0` |
 | AUTHORED paver edge | 14.3x, step 43 | **88.7x, step 266** | the chamfer accounts for 43; the phase break adds 223 |
+
+### The cross-tile seam: a BEFORE/AFTER control, which is stronger than `vary=0`
+
+For the boundary snap the better control is not `?vary=0` but the previous ANCHOR RULE, because the
+two renders share geometry, texture, lighting and camera exactly and differ only in the number being
+hashed. Measured on `tmp/ab.ts`'s 3x3 run of floor tiles, `gradient`, camera straight down on the
+octagon that straddles one tile seam, box 280x320 entirely inside that paver's flat top:
+
+| render | worst step | reading |
+|---|---|---|
+| `?vary=0` (identical in both builds, byte for byte) | 36, 9.0x | the geometry floor: the two half-tiles' abutting edges, present with no phase transform anywhere |
+| full, **own-centroid** anchor | **329, 109.7x** | the reported bug — the paver torn down the middle |
+| full, **boundary-snapped** anchor | **27, 9.0x** | at the geometry floor. The phase contributes nothing |
+| control box with no seam in it | 18-23, 6.0-7.7x | the scanner's noise floor on these renders |
+
+The pictures say the same thing at a glance and are worth taking: at the four-way corner the
+own-centroid build quarters one octagon into four differently-coloured fields with hard steps along
+both seams, and the snapped build runs one field through all four meshes. Also re-measured with the
+snap in: the un-authored wall run renders **byte-identical PNGs at `?vary=0` and `?vary=100`**, and
+the contact sheet still links **8 programs / 1 shader carrying `uTexArr`**.
 

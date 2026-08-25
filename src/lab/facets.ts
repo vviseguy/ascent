@@ -7,7 +7,10 @@
 //
 // This lives on its own because it has TWO callers:
 //   • face-select.ts   — the interactive picker (hover preview, the `show groups` overlay)
-//   • group-anchors.ts — the BUILD-time baker, for `facetCentroid`: a saved group's ANCHOR
+//   • group-anchors.ts — the BUILD-time baker, for `facetCentroid`: a saved group's ANCHOR, where
+//                        the group reaches no edge of the object. Where it does, the baker snaps to
+//                        the boundary instead, so that a paver split across two tiles stays one
+//                        stone — see group-anchors.ts.
 //
 // Note what the baker does NOT use: `partitionFacets`. The auto partition proposes regions for a
 // human to save; it does not decide what varies. Variation applies only to hand-saved groups
@@ -51,8 +54,10 @@ const FLAT_EPS_COS = Math.cos(THREE.MathUtils.degToRad(8));
  * A maximal run of edge-connected triangles within the angle tolerance.
  *
  * MESH-LOCAL by construction. Facets that abut across two placed instances — the corner pieces of
- * four floor tiles meeting to form one diamond — are separate facets here, and can only be joined
- * once world positions are known. That is a different mechanism, deliberately not this one.
+ * four floor tiles meeting to form one octagon — are separate facets here, and this file has no way
+ * to see that they are one surface. Joining them is a different mechanism and deliberately not this
+ * one: group-anchors.ts does it without ever comparing two instances, by snapping a saved group's
+ * anchor onto the object's own outer boundary, which both sides of a seam are standing on.
  */
 export interface FacetInfo {
   id: number;
@@ -252,6 +257,11 @@ export function partitionFacets(topo: MeshTopology, mode: GrowMode, tolCos: numb
  * corner of a face, and a plain per-triangle mean would drag the anchor over there instead of
  * leaving it in the middle where a texture wants to be centred — and the anchor is what the
  * per-group texture phase hashes, so a lopsided one is a lopsided decision.
+ *
+ * It is the anchor for a group that reaches no edge of its object. It is deliberately NOT used for
+ * one that does: it is a sum over THIS mesh's triangles, so the two halves of a paver split across
+ * a tile seam get answers that agree to eleven places and not to the last bit, which a hash reads
+ * as two different stones. See group-anchors.ts.
  */
 export function facetCentroid(topo: MeshTopology, tris: readonly number[]): { centroid: THREE.Vector3; area: number } {
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
