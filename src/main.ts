@@ -18,6 +18,7 @@
 import { buildTower } from './game/scene.ts';
 import { Renderer } from './render/renderer.ts';
 import { InputController } from './render/input-controller.ts';
+import { FirstPersonView } from './render/first-person.ts';
 import { startLoop } from './render/loop.ts';
 import type { GltfOpts } from './render/gltf-character.ts';
 import { Role } from './sim/world/state.ts';
@@ -125,10 +126,19 @@ async function boot(): Promise<void> {
   renderer.attachHotbar(app, scene.localCrew); // inventory hotbar + contextual hints (docs/11)
   const input = new InputController(canvas);
   const anchorId = scene.anchorIds[scene.localCrew]!;
+  /* `?cam=fp` — the EYE-LEVEL INSPECTION camera. A DEBUG INSTRUMENT for looking at a wall
+     from 40 cm; the shipped camera is locked by docs/06 §1.2 and is unchanged. Constructed
+     ONLY when the flag is present, so nothing about it (including its V toggle) exists in a
+     normal session and the player can never reach it through the UI. See first-person.ts. */
+  const fp = params.get('cam') === 'fp' ? new FirstPersonView(canvas, input, app) : null;
+  if (fp) fp.enable();
   // DEV: expose the renderer for headless screenshot verification (camera pose etc.).
   // Gated to ?debug so no handle leaks into a normal session. View-only.
-  if (params.has('debug')) (globalThis as Record<string, unknown>)['__renderer'] = renderer;
-  startLoop(scene.sim, renderer, input, scene.localPlayerId, anchorId);
+  if (params.has('debug')) {
+    (globalThis as Record<string, unknown>)['__renderer'] = renderer;
+    if (fp) (globalThis as Record<string, unknown>)['__fp'] = fp;
+  }
+  startLoop(scene.sim, renderer, input, scene.localPlayerId, anchorId, fp ?? undefined);
 
   app.appendChild(makeControlsLegend());
 }

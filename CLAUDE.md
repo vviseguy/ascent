@@ -31,6 +31,19 @@ npm run stores:check   # before committing: is a tracked authoring store dirty v
 npm run lab:snap -- <element>   # headless screenshot of one element (agents can see PNGs)
 npm run probe:palette  # sample the real GLBs → which atlas swatch each triangle lands on
 
+# EYE-LEVEL INSPECTION camera (?cam=fp) — a DEBUG INSTRUMENT, not a game camera. The shipped
+# camera stays locked by docs/06 §1.2 / pillar 7; this exists because a wall's relief, per-texel
+# roughness and AO have to hold up at 40 cm in the REAL world, and the lab (one object on a
+# turntable) and the game camera (never closer than a few metres) both cannot show that.
+# Reachable ONLY by the URL flag — never through the UI. Click to look, Esc frees the pointer,
+# Esc again or V returns to the shipped camera. src/render/first-person.ts has the full note,
+# including the three top-down assumptions it walks into (no ceiling, chiefly).
+#   /ascent/index.html?cam=fp
+npm run fp:snap -- --name=wall --yaw=180 --walk=9000 --strafe=5000 --aim=90
+#   headless, SwiftShader, ~1 min a frame: walk the local player somewhere and photograph the
+#   wall in front of their face. --pitch to look up/down, --extra=cut=0&fog=off for the existing
+#   switches, --hud to keep the overlays. Output: fp-shots/ (gitignored).
+
 # Worldgen authoring pages (served by `npm run dev`, all under the /ascent/ base):
 #   /ascent/tile-editor.html   paint a tile's 9 cells as DOMAINS + live corner-graph connectivity
 #   /ascent/board.html         stamp room templates; watch commit vs rollback on overlap

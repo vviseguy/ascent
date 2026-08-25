@@ -53,6 +53,7 @@ import { StubbyCharacter, CREW_COLORS, ANCHOR_COLOR, type AnimSample, type BodyC
 import { Hotbar } from './hotbar.ts';
 import { GltfCharacter, type GltfOpts } from './gltf-character.ts';
 import { Dungeon } from './dungeon.ts';
+import type { EyeCam } from './first-person.ts';
 import type { StratumCellGrid } from '../game/tower.ts';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -183,6 +184,22 @@ const PAN_RECENTER_RATE = 1.2, PAN_LEAD_MAX = 1.5, PAN_LEAD_PER_SPEED = 0.25;
  *  player's own room dominant, so far corridor cells can't drag the target into the dark. */
 const FRAME_BIAS_MAX = 0, FRAME_BIAS_RATE = 2.5;
 
+// --- EYE-LEVEL INSPECTION CAMERA (`?cam=fp`; see first-person.ts) -----------
+/**
+ * A DEBUG INSTRUMENT, NOT A CAMERA CHANGE. The shipped rig above is locked by docs/06
+ * §1.2 / bible pillar 7 and none of its numbers move. These three are the eye's own,
+ * used only while `setEyeCam` holds a pose.
+ *
+ * FOV 70 rather than the shipped 40: at 40 an eye-level view is a telephoto tube with
+ * one brick in it, and the point of the mode is to see a surface IN ITS SURROUNDINGS.
+ * NEAR 0.02 rather than 0.1: pressing your face against a wall is the acceptance test
+ * for relief and per-texel roughness, and 0.1 clips through the wall before you get
+ * close enough to judge it.
+ */
+const EYE_FOV = 70, EYE_NEAR = 0.02;
+/** Eye height below the top of the body capsule (u) — a head, not a periscope. */
+const EYE_DROP = 0.25;
+
 /** Per-body render record holding previous + current sim positions for interpolation. */
 interface Vis {
   /** the transform target: a StubbyCharacter's root (Player/Anchor) or an object box. */
@@ -257,6 +274,11 @@ export class Renderer {
    *  Default ≈72° = atan2(CAM_SIN55, CAM_COS55), the shipped fixed pitch. View-only. */
   private focusPitch = Math.atan2(CAM_SIN55, CAM_COS55);
   private camReady = false;
+  /** EYE-LEVEL INSPECTION pose (`?cam=fp`), or null for the shipped top-down rig. */
+  private eye: EyeCam | null = null;
+  /** Where the eye sits this frame (local player's head), and whether it was found. */
+  private readonly eyeAt = new THREE.Vector3();
+  private eyeValid = false;
   // --- USER CAMERA state (wheel zoom / middle-drag pan / recenter; view-only) ---
   /** Wheel-driven multiplier on the dolly distance (clamped; see ZOOM_*). */
   private userZoom = 1;
@@ -604,6 +626,34 @@ export class Renderer {
     this.focusPitch = focusPitch; // ...and at this inclination (left-drag vertical, docs/11 §2)
   }
 
+  /**
+   * EYE-LEVEL INSPECTION CAMERA (`?cam=fp` — see first-person.ts for the why and the lock).
+   *
+   * Pass a pose to stand the camera in the local player's head; pass null to hand the frame
+   * back to the shipped top-down rig. Nothing about the rig's own numbers changes either way
+   * — the eye only overrides the pose, the FOV and the near plane while it is held, and puts
+   * all three back on the way out. VIEW-ONLY, like everything else in this file.
+   *
+   * Called once at boot and again on every toggle; a no-op when the mode does not change, so
+   * the loop may call it every frame.
+   */
+  setEyeCam(eye: EyeCam | null): void {
+    const was = this.eye !== null;
+    this.eye = eye;
+    if ((eye !== null) === was) return;
+    if (eye) {
+      this.camera.fov = EYE_FOV;
+      this.camera.near = EYE_NEAR;
+      // the 42%-up framing SHIFT is a top-down composition device; at eye level it just
+      // slides the horizon off-centre, so the eye renders the plain frustum.
+      this.camera.clearViewOffset();
+    } else {
+      this.camera.fov = 40;
+      this.camera.near = 0.1;
+    }
+    this.resize(); // re-applies aspect (+ the framing shift, when the rig is back)
+  }
+
   private colorFor(w: WorldState, id: number): number {
     if ((w.flags[id]! & BodyFlag.Anchor) !== 0) return COLORS.anchor;
     if ((w.flags[id]! & BodyFlag.Player) !== 0) return COLORS.player;
@@ -750,6 +800,7 @@ export class Renderer {
     }
 
     let wsum = 0, cx = 0, cy = 0, cz = 0, minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+    this.eyeValid = false; // re-found below, from the local player, if they are alive
     const anchorY = anchorId >= 0 && anchorId < w.count ? toFloat(fromRaw(w.py[anchorId]!)) : 0;
     let localY = anchorY;
     const localPos = { x: 0, y: anchorY, z: 0 }; // local player world pos → occlusion cutaway
@@ -797,7 +848,17 @@ export class Renderer {
       // camera centers ONLY on the local player; the crew/Anchor are kept findable via
       // off-screen edge indicators instead of pulling the frame (drawOffscreenIndicators).
       let wt = 0;
-      if (id === localId) { wt = 1.0; localY = y; localPos.x = x; localPos.y = y; localPos.z = z; }
+      if (id === localId) {
+        wt = 1.0; localY = y; localPos.x = x; localPos.y = y; localPos.z = z;
+        /* THE EYE (`?cam=fp`). It rides the DISPLAYED body, not the raw sim Y — a character
+           glides short steps, so an eye on the raw value would bob a quarter of a metre on
+           every stair tread while the body it belongs to did not. The head is the top of the
+           capsule (halfHeight above centre) less EYE_DROP. And the body itself is hidden,
+           because at eye level you are standing inside your own skull. */
+        this.eyeAt.set(x, (vv.char ? vv.glideY : y) + toFloat(fromRaw(w.halfHeight[id]!)) - EYE_DROP, z);
+        this.eyeValid = true;
+        if (this.eye) vv.obj.visible = false;
+      }
       if (wt > 0) { wsum += wt; cx += x * wt; cy += y * wt; cz += z * wt; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
     }
 
@@ -1248,6 +1309,19 @@ export class Renderer {
   }
 
   private updateCamera(dt: number, wsum: number, cx: number, cy: number, cz: number, minX: number, maxX: number, minZ: number, maxZ: number): void {
+    /* EYE-LEVEL INSPECTION (`?cam=fp`): stand in the local player's head and look along the
+       mouse. RIGID, not smoothed — a smoothed eye lags into the wall you just walked up to,
+       and a lagging eye is exactly the thing this mode exists to avoid. No dolly, no pan, no
+       framing bias, and no screen shake: a 0.9u shake offset at eye level puts the camera
+       through the masonry. `updateFrameBias` above is left running so leaving the mode does
+       not snap. */
+    if (this.eye && this.eyeValid) {
+      const cp = Math.cos(this.eye.pitch), sp = Math.sin(this.eye.pitch);
+      const { x, y, z } = this.eyeAt;
+      this.camera.position.set(x, y, z);
+      this.camera.lookAt(x - Math.sin(this.eye.yaw) * cp, y + sp, z - Math.cos(this.eye.yaw) * cp);
+      return;
+    }
     if (wsum <= 0) { this.composer.render(); return; }
     // bias the target toward the explored-room centroid so the opening view frames the lit
     // dungeon, not the perimeter void (boss #1/#2). The bias is itself eased in updateFrameBias.
@@ -1470,7 +1544,10 @@ export class Renderer {
     // offset is in pixels. setViewOffset keeps aspect = w/h (full == sub size) and
     // bakes the shift into the projection matrix, so cursor raycasts in worldAimFrom
     // automatically see the shifted frustum.
-    this.camera.setViewOffset(w, h, 0, -FRAME_SHIFT * h, w, h);
+    // ...except under the eye-level inspection camera, which frames nothing and wants
+    // the plain frustum (setEyeCam already cleared the offset; don't put it back).
+    if (this.eye) this.camera.clearViewOffset();
+    else this.camera.setViewOffset(w, h, 0, -FRAME_SHIFT * h, w, h);
     this.camera.updateProjectionMatrix();
   }
 }

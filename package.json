@@ -17,6 +17,7 @@
     "assets:derive": "node scripts/derive-assets.mjs",
     "cell:snap": "node scripts/cell-snap.mjs",
     "editor:snap": "node scripts/editor-snap.mjs",
+    "fp:snap": "node scripts/fp-snap.mjs",
     "tex:seams": "node scripts/tex-seam-check.mjs",
     "tex:tile": "node scripts/tex-tile-shot.mjs",
     "stores:check": "node scripts/store-guard.mjs --check",
