@@ -136,23 +136,26 @@ const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
  * [-0.10, +0.05] about its origin; a wall is 4.00 tall from the deck line. Turned upside down, that
  * same tile spans [-0.05, +0.10] and its VISIBLE face is the lower one, at -0.05.
  *
- * Stack them from the wall tops down and the numbers are forced, not chosen:
+ * BOTH TILES TUCK INTO THE WALL, they do not stack on it. The first cut of this stacked upward from
+ * the wall tops — lid resting ON the wall, deck resting ON the lid — which pushed both a quarter unit
+ * proud of the masonry and left the deck visibly floating. The wall is the reference, and a surface
+ * meets it flush rather than sitting on it:
  *
- *   ceiling of storey s   visible face flush on the wall tops at 4.00  ->  origin 4.05, spans [4.00, 4.15]
- *   floor of storey s+1   must rest on that, bottom at 4.15           ->  origin 4.25
+ *   floor    BOTTOM flush with the wall's bottom, 0.00    ->  origin  0.10, spans [0.00, 0.15]
+ *   ceiling  TOP    flush with the wall's top,    4.00    ->  origin  3.90, spans [3.85, 4.00]
  *
- * So a deck sits `DECK_LIFT` above its own storey line. EVERY deck moves by the same amount, so
- * storey-to-storey spacing is untouched and a flight still climbs exactly FLOOR_HEIGHT from one
- * walking surface to the next — which is the property that must not break, since the stair meshes are
- * built to a 4.00 rise. Room height becomes 3.70, floor surface to ceiling face.
+ * EVERY deck moves by the same amount, so storey-to-storey spacing is untouched and a flight still
+ * climbs exactly FLOOR_HEIGHT from one walking surface to the next — the property that must not break,
+ * since the stair meshes are built to a 4.00 rise. Room height is 3.70, floor surface (0.15) to
+ * ceiling face (3.85), which is what it was before: the pair moved together, not apart.
  *
  * COLLISION DOES NOT MOVE WITH IT. The slab is emitted from the stratum's own baseY and knows nothing
  * about this; the tile is trim and the slab is the walking surface. A quarter unit of visual lift is
  * not worth desynchronising what you stand on from what the sim thinks you stand on.
  */
-const DECK_LIFT: Fixed = fromFloatConst(0.25);
+const DECK_LIFT: Fixed = fromFloatConst(0.10);
 /** The lid's origin, measured from its own storey's line — see `DECK_LIFT`. */
-const CEILING_Y: Fixed = fromFloatConst(4.05);
+const CEILING_Y: Fixed = fromFloatConst(3.90);
 
 /** Ground mesh per material — THE table, exported because `cell-tower` kept a second copy of it and a
  *  second copy is a thing that can disagree. Adding a material used to mean remembering both. */
