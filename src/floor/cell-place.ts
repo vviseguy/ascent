@@ -105,6 +105,27 @@ const HALF = fromFloatConst(0.5); // a 4u floor piece rendered as a 2u cell
 /** Point a +X-extending piece toward a direction. Matches the 4u convention exactly. */
 const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
 
+/**
+ * A FLOOR IS ALSO A CEILING, and this is the offset that makes it read as one.
+ *
+ * The kit has no ceiling mesh, so a ceiling is the underside of the deck above — which is the right
+ * model anyway: one piece of geometry, so what you stand on and what you look up at can never
+ * disagree about whether the ground is there. Nothing has to be kept in sync because there is only
+ * one thing.
+ *
+ * MEASURED: a floor tile is 0.15 thick with its walking surface at +0.05, so it spans [-0.10, +0.05]
+ * about its origin, and a wall is 4.00 tall. Placed flat on the storey line, a deck's underside sat at
+ * 3.90 — a tenth of a unit INSIDE the tops of the walls below it, which reads as a lip all the way
+ * round the room. Lifting the tile by that tenth puts the underside at 4.00, flush with the wall tops.
+ *
+ * IT DOES NOT MOVE THE WALKING SURFACE RELATIVE TO ANYTHING THAT MATTERS. Every deck rises by the same
+ * amount, so storey-to-storey spacing is untouched and a flight still climbs exactly FLOOR_HEIGHT from
+ * one surface to the next. Collision is emitted from the stratum's own baseY and is not derived from
+ * this, so the tile moves and the slab does not — deliberately: the slab is the walking surface, and
+ * this is a tenth of a unit of trim.
+ */
+const DECK_LIFT: Fixed = fromFloatConst(0.10);
+
 const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
   stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
 };
@@ -1053,9 +1074,11 @@ export function cellPlacements(
       fromInt(flight.bw - 1 - px), fromInt(flight.bh - 1 - pz),
     ));
   } else if (isStairFloor(c.floor)) {
-    if (!insideFlight(cells, w, h, x, y, above) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
+    if (!insideFlight(cells, w, h, x, y, above) && inFloor) {
+      out.push(at(PIECE.floorStone, 0, Z, Z, HALF, DECK_LIFT));
+    }
   } else if (c.floor !== 'none' && inFloor) {
-    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
+    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF, DECK_LIFT));
   }
 
   // the NW corner point of this cell, in cell-local coordinates
