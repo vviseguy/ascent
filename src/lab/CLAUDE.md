@@ -15,6 +15,7 @@ by the game.
 | doc | covers |
 |---|---|
 | [MATERIALS.md](MATERIALS.md) | **Authoritative for colour and surface.** The swatch→preset cascade, the texture-array tiling layer (relief / roughness / AO / colour modes), named material profiles, and the approval freeze. |
+| [INSTRUMENTS.md](INSTRUMENTS.md) | MEASURING a surface: the `calibration` and `gradient` test textures, `scripts/seam-scan.mjs`, and what a seam reading is and is not worth on this kit. |
 | [SURFACES.md](SURFACES.md) | Editing the MESH: per-triangle selection, coplanar grow, hiding, and the geometry-hash provenance guard. |
 | [TOOLING.md](TOOLING.md) | The lab’s own chrome: drawer layout, the contact sheet, and how to screenshot/measure a WebGL page headlessly. |
 | [../../docs/ART-LAB.md](../../docs/ART-LAB.md) | The PROCEDURAL element catalog (`elements/`) and its screenshot loop — a separate concern from the KayKit material pipeline. |
@@ -50,7 +51,7 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
 | which texture a material TYPE wears | `DEFAULT_CONFIG` in texture-catalog.ts, or the in-app menu |
 | which TYPE a swatch resolves to | the 4-layer cascade in recolor.ts — see MATERIALS.md |
 | how a surface responds to light | tiling.ts (relief / roughness / AO) |
-| CHECK a surface's orientation, or whether two surfaces share a phase | the `calibration` / `gradient` test textures — see MATERIALS.md |
+| CHECK a surface's orientation, or whether two surfaces share a phase | the `calibration` / `gradient` test textures — see INSTRUMENTS.md |
 | whether a carved stone varies | save it as a GROUP in the SURFACES panel — only authored groups vary; then `TextureOption.vary` / the `Vary` slider / `?vary=` — see MATERIALS.md |
 | a whole named look, shared or inherited | material-profiles.json + profile-bar.ts |
 | remove geometry from an asset | the SURFACES panel — see SURFACES.md |
@@ -78,7 +79,7 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
    (`show groups` is how you find the pavers worth saving), never the render scope.
    `group-anchors.ts` bakes nothing at all into a mesh with no saved group, so it reaches the
    renderer as the identical geometry object. See MATERIALS.md.
-8. **A group that reaches the object's outer boundary anchors ON it, and that has to stay EXACT.**
+7. **A group that reaches the object's outer boundary anchors ON it, and that has to stay EXACT.**
    A paver split across two tiles is two groups in two meshes; they read as one stone only if both
    halves hash the SAME world anchor, and a hash turns a one-ulp disagreement into a different
    phase. Snapping a coordinate to the bounding-box face makes it a property of the template, so
@@ -87,7 +88,7 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
    snapped axis (a centroid, an average, a "close enough" epsilon on the anchor itself) breaks it
    silently and only in a generated tower. `group-anchors.test.ts` asserts the real GLB's world
    anchors as IEEE-754 bits for that reason. See MATERIALS.md.
-7. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
+8. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
    and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
    were emitted in every mode they ate floor paint and selection drags along every border. They are
    emitted inside `if (brush.mode === …)` for that reason. See TOOLING.md.
@@ -99,8 +100,11 @@ When you change this folder, update the doc that owns the concern **in the same 
 
 - new material/texture/profile behaviour → MATERIALS.md
 - new mesh-editing behaviour → SURFACES.md
+- a new test texture, scanner, or reading → INSTRUMENTS.md
 - new panel, page, or measurement technique → TOOLING.md
 - a new invariant someone could plausibly undo → the numbered list above
 
-If a doc grows past ~250 lines it is probably covering two concerns; split it and add a row to the
-table at the top rather than letting this file absorb the overflow again.
+**Split a doc when it has acquired a SECOND subject, not when it passes a line count** (root
+`CLAUDE.md` → Conventions). INSTRUMENTS.md came out of MATERIALS.md that way: "which texture does
+the stone preset wear" and "do these two surfaces share a phase" are questions different readers
+arrive with. Add a row to the table at the top rather than letting this file absorb the overflow.

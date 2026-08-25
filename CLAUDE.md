@@ -11,7 +11,7 @@ file is the map + the non-obvious rules that must not be reverted. Full design c
 - [`docs/ENGINE-ARCHITECTURE.md`](docs/ENGINE-ARCHITECTURE.md) — the custom physics engine (fixed-point; Rapier = test oracle only).
 - [`docs/GENERATION-SOLVABILITY.md`](docs/GENERATION-SOLVABILITY.md) — the solvability invariant + the independent verifier.
 - **Working on world generation / rendering?** → **[`docs/13-generation-architecture.md`](docs/13-generation-architecture.md) first** — the AS-BUILT map: every stage's file, output, invariant, gate, and BUILT-vs-DESIGNED status, plus a "you want to change X → touch Y" table. Then [`docs/16-generation-overhaul.md`](docs/16-generation-overhaul.md) for *why* the design is what it is (large parts of it are design-only — docs/13 §6 says which), and [`docs/14`](docs/14-terrain-puzzles-solvability.md) / [`docs/15`](docs/15-world-object-model.md) for puzzles + the WorldObject split.
-- **Working on assets / colors / the lab?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) — the area router. It points at the three deep docs: [`MATERIALS.md`](src/lab/MATERIALS.md) (authoritative for colour + surface: the swatch cascade, the tiling shader, profiles, the approval freeze), [`SURFACES.md`](src/lab/SURFACES.md) (per-triangle mesh editing), [`TOOLING.md`](src/lab/TOOLING.md) (drawers, contact sheet, headless measurement). [`docs/ART-LAB.md`](docs/ART-LAB.md) covers the separate PROCEDURAL element catalog.
+- **Working on assets / colors / the lab?** → [`src/lab/CLAUDE.md`](src/lab/CLAUDE.md) — the area router. It points at the four deep docs: [`MATERIALS.md`](src/lab/MATERIALS.md) (authoritative for colour + surface: the swatch cascade, the tiling shader, profiles, the approval freeze), [`INSTRUMENTS.md`](src/lab/INSTRUMENTS.md) (the `calibration` / `gradient` test textures + `seam-scan.mjs` — measuring a surface rather than choosing one), [`SURFACES.md`](src/lab/SURFACES.md) (per-triangle mesh editing), [`TOOLING.md`](src/lab/TOOLING.md) (drawers, contact sheet, headless measurement). [`docs/ART-LAB.md`](docs/ART-LAB.md) covers the separate PROCEDURAL element catalog.
 - **What to work on next** → [`BACKLOG.md`](BACKLOG.md) (the live queue) + [`docs/GAPS.md`](docs/GAPS.md) (the intent audit it draws from).
 
 ## Run / prove / test
@@ -353,8 +353,8 @@ and the root's Run/prove section. Create a new area `CLAUDE.md` when you introdu
 would need orienting on; not every folder needs one.
 
 **Update the area doc in the same commit as the change.** A doc that lags is worse than no doc: the
-next session trusts it. If an area doc passes ~250 lines it is probably covering two concerns —
-split it and leave the area `CLAUDE.md` as the index.
+next session trusts it. Docs split on the same test as modules — a second subject, not a line count
+(see Conventions) — and when one splits, the area `CLAUDE.md` stays the index.
 
 ## Conventions
 - TS strict, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`.
@@ -362,7 +362,12 @@ split it and leave the area `CLAUDE.md` as the index.
 - Standalone `prove.ts` files use **relative imports with explicit `.ts` extensions** so Node's
   `--experimental-strip-types` can run them dependency-free (`allowImportingTsExtensions` is on).
   Strip-only mode forbids TS `enum`/namespaces → use `const X = {...} as const` + a `type X` alias.
-- Many small, well-named files with doc comments explaining the WHY. Quality and robustness over speed.
+- **One subject per file — modules and docs alike.** Many small, well-named files with doc comments
+  explaining the WHY; a single subject is what makes them composable and what makes the name a
+  promise. **Split when a file has acquired a SECOND subject someone could need independently, not
+  when it passes a line count** — a 400-line doc with one subject is fine, a 120-line one covering
+  two is not. Length is a symptom, not the test: past ~250 lines, go and LOOK for the second
+  subject. Quality and robustness over speed.
 - Scratch/experiment files go in `tmp/` (gitignored). Don't commit them.
 
 ## Reuse from Frequency
