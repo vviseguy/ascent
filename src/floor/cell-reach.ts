@@ -49,6 +49,8 @@ export const isSolid = (f: CellField): boolean => f.floor !== 0 && (f.floor & ~R
 /** The kinds that let a body through when OPEN. Being open is not enough on its own — a window
  *  is a hole you cannot walk through — so certainty needs both halves. */
 const PASSABLE_KINDS_MASK: Mask = wallTypes('doorway', 'arch', 'scaffold');
+/** A segment that can ONLY be a wall — what a module needs either side of it to exist at all. */
+const WALL_ONLY: Mask = segs('wall');
 const OPEN_STATE: Mask = opens('open');
 
 export type Polarity =
@@ -103,9 +105,34 @@ export const wallOpen = (m: Mask, p: Polarity): boolean => (p === 'may' ? mayBeO
  * on a maybe-door). Requiring certainty under-claims instead, which can never call an unreachable
  * floor reachable.
  */
+/**
+ * A MODULE SPANS TWO CELLS, so an opening needs a wall segment on BOTH sides along its axis. This is
+ * the same question `moduleAt` asks in `cell-place.ts`, and asking it here is the point: that function
+ * decides whether the piece is DRAWN, and this one decides whether the graph may walk through it. When
+ * only one of them asked, the model could be certain of a doorway the renderer then declined to draw —
+ * a passage the route believes in and the player cannot see.
+ *
+ * CERTAINLY wall, not possibly: `openingCertain` under-claims by design, and a span that merely MIGHT
+ * be a wall might also not be, in which case there is no module and no opening.
+ */
+function spanCertainlyWalled(at: FieldAt, x: number, y: number): boolean {
+  const certainWall = (m: Mask | undefined): boolean => m !== undefined && m !== 0 && (m & ~WALL_ONLY) === 0;
+  const here = at(x, y);
+  if (!here) return false;
+  // H: the run going east, owned by this point and the one west of it. V: south, this and the one north.
+  const h = certainWall(at(x - 1, y)?.wallN) && certainWall(here.wallN);
+  const v = certainWall(at(x, y - 1)?.wallW) && certainWall(here.wallW);
+  return h || v;
+}
+
 export function openingCertain(at: FieldAt, x: number, y: number): boolean {
   const f = at(x, y);
   if (!f) return false;
+  /* THE SPAN TEST, which this used to skip. `cell-emergent` carried an ad-hoc partner check at ONE of
+     the five call sites with a comment saying it wanted fixing at the source; the other four —
+     150, 218, 278 and 354 in this file — believed whatever the type and state said. Fixed here so all
+     five agree, and so the generator's reachability cannot outrun what the renderer will draw. */
+  if (!spanCertainlyWalled(at, x, y)) return false;
   // CERTAIN when every type still on the table walks through. The corner used to have to agree
   // as well, which meant an opening's passability lived in two fields that could disagree.
   // CERTAIN when every kind still on the table is passable AND it can only be open. Either field

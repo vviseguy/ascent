@@ -512,14 +512,18 @@ function finishStorey(
          will actually be DRAWN.
 
          A 4u module spans the two collinear segments either side of its point, and `cell-place`'s
-         `moduleAt` will not draw one unless BOTH are wall. `cell-reach`'s `openingCertain` does not
-         ask that — it reads `wallType` and `open` and nothing else. So the graph can believe in a
-         doorway the renderer declines to draw, and the run system lays a plain solid wall there
-         instead: passable on paper, a wall in the world. PROOF 9 caught exactly that, with the Anchor
-         wedged at waypoint 59 of 76.
-         Requiring the partner span to be a certain wall keeps this phase on the renderer's side of
-         the disagreement. The divergence itself is older than this change and wants fixing at the
-         source — `openingCertain` should ask what `moduleAt` asks. */
+         `moduleAt` will not draw one unless BOTH are wall. `openingCertain` NOW ASKS THE SAME THING —
+         it did not when this guard was written, which is what the guard was for: the graph could
+         believe in a doorway the renderer declined to draw, the run system laid a plain solid wall
+         there instead, and the result was passable on paper and a wall in the world. PROOF 9 caught
+         exactly that, with the Anchor wedged at waypoint 59 of 76.
+
+         KEPT ANYWAY, and not because the fix is in doubt. The two ask the same question for different
+         reasons: `openingCertain` decides what the graph may BELIEVE, and this decides what SEAL may
+         CREATE. A doorway that would not be drawn should never be cut in the first place, however
+         correctly the reachability would then decline to count it. Removing this would leave the
+         phase relying on a downstream predicate to be unhelpful about something it should not have
+         made. */
       const partner = pw.side === 'N'
         ? grid.cells[pw.y * w + (pw.x - 1)]?.wallN
         : grid.cells[(pw.y - 1) * w + pw.x]?.wallW;
