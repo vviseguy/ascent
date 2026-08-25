@@ -10,8 +10,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { toFloat } from '../sim/fixed/fixed.ts';
-import { gridPlacements, type CellPlacement, type GridOptions } from '../floor/cell-place.ts';
-import type { Cell } from '../floor/cell.ts';
+import { gridPlacements, stairFlight, type CellPlacement, type GridOptions } from '../floor/cell-place.ts';
+import { isStairFloor, type Cell } from '../floor/cell.ts';
 
 /** Quarter-turn → radians, matching the authority's CCW turns (3 → −90° = 270°). */
 const TURN_RAD = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
@@ -79,13 +79,112 @@ export async function preloadFor(cells: readonly (Cell | null)[], w: number, h: 
 export async function buildGrid(cells: readonly (Cell | null)[], w: number, h: number, floorExtent?: { w: number; h: number }, opts: GridOptions = {}): Promise<THREE.Group> {
   const group = new THREE.Group();
   await preloadFor(cells, w, h, floorExtent, opts);
+  const cut = stairBoxes(cells, w, h, opts);
+  const patched = new Map<string, THREE.Material>();   // one patched material per URL, per DECK
   for (const { x, y, placements } of gridPlacements(cells, w, h, floorExtent, opts)) {
     // cell centre in world space, with the grid centred on the origin so orbiting feels right
     const cx = (x - (w - 1) / 2) * CELL;
     const cz = (y - (h - 1) / 2) * CELL;
-    for (const p of placements) group.add(await instance(p, cx, cz));
+    for (const p of placements) {
+      const node = await instance(p, cx, cz);
+      if (cut.length && cutsForStairs(p.url)) applyStairCut(node, cut, patched);
+      group.add(node);
+    }
   }
   return group;
+}
+
+/**
+ * THE WORLD RECTANGLES A STAIRCASE OCCUPIES on this deck, in the same coordinates `buildGrid` places
+ * into. Empty when there are no flights, which is the common case and costs nothing.
+ */
+function stairBoxes(
+  cells: readonly (Cell | null)[], w: number, h: number, opts: GridOptions,
+): [number, number, number, number][] {
+  const out: [number, number, number, number][] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = cells[y * w + x];
+      if (!c || !isStairFloor(c.floor)) continue;
+      const same = (ax: number, ay: number): boolean =>
+        ax >= 0 && ay >= 0 && ax < w && ay < h && cells[ay * w + ax]?.floor === c.floor;
+      if (same(x - 1, y) || same(x, y - 1)) continue;          // only the block's origin reports
+      const fl = stairFlight(cells, w, h, x, y, opts.above);
+      if (!fl) continue;
+      /* EXACTLY THE BLOCK, not the mesh. The mesh is 5.00 across a 4.00 block, so half a unit of
+         banister sits outside it — and growing the cut to cover that was tried and REJECTED on sight:
+         it takes a bite out of the wall run either side of the flight, which is far more noticeable
+         than the overlap it was fixing. A wall is better slightly intersected than visibly holed.
+         The game's cut is the same size, so the editor and the tower agree. */
+      const x0 = (fl.x - (w - 1) / 2) * CELL - CELL / 2, z0 = (fl.y - (h - 1) / 2) * CELL - CELL / 2;
+      out.push([x0, z0, x0 + fl.bw * CELL, z0 + fl.bh * CELL]);
+    }
+  }
+  return out;
+}
+
+/**
+ * SHOULD THIS PIECE BE CUT WHERE A STAIRCASE STANDS? Everything except the staircase itself and the
+ * ground: a flight must not clip itself, and the deck under a flight is already suppressed when the
+ * placements are emitted, so cutting it again would open a hole through the storey.
+ */
+const cutsForStairs = (url: string): boolean => !/stairs|floor_/.test(url);
+
+/**
+ * CUT A PIECE WHERE THE STAIRCASE IS — the editor's half of the game's stair clip.
+ *
+ * A stair mesh is 5.00 across a 4.00 block: half a unit of banister hangs over each flank by design,
+ * and a wall standing under the raised end of a flight ends up inside the same space. `discard` in
+ * the fragment shader removes the wall's geometry there instead of drawing both and letting the depth
+ * buffer produce a seam — the same technique as the occlusion cutaway, and for the same reason: no
+ * blending, no sort order, nothing to get wrong.
+ *
+ * ONE PATCHED MATERIAL PER URL PER DECK. `Object3D.clone` shares materials with its template, so
+ * patching in place would clip every OTHER deck by this deck's staircases; and patching per instance
+ * would make a material for every wall segment on screen. Per url, per deck, is the middle.
+ */
+function applyStairCut(
+  node: THREE.Object3D, boxes: readonly [number, number, number, number][],
+  cache: Map<string, THREE.Material>,
+): void {
+  node.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const src = Array.isArray(m.material) ? m.material[0] : m.material;
+    if (!src) return;
+    const key = src.uuid;
+    let mat = cache.get(key);
+    if (!mat) {
+      mat = src.clone();
+      const arr = new Float32Array(16);                         // up to 4 boxes, xz min/max
+      const n = Math.min(4, boxes.length);
+      for (let i = 0; i < n; i++) arr.set(boxes[i]!, i * 4);
+      const prev = mat.onBeforeCompile?.bind(mat);
+      mat.onBeforeCompile = (shader, renderer): void => {
+        prev?.(shader, renderer);
+        shader.uniforms['uCutBox'] = { value: arr };
+        shader.uniforms['uCutN'] = { value: n };
+        shader.vertexShader = 'varying vec3 vCutW;\n' + shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\n  vCutW = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        );
+        shader.fragmentShader = 'uniform float uCutBox[16];\nuniform int uCutN;\nvarying vec3 vCutW;\n'
+          + shader.fragmentShader.replace('void main() {', `void main() {
+            for (int i = 0; i < 4; i++) {
+              if (i >= uCutN) break;
+              if (vCutW.x > uCutBox[i * 4] && vCutW.x < uCutBox[i * 4 + 2]
+                  && vCutW.z > uCutBox[i * 4 + 1] && vCutW.z < uCutBox[i * 4 + 3]) discard;
+            }`);
+      };
+      // EXTEND the cache key, never replace it: the tiling shader sets one too, and dropping it makes
+      // two materials share a compiled program that differs.
+      const prevKey = mat.customProgramCacheKey?.bind(mat);
+      mat.customProgramCacheKey = (): string => `${prevKey?.() ?? ''}|staircut${n}`;
+      mat.needsUpdate = true;
+      cache.set(key, mat);
+    }
+    m.material = mat;
+  });
 }
 
 async function instance(p: CellPlacement, cx: number, cz: number): Promise<THREE.Object3D> {
