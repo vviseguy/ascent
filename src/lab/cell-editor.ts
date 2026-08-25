@@ -197,6 +197,8 @@ function forDisplay(): CellField[] {
       wallN: hasN(px) ? f.wallN : NONE_SEG,
       wallW: hasW(py) ? f.wallW : NONE_SEG,
       floor: hasFloor(px, py) ? f.floor : NONE_FLOOR,
+      // the lid is cell-owned like the ground, so the padding draws none of it — same rule, same test
+      ceiling: hasFloor(px, py) ? f.ceiling : NONE_FLOOR,
     };
   });
 }
@@ -420,6 +422,8 @@ function fillCeilings(): void {
   let laid = 0;
   for (let lv = 0; lv + 1 < LEVELS; lv++) {
     for (let i = 0; i < levelSize(); i++) {
+      const px = i % stride(), py = Math.floor(i / stride());
+      if (!hasFloor(px, py)) continue;                   // padding owns no ground and no lid
       const here = cells[lv * levelSize() + i]!;
       const over = cells[(lv + 1) * levelSize() + i]!;
       if ((over.floor & ~NONE) === 0) continue;          // nothing above: no lid needed
@@ -1035,8 +1039,9 @@ function buildReadout(res: (Cell | null)[]): void {
      is only worth warning about on the ground floor, where it means the structure has no room in it. */
   const groundFloor = L === 0;
   const stairs = stairReport();
+  const lids = lidReport();
   const warn = conflicts > 0 || (walkable === 0 && groundFloor) || connected < walkable
-    || stairs.some((l) => l.startsWith('⚠'));
+    || stairs.some((l) => l.startsWith('⚠')) || lids.some((l) => l.startsWith('⚠'));
   box.textContent = [
     `${W}×${H} floor · ${W + 1}×${H + 1} stored`
       + (LEVELS > 1 ? ` · storey ${L} of ${LEVELS}` : ''),
@@ -1048,6 +1053,7 @@ function buildReadout(res: (Cell | null)[]): void {
     `${undecided} field(s) undecided — the generator will choose`,
     conflicts ? `⚠ ${conflicts} cell(s) have an EMPTY domain` : '',
     ...stairs,
+    ...lids,
   ].filter(Boolean).join('\n');
   box.style.color = warn ? '#e0a04a' : '#7fc8a0';
 }
@@ -1062,6 +1068,54 @@ function buildReadout(res: (Cell | null)[]): void {
  * and that no wall stands where you arrive. "Guarantee" is too strong for an editor — it warns rather
  * than refuses — but an unchecked guarantee is just a hope.
  */
+/**
+ * DO THIS STOREY'S LIDS AGREE WITH THE DECK ABOVE THEM?
+ *
+ * A ceiling and the floor over it are TWO TILES DESCRIBING ONE SURFACE, and they live on different
+ * storeys — storey 0's ceiling is the underside of storey 1's floor. Nothing forces them to agree, so
+ * they can drift the moment either is edited alone, and a drift is invisible on a plan: each storey
+ * looks fine on its own and the fault only shows when you stand in the room and look up.
+ *
+ * Two ways to disagree, and they are different mistakes:
+ *   FLOOR ABOVE, NO LID   — the room is open to the underside of a deck that is definitely there.
+ *                           Nearly always an omission; `⌂ lids` fixes it in one click.
+ *   LID, NO FLOOR ABOVE   — a lid hanging under nothing. Sometimes deliberate (a canopy, a soffit over
+ *                           a shaft), so it is reported and not corrected.
+ *
+ * A SHAFT IS NOT A FAULT. A staircase climbs through a hole in the deck above it, so the cells of a
+ * flight are EXPECTED to have no lid and no floor over them. Counting those would bury the real
+ * mismatches under noise on every structure that has stairs in it.
+ */
+function lidReport(): string[] {
+  if (L + 1 >= LEVELS) return [];
+  const here = resolvedLevel(L), above = resolvedLevel(L + 1);
+  const stands = (c: Cell | null | undefined): boolean =>
+    !!c && c.floor !== 'none' && c.floor !== 'rock';
+  let missing = 0, orphan = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      /* OWNED CELLS ONLY. The lattice is one wider and one taller than the floor extent, and those
+         padding slots exist to carry the south and east BORDERS — they own no ground and no lid. They
+         abstain rather than saying `none`, so a resolved preview settles their deck to stone and their
+         lid to nothing, and every one of them reads as a missing ceiling. That is 66 phantom faults on
+         a 16x16 room, which would bury the real ones. */
+      if (!hasFloor(x, y)) continue;
+      const i = y * stride() + x;
+      const c = here[i], up = above[i];
+      if (!c) continue;
+      if (isStairFloor(c.floor)) continue;              // a shaft over a flight is meant to be open
+      const wantsLid = stands(up);
+      const hasLid = c.ceiling !== 'none';
+      if (wantsLid && !hasLid) missing++;
+      else if (!wantsLid && hasLid) orphan++;
+    }
+  }
+  const out: string[] = [];
+  if (missing) out.push(`⚠ ${missing} cell(s) have floor on storey ${L + 1} but no ceiling here — press ⌂ lids`);
+  if (orphan) out.push(`${orphan} ceiling(s) with no floor above them — deliberate, or left behind by an edit`);
+  return out;
+}
+
 function stairReport(): string[] {
   const here = resolvedLevel(L);
   const above = L + 1 < LEVELS ? resolvedLevel(L + 1) : null;
