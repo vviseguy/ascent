@@ -42,12 +42,21 @@ export const PIECE = {
      inside a cell a body can stand in. Nothing places it now: an ordinary end is SHORTENED onto
      `halfCap`, and an end that cannot be shortened takes `endcapShort`. */
   endcap: u('wall_endcap'),
-  /* A LOCAL DERIVATIVE, not a KayKit file — `scripts/glb-trim.mjs` cut `wall_endcap` at x = 0.80 and
-     re-origined it, keeping only the terminal flourish. MEASURED (`tmp/glb-bbox.mjs`, counting only
-     INDEXED vertices — the trim rewrites the index buffer and leaves POSITION alone, so a naive read
-     of the accessor still reports the uncut 1.07): X[-0.030, 0.267], 4.00 tall, 1.00 deep. Same
-     origin convention as `wall_endcap` — the mating face is x = 0 and the body extends +X — so it
-     protrudes 0.267 where the original protrudes 1.067, at full wall height and full wall depth. */
+  /* A LOCAL DERIVATIVE, not a KayKit file — `npm run assets:derive` strips the loose debris, then
+     `glb-trim.mjs` cuts `wall_endcap` at x = 0.80 and re-origins it, keeping only the terminal
+     flourish. MEASURED (`scripts/glb-parts.mjs`, counting only INDEXED vertices — the trim rewrites
+     the index buffer and leaves POSITION alone, so a naive read of the accessor still reports the
+     uncut 1.07): X[0.000, 0.170], 4.00 tall, 1.00 deep. Same origin convention as `wall_endcap` —
+     the mating face is x = 0 and the body extends +X — so it protrudes 0.170 where the original
+     protrudes 1.067, at full wall height and full wall depth.
+
+     IT STARTS AT EXACTLY 0, AND THAT IS THE FIX. `glb-trim` used to re-origin by the CUT PLANE, but
+     it drops whole triangles by CENTROID, so the surviving geometry begins at the first vertex that
+     cleared the cut — 0.90 here, not 0.80. Every cap therefore sat 0.100 off the wall it was
+     capping, with the two loose brick blobs stranded in the gap looking like rubble. It now
+     re-origins by what SURVIVED, so the piece is flush for any cut value. Do not "fix" this by
+     tuning the 0.80 to meet the geometry: the cut chooses how much flourish to keep, and making it
+     do double duty as the origin is what broke it. */
   endcapShort: u('wall_endcap_short'),
   barrier: u('barrier'),
   barrierCorner: u('barrier_corner'),
@@ -1455,9 +1464,9 @@ export function wallEdgePlacements(
      `pillar` (1.50 x 4.00 x 1.50, approved, 5 boxes) works and reads well at a doorway, but it is an
      architectural element — it protrudes 0.75 and stands proud of both wall faces by 0.25, so it
      announces itself where the job is to stop announcing anything.
-     `wall_endcap_short` is the one: X[-0.030, 0.267] x 4.00 x 1.00 — full wall height, exactly the
-     wall's own depth, and 0.267 of overhang against `wall_endcap`'s 1.067. It is the SAME flourish,
-     with the 0.80 of wall the original dragged along behind it cut off.
+     `wall_endcap_short` is the one: X[0.000, 0.170] x 4.00 x 1.00 — full wall height, exactly the
+     wall's own depth, and 0.170 of overhang against `wall_endcap`'s 1.067. It is the SAME flourish,
+     with the 0.90 of wall the original dragged along behind it cut off.
 
      IT GETS NO COLLISION, deliberately, and the reason is NOT that giving it some breaks anything —
      that was tried. With a `WALL_FALLBACK` entry `prove:game` is byte-for-byte the same story: the
@@ -1465,19 +1474,20 @@ export function wallEdgePlacements(
      not decide it, so two other things do:
        - THE RULE ALREADY WRITTEN DOWN next to `wall_endcap`'s deliberate absence from that table:
          collision follows what the walls ASSERT, and decoration that overhangs is drawn, not
-         collided. This overhangs 0.267 past the point where the model says the wall stops. The
+         collided. This overhangs 0.170 past the point where the model says the wall stops. The
          magnitude changed from `wall_endcap`'s 1.067; the KIND of thing it is did not.
        - `WALL_FALLBACK` CANNOT EXPRESS IT HONESTLY. Its boxes are centred on the piece origin
-         (`cx: 0, hx: w/2`), and this mesh is X[-0.030, 0.267] — not centred on anything. The only
-         entry the table can hold today straddles the mating face, half of it buried in the wall it
-         caps. Adding an offset column for one 0.267 flourish is more machinery than the flourish. */
+         (`cx: 0, hx: w/2`), and this mesh is X[0.000, 0.170] — flush at its pivot and entirely on
+         one side of it, which is precisely what a centred box cannot say. The only entry the table
+         can hold today straddles the mating face, half of it buried in the wall it caps. Adding an
+         offset column for one 0.170 flourish is more machinery than the flourish. */
   for (const end of wallEnds(cells, w, h, { w: fw, h: fh }, above)) {
     if (end.finished) continue;                    // a column IS the end of the wall
     if (end.by === 'flight') continue;             // the stair mesh carries its own ends
     const endHalf = end.fam ? FAMILY[end.fam].endHalf : null;
     /* ONE TURN SERVES BOTH PIECES, which is not a coincidence worth leaving unexplained: their native
        bodies point OPPOSITE ways from the same origin — `wall_half_endcap` is x[-2,0] and runs back
-       INTO the wall, `wall_endcap_short` is x[0,0.267] and sticks OUT of it — so the rotation that
+       INTO the wall, `wall_endcap_short` is x[0,0.170] and sticks OUT of it — so the rotation that
        aims one along the wall aims the other away from it. */
     const turn = end.low ? (end.dir === 'E' ? TURN.W : TURN.N) : (end.dir === 'E' ? TURN.E : TURN.S);
     if (end.by === 'run' && endHalf && !isSpent(end.ex, end.ey, end.dir)) {

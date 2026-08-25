@@ -213,7 +213,7 @@ where it collides with nothing already claimed:
 2. **NUBS** — `wallEnds` is the authority on where a wall actually stops. An ordinary end is
    SHORTENED (`wall_half_endcap` replaces the last half, so nothing protrudes); an end whose last
    piece cannot be shortened — a module, or a one-edge run that already spent its edge on its other
-   end — is TERMINATED with `wall_endcap_short`, a 0.267 flourish, and gets no collision because it
+   end — is TERMINATED with `wall_endcap_short`, a 0.170 flourish, and gets no collision because it
    overhangs past what the walls assert.
 3. **BENDS, then RUNS** — `wall_corner` and the 4u `wall` are merges. Drop them and the wall is still
    whole, just made of more pieces. Which is why a two-edge L comes out as two finished halves and no
