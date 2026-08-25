@@ -20,26 +20,23 @@ const TURN_RAD = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 export const CELL = 2;
 
 /**
- * OPEN THE DOORWAY. `wall_doorway` ships with its door LEAF as a separate node — 620 of the file's
- * 1068 triangles, a hinged panel filling the aperture — so a loader that keeps every node produces a
- * SOLID wall from a mesh whose whole point is the hole in it. Measured: 0% open as shipped, 32.9% and
- * a 2.00 x 2.30 floor-rooted opening with the leaf gone.
+ * THE DOOR LEAF IS ITS OWN ASSET NOW, and this is where the old way was.
  *
- * We draw it only for wall types the graph calls walk-through, so the leaf is a lie about passability
- * and has to go. Hiding it is the blunt version; the nicer one is to swing it open on its hinge, which
- * needs the view layer to own a little state and is worth doing when doors become interactive.
+ * `wall_doorway` ships its leaf as a separate NODE — 620 of the file's 1068 triangles, a hinged panel
+ * filling the aperture. The open state used to be an `…#open` url that this loader honoured by
+ * deleting every node matching /_door$/i after load, keyed separately so one file could be cached
+ * both ways. It drew correctly and that was the whole problem: the fragment is invisible to
+ * `objIdOf`, so both states shared ONE id in the approved store, one id holds one footprint, and a
+ * SHUT door therefore collided with the open one's 2.00-wide hole in it.
+ *
+ * `npm run assets:derive` cuts the file into `wall_doorway_open` and `wall_door`. Two files, two
+ * ids, two footprints, and no load-time surgery — the placer simply does not emit a leaf for a state
+ * that has none. Swinging a door on its hinge, which the old note here wanted, is now just a
+ * transform on a placement the view layer can already see.
  */
-/** `…#open` asks for the leaf to come out. It also keys the cache separately, so the same file can be
- *  loaded once shut and once open. */
-export const wantsOpen = (url: string): boolean => url.endsWith('#open');
+/** URL → cache key. No piece carries a fragment today; this stays as the normaliser so one ever
+ *  reintroduced cannot silently key a second copy of the same file. */
 export const stripFragment = (url: string): string => url.replace(/#.*$/, '');
-
-export function openDoorLeaves(root: THREE.Object3D): THREE.Object3D {
-  const doomed: THREE.Object3D[] = [];
-  root.traverse((o) => { if (/_door$/i.test(o.name)) doomed.push(o); });
-  for (const o of doomed) o.removeFromParent();
-  return root;
-}
 
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<THREE.Object3D>>();
@@ -57,7 +54,7 @@ export const loadFailures = (): { url: string; why: string }[] =>
 function template(url: string): Promise<THREE.Object3D> {
   let p = cache.get(url);
   if (!p) {
-    p = loader.loadAsync(stripFragment(url)).then((g) => (wantsOpen(url) ? openDoorLeaves(g.scene) : g.scene), (e: unknown) => {
+    p = loader.loadAsync(stripFragment(url)).then((g) => g.scene, (e: unknown) => {
       failures.set(url, e instanceof Error ? e.message : String(e));
       throw e instanceof Error ? e : new Error(String(e));
     });

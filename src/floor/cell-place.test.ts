@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellPlacements, gridPlacements, openingAt, stairChoiceAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, wallEnds, PIECE, STAIR_CLIMB, wallTypeUrl } from './cell-place.ts';
+import { cellPlacements, gridPlacements, openingAt, stairChoiceAt, openingAxis, stairFault, stairFaultText, stairFlight, torchFacings, wallEnds, PIECE, STAIR_CLIMB, wallTypeUrls } from './cell-place.ts';
 import { FLOOR_HEIGHT } from '../game/tower.ts';
 import { openCell, type Cell, type WallType } from './cell.ts';
 
@@ -207,7 +207,7 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
 
   it('draws ONE arch and suppresses BOTH wall halves — including the neighbour\'s', () => {
     const cs = withOpening('doorway');
-    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway']); // the arch, no wall_half
+    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway_open']); // the arch, no wall_half
     expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
     // beyond the span: ONE 2u piece, finished at its far end. The near end is not loose — the doorway
     // continues the wall — and a piece pushed in there is the bug `cell-module.test.ts` holds shut.
@@ -224,11 +224,42 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
       if (x === 2 && y === 2) { c.wallType = 'doorway'; c.open = 'open'; }
     });
     const u = allUrls(cs);
-    expect(u.filter((n) => n === 'wall_doorway')).toHaveLength(1);
+    expect(u.filter((n) => n === 'wall_doorway_open')).toHaveLength(1);
     expect(u.filter((n) => n === 'wall_endcap_short')).toHaveLength(2);
     expect(u.filter((n) => n.startsWith('wall_half'))).toHaveLength(0);
     // and the terminators stand OUTSIDE the module, at ±2.0 from its centre — see the aperture suite
     expect(wallEnds(cs, W, H).map((e) => `${e.x},${e.y}:${e.by}`)).toEqual(['1,2:module', '3,2:module']);
+  });
+
+  /* THE OTHER HALF OF THE SPLIT, at the point where meshes are actually emitted rather than merely
+     tabulated. A shut door has to put a LEAF in its frame — that is the entire difference between the
+     two states, and while they shared one url it was a difference nothing downstream could see. */
+  it('a CLOSED doorway draws its leaf as well as its frame, at the same spot', () => {
+    const cs = grid((c, x, y) => {
+      if (y === 2 && (x === 1 || x === 2)) c.wallN = 'wall';
+      if (x === 2 && y === 2) { c.wallType = 'doorway'; c.open = 'closed'; }
+    });
+    /* The cell also carries a terminator for the module's end (the nub tier's job, covered above), so
+       assert the MODULE's pieces rather than the cell's whole list — otherwise this test breaks every
+       time an unrelated tier changes what else stands here. */
+    const shutUrls = urls(cs, 2, 2);
+    expect(shutUrls).toContain('wall_doorway_open');
+    expect(shutUrls).toContain('wall_door');
+    expect(shutUrls.indexOf('wall_door')).toBe(shutUrls.indexOf('wall_doorway_open') + 1); // leaf after frame
+
+    // and the OPEN state is that list minus the leaf — the SAME frame, not a different mesh
+    const open = grid((c, x, y) => {
+      if (y === 2 && (x === 1 || x === 2)) c.wallN = 'wall';
+      if (x === 2 && y === 2) { c.wallType = 'doorway'; c.open = 'open'; }
+    });
+    const openUrls = urls(open, 2, 2);
+    expect(openUrls).toContain('wall_doorway_open');
+    expect(openUrls).not.toContain('wall_door');
+
+    // co-located: the parts were cut from one file and keep its origin, so no second transform
+    const at = (cs2: Cell[], name: string) => cellPlacements(cs2, W, H, 2, 2).find((p) => p.url.includes(name))!;
+    const frame = at(cs, 'wall_doorway_open'), leaf = at(cs, 'wall_door.');
+    expect([leaf.x, leaf.z, leaf.turn]).toEqual([frame.x, frame.z, frame.turn]);
   });
 
   it('the axis is derived from which run actually exists', () => {
@@ -241,10 +272,31 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
     expect(openingAxis(grid(), W, H, 2, 2)).toBeNull();
   });
 
-  it('every wall type maps to a mesh', () => {
+  it('every wall type maps to at least one mesh, in both states', () => {
     for (const wt of ['solid', 'doorway', 'window', 'cracked', 'arch', 'gate'] as WallType[]) {
-      expect(wallTypeUrl(wt, 'open')).toContain(PIECE.wall.split('/')[0]!);
+      for (const open of ['open', 'closed'] as const) {
+        const urls = wallTypeUrls(wt, open);
+        expect(urls.length).toBeGreaterThan(0);
+        for (const u of urls) expect(u).toContain(PIECE.wall.split('/')[0]!);
+      }
     }
+  });
+
+  /* THE BUG THIS SPLIT EXISTS FOR. A shut door and an open one were one url told apart by a `#open`
+     fragment, and `objIdOf` strips fragments — so both states landed on ONE id in the approved
+     store, one id holds one footprint, and the shut door collided with the open one's hole. Adding
+     something must ADD a piece, or the two states are indistinguishable to everything downstream. */
+  it('a state that adds something names more pieces than the state without it', () => {
+    for (const wt of ['doorway', 'gate'] as WallType[]) {
+      const closed = wallTypeUrls(wt, 'closed'), open = wallTypeUrls(wt, 'open');
+      expect(closed.length).toBeGreaterThan(open.length);
+      for (const u of open) expect(closed).toContain(u);        // the shared part is literally shared
+      expect(new Set(closed).size).toBe(closed.length);          // and nothing is drawn twice
+    }
+  });
+
+  it('no piece is selected by a url fragment — an asset id must survive `objIdOf`', () => {
+    for (const u of Object.values(PIECE)) expect(u).not.toContain('#');
   });
 });
 

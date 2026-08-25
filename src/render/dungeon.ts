@@ -25,7 +25,7 @@
 //   7. KAYKIT STAIRS — the stairs model placed on stair cells, scaled to rise one floor.
 // ============================================================================
 
-import { openDoorLeaves, stripFragment, wantsOpen } from '../lab/cell-preview.ts';
+import { stripFragment } from '../lab/cell-preview.ts';
 import { applyOneSided } from '../lab/one-sided.ts';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -302,7 +302,6 @@ export class Dungeon {
     const unitUrls = [...new Set([...Object.values(PIECE), ...Object.values(CELL_PIECE)])];
     const unitLoaded = await Promise.all(unitUrls.map(async (url) => {
       const g = await loader.loadAsync(stripFragment(url));
-      if (wantsOpen(url)) openDoorLeaves(g.scene);
       // PER-GROUP TEXTURE ANCHORS, on the TEMPLATE. Every placement clones this scene and so shares
       // its geometry, which is exactly right: the anchor is in OBJECT space and the vertex shader
       // pushes it through each instance's own modelMatrix, so 18,000 floor meshes differentiate
