@@ -103,6 +103,29 @@ npm run cell:snap -- demo caps --size=1800x1250 --angle=90 --pitch=76   # the wh
 npm run cell:snap -- demo caps --no-build --focus=14.5,11.5,8 --pitch=16 --out=cell-shots/z-nub
 ```
 
+### A GATE THAT CANNOT SEE A STAGE CANNOT GATE IT — `--compiled`
+
+`cell-snap` draws `gridPlacements`, which is what **`cell-place.ts`** emits. The GAME draws
+`cellWorldPlacements`, which is what **`cell-tower.ts`** compiles out of it — and the compiler is not
+a pass-through: it MERGES an aligned 2x2 block of matching ground into one 4u mesh instead of four 2u
+ones. Everything in the default view is therefore a picture of the stage BEFORE the last one.
+
+That gap cost a visible defect. A merged block drew the 4u ground mesh at native size while a cell
+drew the SAME mesh at half scale, so a merged block's pavers were literally twice its unmerged
+neighbour's — and whether a patch merges is data, so the boundary wandered around every hole,
+staircase and material change on every floor. Every screenshot in the repo looked fine, because none
+of them contained a merge.
+
+```bash
+npm run cell:snap -- floor 36x28 --seed=1 --levels=3 --level=1 --compiled --focus=7,25,10 --pitch=78
+```
+
+Use it whenever what you are judging is GROUND. Two things to know: it ignores `--focus`'s companion
+`extent` (a structure concept the compiler has no equivalent for, so `--compiled` is for generated
+floors), and the two modes centre an EVEN-sized grid one unit apart — `cellCentre2u` truncates its
+centring term and `cell-preview` does not — so the same `--focus` frames slightly differently in each.
+That is the camera, not a moved piece.
+
 ## Headless runs WRITE the authoring stores
 
 The dev middleware exists to write `src/game/*.json` — that is what Approve and the surfaces Save

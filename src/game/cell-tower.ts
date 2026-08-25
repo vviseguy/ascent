@@ -36,7 +36,10 @@
 import { type Fixed, add, fromInt, fromFloatConst, mul, sub, toRaw } from '../sim/fixed/fixed.ts';
 import { type AABB, makeBox } from '../sim/collide/terrain.ts';
 import { blocks, isStairFloor, seesThrough, type Cell, type Dir } from '../floor/cell.ts';
-import { gridPlacements, moduleAt, stairFlight, FLOOR_URL, PIECE, type CellPlacement, type StairFlight } from '../floor/cell-place.ts';
+import {
+  gridPlacements, moduleAt, stairFlight, DECK_LIFT, FLOOR_MESH, PIECE,
+  type CellPlacement, type GroundMaterial, type StairFlight,
+} from '../floor/cell-place.ts';
 import { objIdOf, transformBox, FOOTPRINT_SCALE_NUM, type FixedBox } from './tile-units.ts';
 import { getApproved, type ApprovedBox } from './approved-assets.ts';
 import {
@@ -149,14 +152,25 @@ export function cellWorldPlacements(
   const out: WorldPlacement[] = [];
   let fallbacks = 0;   // pieces collided from the measured table because nothing has box-fit them
 
-  /* GROUND IS DRAWN IN 4u BLOCKS WHERE IT CAN BE.
-     A floor mesh is natively 4u and the 2u path draws it at half scale, once per cell — four draws
-     where one would do. At the game's size that is 18,000 of 26,000 meshes, and it was the difference
-     between a tower that loads and one you wait most of a minute for.
-     Only where all four cells of an ALIGNED block share a material: a block spanning two materials, a
-     hole or a staircase still draws per cell, so nothing is merged that would change what you see. */
+  /* GROUND IS DRAWN IN 4u BLOCKS WHERE IT CAN BE, AND THE BLOCK IS A PURE OPTIMISATION.
+     Four 2u cells of one material become one 4u mesh — four draws where one will do. At the game's
+     size that is 18,000 of 26,000 meshes, and it was the difference between a tower that loads and one
+     you wait most of a minute for.
+
+     WHAT MAKES IT INVISIBLE is the pair of meshes in `FLOOR_MESH`, not this loop's restraint. The
+     kit's 2u tile is exactly one quadrant of its 4u tile, and a block's centre lands one unit
+     south-east of a cell centre, which is precisely the offset that puts both meshes' pavers on ONE
+     world lattice. Merged or not, the same stone sits at the same place at the same size — so a
+     paver split by a merge boundary even resolves to the same texture anchor (group-anchors.ts).
+
+     It used to be a visual fork: the block drew the 4u mesh at native size and a cell drew that SAME
+     mesh at half scale, so a merged block's pavers were twice its neighbour's, and whether a patch
+     merged is data (a hole, a staircase, a material change, an odd row). The comment here claimed
+     "nothing is merged that would change what you see", which was true of MATERIAL and false of SIZE.
+     Both paths now sit at native scale and at the same DECK_LIFT, so the block changes the draw count
+     and nothing else. A material with no 4u mesh (`block: null`) is simply never merged. */
   const merged = new Uint8Array(w * h);
-  const groundOf = (cx: number, cy: number): keyof typeof FLOOR_URL | null => {
+  const groundOf = (cx: number, cy: number): GroundMaterial | null => {
     if (cx < 0 || cy < 0 || cx >= w || cy >= h) return null;
     const c = cells[cy * w + cx];
     if (!c || c.floor === 'none' || c.floor === 'rock' || isStairFloor(c.floor)) return null;
@@ -166,12 +180,18 @@ export function cellWorldPlacements(
     for (let bx = 0; bx + 1 < w; bx += 2) {
       const m = groundOf(bx, by);
       if (!m) continue;
+      const block = FLOOR_MESH[m].block;
+      if (!block) continue;   // the table says this material has no 4u mesh — so it never merges
       if (groundOf(bx + 1, by) !== m || groundOf(bx, by + 1) !== m || groundOf(bx + 1, by + 1) !== m) continue;
       const c0 = cellCentre2u(w, h, by * w + bx);
       out.push({
         // the block's centre is one world unit south-east of its first cell's centre
         x: toRaw(add(c0.x, HALF_CELL)), z: toRaw(add(c0.z, HALF_CELL)),
-        unit: { url: FLOOR_URL[m], y: Z, turn: 0, scale: ONE, boxes: [], materials: getApproved(objIdOf(FLOOR_URL[m]))?.materials },
+        // DECK_LIFT, the same as a per-cell draw — imported, not restated. This was `Z`, which put the
+        // block's walking surface 0.075 below its unmerged neighbour's: a visible step at every merge
+        // boundary, and the reason `DECK_LIFT`'s own arithmetic ("floor bottom flush with the wall's,
+        // spans [0.00, 0.15]") described neither path.
+        unit: { url: block, y: DECK_LIFT, turn: 0, scale: ONE, boxes: [], materials: getApproved(objIdOf(block))?.materials },
       });
       for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) merged[(by + dy) * w + (bx + dx)] = 1;
     }

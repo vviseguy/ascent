@@ -68,11 +68,15 @@
 // they are. `group-anchors.test.ts` asserts the real GLB's world anchors match bit for bit rather
 // than trusting that, and a new asset that broke it would fail there rather than in a tower.
 //
-// WHAT THIS DOES NOT CLAIM. `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one
-// natively-4u mesh where it can, and draws the rest per 2u cell at HALF scale. A merged block's
-// pavers are therefore twice the size of its unmerged neighbour's, and two stones of different sizes
-// are not one stone: the anchors differ there and the phases differ, which is the honest answer and
-// the same break `main` already draws. Merged-against-merged and cell-against-cell both coordinate.
+// IT REACHES ACROSS THE 2u/4u MERGE TOO, and that is a property of the ASSETS, not of this file.
+// `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one natively-4u mesh where it
+// can and draws the rest per 2u cell — and a cell draws `floor_tile_small`, which is exactly one
+// quadrant of `floor_tile_large`: the same stones on the same pitch-2 lattice, with its own 5 saved
+// groups. Cells sit on even world coordinates and a block's centre on odd ones, so both meshes'
+// octagons land on ONE lattice, and the octagon a merge boundary runs through — a HALF from the
+// block, a QUARTER from each cell beyond it — snaps to a single world point. It did not used to:
+// a cell drew the 4u mesh at HALF scale, so its pavers were half the size and nothing could agree.
+// See `FLOOR_MESH` in `cell-place.ts`, and the last four cases in `group-anchors.test.ts`.
 //
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================

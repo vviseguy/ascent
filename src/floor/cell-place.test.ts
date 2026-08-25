@@ -47,12 +47,33 @@ const finishes = (u: string[]): number => u.filter((n) => n === 'wall_half_endca
 
 describe('cell-place — one piece per thing the cell owns', () => {
   it('an open cell is just its floor', () => {
-    expect(urls(grid(), 1, 1)).toEqual(['floor_tile_large']);
+    expect(urls(grid(), 1, 1)).toEqual(['floor_tile_small']);
   });
 
-  it('a 2u floor piece renders the 4u mesh at HALF scale', () => {
+  it('a 2u cell draws the 2u GROUND MESH, at NATIVE scale — not the 4u one shrunk', () => {
+    /* THE PAVERS HAVE TO COME OUT THE SAME SIZE AS A MERGED BLOCK'S. `cell-tower.ts` draws an aligned
+       2x2 of matching floor as one 4u mesh, and whether a given patch merges is data — a hole, a
+       staircase, a material change and an odd row all stop it. This used to be `floor_tile_large` at
+       0.5, which halved the CARVED pavers (the tiling shader projects in world space, so the painted
+       grain did not follow) and made a merged block's stones literally twice its neighbour's.
+       `floor_tile_small` is the same pattern at 2u, so both paths land on one lattice. */
     const p = cellPlacements(grid(), W, H, 1, 1)[0]!;
-    expect(p.scale).toBe(32768); // 0.5 in Q16.16
+    expect(bare(p.url)).toBe('floor_tile_small');
+    expect(p.scale).toBe(65536); // 1.0 in Q16.16 — the mesh's own size
+  });
+
+  it('every ground material draws its own 2u mesh — except the one the kit has none for', () => {
+    // A row of the table, not a rule someone has to remember: adding a material is a row, and a
+    // material with no 2u mesh has to say so rather than being silently shrunk.
+    const of = (m: 'stone' | 'dirt' | 'wood' | 'grate'): { url: string; scale: number } => {
+      const p = cellPlacements(grid((c, x, y) => { if (x === 1 && y === 1) c.floor = m; }), W, H, 1, 1)[0]!;
+      return { url: bare(p.url), scale: p.scale };
+    };
+    expect(of('stone')).toEqual({ url: 'floor_tile_small', scale: 65536 });
+    expect(of('dirt')).toEqual({ url: 'floor_dirt_small_A', scale: 65536 });
+    expect(of('wood')).toEqual({ url: 'floor_wood_small', scale: 65536 });
+    // `grate` is 4x2 in this kit and ships in no 2u form at all, so it keeps the old half-scale draw
+    expect(of('grate')).toEqual({ url: 'floor_tile_grate', scale: 32768 });
   });
 
   it('a lone wall segment is one 2u piece — the FINISHED one', () => {
@@ -61,7 +82,7 @@ describe('cell-place — one piece per thing the cell owns', () => {
        second end takes the terminator instead. The helper used to filter caps out, which is how a cap
        standing inside a doorway went unnoticed; these assertions show everything emitted. */
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) c.wallN = 'wall'; }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_half_endcap', 'wall_endcap_short']);
+      .toEqual(['floor_tile_small', 'wall_half_endcap', 'wall_endcap_short']);
   });
 
   it('a run that stops in mid-air is FINISHED at each loose end, and nowhere else', () => {
@@ -89,7 +110,7 @@ describe('cell-place — one piece per thing the cell owns', () => {
        mitre is not, so the two-edge L comes out as two finished halves butting at the inner point.
        This is the pass order doing its job, not a missed corner. */
     expect(urls(grid((c, x, y) => { if (x === 1 && y === 1) { c.wallN = 'wall'; c.wallW = 'wall'; } }), 1, 1))
-      .toEqual(['floor_tile_large', 'wall_half_endcap', 'wall_half_endcap']);
+      .toEqual(['floor_tile_small', 'wall_half_endcap', 'wall_half_endcap']);
 
     // give each leg one more edge and the mitre is back: the ends now want edges the corner does not
     const longer = allUrls(grid((c, x, y) => {
@@ -168,7 +189,7 @@ describe('cell-place — one piece per thing the cell owns', () => {
       if (x === 2 && (y === 1 || y === 2)) c.wallW = 'wall';  // a stem hanging south from (2,1)
     });
     expect(wallEnds(cs, W, H).some((e) => e.x === 2 && e.y === 1)).toBe(false);
-    expect(new Set(allUrls(cs).filter((n) => n !== 'floor_tile_large')))
+    expect(new Set(allUrls(cs).filter((n) => n !== 'floor_tile_small')))
       .toEqual(new Set(['wall', 'wall_half', 'wall_half_endcap']));
     // three loose ends in the whole figure — the two row ends and the foot of the stem
     expect(finishes(allUrls(cs))).toBe(3);
@@ -207,11 +228,11 @@ describe('cell-place — a 4u opening replaces the two segments it spans', () =>
 
   it('draws ONE arch and suppresses BOTH wall halves — including the neighbour\'s', () => {
     const cs = withOpening('doorway');
-    expect(urls(cs, 2, 2)).toEqual(['floor_tile_large', 'wall_doorway_open']); // the arch, no wall_half
-    expect(urls(cs, 1, 2)).toEqual(['floor_tile_large']);                // the neighbour's half is gone
+    expect(urls(cs, 2, 2)).toEqual(['floor_tile_small', 'wall_doorway_open']); // the arch, no wall_half
+    expect(urls(cs, 1, 2)).toEqual(['floor_tile_small']);                // the neighbour's half is gone
     // beyond the span: ONE 2u piece, finished at its far end. The near end is not loose — the doorway
     // continues the wall — and a piece pushed in there is the bug `cell-module.test.ts` holds shut.
-    expect(urls(cs, 3, 2)).toEqual(['floor_tile_large', 'wall_half_endcap']);
+    expect(urls(cs, 3, 2)).toEqual(['floor_tile_small', 'wall_half_endcap']);
   });
 
   it('a module whose flanking wall does not continue is TERMINATED, not shortened', () => {
@@ -469,7 +490,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
       if (y === 1 && x >= 1 && x <= 2) c.wallN = 'wall';
     });
     expect(stairFlight(tooLong, SW, SH, 1, 1)).toBeNull();
-    expect(ground(tooLong, 1, 1)).toEqual(['floor_tile_large']);
+    expect(ground(tooLong, 1, 1)).toEqual(['floor_tile_small']);
 
     // and two cells of WOOD is likewise unspannable
     const tooShort = mk((c, x, y) => {
@@ -642,7 +663,7 @@ describe('cell-place — stair flights are BLOCKS, and everything about them is 
   it('still refuses when NEITHER axis has a closed end — there is nothing to go on', () => {
     const openBoth = mk((c, x, y) => { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) c.floor = 'stairs'; });
     expect(stairFlight(openBoth, SW, SH, 1, 1)).toBeNull();
-    expect(ground(openBoth, 1, 1)).toEqual(['floor_tile_large']);
+    expect(ground(openBoth, 1, 1)).toEqual(['floor_tile_small']);
   });
 
   it('a RAGGED patch is not a flight', () => {

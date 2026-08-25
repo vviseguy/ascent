@@ -43,6 +43,11 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 npm run cell:snap -- structure "walled stairs"      # one authored structure, framed on its meshes
 npm run cell:snap -- all --turns                    # every structure x all 8 orientations
 npm run cell:snap -- floor 36x28 --seed=3 --focus=30,11,7   # a generated floor, zoomed on one cell
+npm run cell:snap -- floor 36x28 --seed=1 --compiled          # ...as the GAME draws it, not as
+#   `cell-place.ts` emits it. `cell-tower.ts` MERGES an aligned 2x2 of matching ground into one 4u
+#   mesh, and without --compiled the shot cannot see that stage at all — which is how a merged block
+#   came to draw pavers twice the size of its unmerged neighbour's with every screenshot looking fine.
+#   Judging GROUND without it is judging the wrong picture.
 npm run cell:snap -- structure "walled stairs" --stack=3    # storeys stacked: does a flight REACH?
 npm run cell:snap -- demo caps --size=1800x1250 --angle=90 --pitch=76   # EVERY place a wall can stop,
 #   sixteen captioned cases on one board — the visual gate on the wall-finishing rule (`wallEnds`).
@@ -85,9 +90,12 @@ doesn't apply to your case.
   (`cell-place.ts`) is the good case — the only place a mesh url is spelled, anywhere. The bad cases
   are live: collision is described **twice**, by the approved bundle (`approved-assets.json`,
   object-local metres, box-fitted and reviewed) and by `WALL_FALLBACK` (`cell-tower.ts`, world units,
-  hand-measured), keyed by two *different* derivations of the same url; `FLOOR_URL` exists in both
-  `cell-place.ts` and `cell-tower.ts`; turn→yaw is derived in four places. Two homes for one fact is
-  two answers, and they drift silently.
+  hand-measured), keyed by two *different* derivations of the same url; turn→yaw is derived in four
+  places. Two homes for one fact is two answers, and they drift silently. The ground table is the
+  case that got FIXED and shows what it buys: `cell-tower.ts` used to keep its own copy of
+  `FLOOR_URL`, and once it imported the one in `cell-place.ts` instead, giving that table a second
+  column (2u cell mesh / 4u block mesh — `FLOOR_MESH`) made the merge stop being a visual fork in
+  one edit rather than four.
 
 - **A key must be as fine as the thing it keys.** `objIdOf` strips the `#fragment`, so
   `wall_doorway.glb` (shut) and `wall_doorway.glb#open` (leaf removed) — two different things on

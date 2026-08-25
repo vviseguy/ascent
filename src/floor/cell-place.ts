@@ -105,9 +105,14 @@ export const PIECE = {
   gate: u('wall_gated'),
   broken: u('wall_broken'),
   wall: u('wall'),
+  /* GROUND COMES IN TWO SIZES, and the pair is the point — see `FLOOR_MESH`. The kit ships each
+     material as a 4u tile and a 2u one, and the 2u one is EXACTLY one quadrant of the 4u one. */
   floorStone: u('floor_tile_large'),
+  floorStoneCell: u('floor_tile_small'),
   floorDirt: u('floor_dirt_large'),
+  floorDirtCell: u('floor_dirt_small_A'),
   floorWood: u('floor_wood_large'),
+  floorWoodCell: u('floor_wood_small'),
   floorGrate: u('floor_tile_grate'),
 } as const;
 
@@ -138,7 +143,11 @@ export interface CellPlacement {
 const Z = fromInt(0);
 const ONE = fromInt(1);
 const NEG_ONE = neg(ONE);
-const HALF = fromFloatConst(0.5); // a 4u floor piece rendered as a 2u cell
+/* HALF SURVIVES FOR EXACTLY ONE THING — see `FLOOR_MESH`. It used to be how every 2u cell drew its
+   ground, and that is what made a merged 4u block's pavers twice the size of its unmerged
+   neighbour's. Ground now draws its own 2u mesh at native size; only `grate`, which the kit ships in
+   no 2u form at all, is still shrunk. */
+const HALF = fromFloatConst(0.5);
 
 /** Point a +X-extending piece toward a direction. Matches the 4u convention exactly. */
 const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
@@ -167,14 +176,42 @@ const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
  * about this; the tile is trim and the slab is the walking surface. A quarter unit of visual lift is
  * not worth desynchronising what you stand on from what the sim thinks you stand on.
  */
-const DECK_LIFT: Fixed = fromFloatConst(0.10);
+export const DECK_LIFT: Fixed = fromFloatConst(0.10);
 /** The lid's origin, measured from its own storey's line — see `DECK_LIFT`. */
 const CEILING_Y: Fixed = fromFloatConst(3.90);
 
-/** Ground mesh per material — THE table, exported because `cell-tower` kept a second copy of it and a
- *  second copy is a thing that can disagree. Adding a material used to mean remembering both. */
-export const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
-  stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood, grate: PIECE.floorGrate,
+/** A material that has ground to draw. `rock` is fill and the stair materials draw a flight. */
+export type GroundMaterial = Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>;
+
+/**
+ * GROUND MESH PER MATERIAL, IN BOTH FOOTPRINTS — THE table, exported because `cell-tower` kept a
+ * second copy of it and a second copy is a thing that can disagree.
+ *
+ * TWO COLUMNS, ONE PAVER SIZE. The kit ships each floor material at 4u AND at 2u, and the 2u tile is
+ * EXACTLY one quadrant of the 4u one — measured off the GLBs, not assumed: `floor_tile_large` is a
+ * 1.90 octagon on a 2.00 lattice with 1.15 diamonds between, and `floor_tile_small` is one 1.15
+ * diamond with a 0.95 quarter-octagon at each corner. Same stones, same pitch. `floor_wood_small`
+ * repeats `floor_wood_large`'s 1.95 x 0.45 plank on the same 0.50 course and 2.00 running bond.
+ *
+ * So a 2u cell drawing `cell` and an aligned 2x2 block drawing `block` put their pavers on ONE world
+ * lattice: cells sit on even world coordinates and blocks on odd ones, which is exactly the offset
+ * that lines the two up. `cell-tower.ts` merges for the draw count and NOTHING else changes.
+ *
+ * THAT IS WHY THERE IS NO SCALE HERE. Per-cell ground used to be the 4u mesh at HALF, which shrank
+ * the CARVED pavers to half size while the tiling shader — world-space projected — went on painting
+ * the grain at full size. A merged block's stones were literally twice its neighbour's, and whether a
+ * patch merges is data: a hole, a staircase, a material change or an odd row all stop it.
+ *
+ * `block: null` says this material NEVER merges, and it is a contract rather than a convention — the
+ * merge cannot draw a material it has no 4u answer for. Only `grate` is there: the kit's grate tile is
+ * 4x2 rather than 4x4 and has no 2u form, so it keeps the old HALF draw and stays per-cell. (That
+ * mesh covers only half of the cell it is placed in; a pre-existing gap this change does not close.)
+ */
+export const FLOOR_MESH: Record<GroundMaterial, { cell: string; cellScale: Fixed; block: string | null }> = {
+  stone: { cell: PIECE.floorStoneCell, cellScale: ONE, block: PIECE.floorStone },
+  dirt: { cell: PIECE.floorDirtCell, cellScale: ONE, block: PIECE.floorDirt },
+  wood: { cell: PIECE.floorWoodCell, cellScale: ONE, block: PIECE.floorWood },
+  grate: { cell: PIECE.floorGrate, cellScale: HALF, block: null },
 };
 
 /** Which 4u module an opening draws. `door` and `arch` share a mesh today. */
@@ -223,6 +260,12 @@ export const wallTypeUrls = (wt: WallType, open: Open): readonly string[] =>
 const at = (
   url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z, inverted = false,
 ): CellPlacement => (inverted ? { url, x, y, z, turn, scale, inverted } : { url, x, y, z, turn, scale });
+
+/** GROUND (or a lid) for one cell, centred, at whatever size `FLOOR_MESH` says that material's 2u
+ *  mesh is. A signature that cannot be satisfied without consulting the table, so the deck and the
+ *  lid cannot drift apart — and so the next material added is a row rather than three call sites. */
+const ground = (m: GroundMaterial, y: Fixed, inverted = false): CellPlacement =>
+  at(FLOOR_MESH[m].cell, 0, Z, Z, FLOOR_MESH[m].cellScale, y, inverted);
 
 /**
  * THE KIT IS BUILT AROUND A 4.00 STOREY, and these are measured, not guessed (`tmp/glb-levels.mjs`
@@ -1129,18 +1172,18 @@ export function cellPlacements(
     ));
   } else if (isStairFloor(c.floor)) {
     if (!insideFlight(cells, w, h, x, y, above) && inFloor) {
-      out.push(at(PIECE.floorStone, 0, Z, Z, HALF, DECK_LIFT));
+      out.push(ground('stone', DECK_LIFT));
     }
   } else if (c.floor !== 'none' && inFloor) {
-    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF, DECK_LIFT));
+    out.push(ground(c.floor, DECK_LIFT));
   }
 
   /* THE LID. Its own field, its own material, drawn from the same tiles as the ground and hung upside
      down — two tiles describing one surface, which is what a ceiling and the deck above it are.
-     `rock` and the stair materials are not lids: `FLOOR_URL` has no row for them, and a ceiling of
+     `rock` and the stair materials are not lids: `FLOOR_MESH` has no row for them, and a ceiling of
      stairs is not a thing anyone means. */
   if (c.ceiling !== 'none' && c.ceiling !== 'rock' && !isStairFloor(c.ceiling) && inFloor) {
-    out.push(at(FLOOR_URL[c.ceiling], 0, Z, Z, HALF, CEILING_Y, true));
+    out.push(ground(c.ceiling, CEILING_Y, true));
   }
 
   // the NW corner point of this cell, in cell-local coordinates
