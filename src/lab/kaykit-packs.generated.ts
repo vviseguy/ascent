@@ -193,19 +193,26 @@ export const PACK_FILES: Record<string, readonly string[]> = {
     'wall_corner_small.gltf',
     'wall_cracked.gltf',
     'wall_crossing.gltf',
+    /* ---- LOCAL DERIVATIVES -------------------------------------------------------------------
+       Pieces we cut out of this pack ourselves, because it ships COMPOSITES the engine needs the
+       halves of: a doorway is a frame with its leaf welded into the same file, a gate is a
+       portcullis welded inside its wall. Split apart, each half gets its own identity — and so its
+       own approval, its own collision, and the ability to be placed without the other.
+       NOT upstream. A re-run of fetch-kaykit will neither recreate these lines nor overwrite the
+       files: every derivative is a new name alongside its untouched parent.
+       Regenerate with `npm run assets:derive`; add `-- --check` to fail if any has drifted.
+       Each one is marked *derived* below.                                                        */
+    'wall_door.gltf',              // *derived* — the leaf alone, lifted out of wall_doorway
     'wall_doorway',
     'wall_doorway_Tsplit.gltf',
+    'wall_doorway_open.gltf',      // *derived* — the frame alone; retires the `#open` url fragment
     'wall_doorway_scaffold',
     'wall_doorway_sides.gltf',
     'wall_endcap.gltf',
-    /* A LOCAL DERIVATIVE of wall_endcap, trimmed to its terminal flourish so it can be tacked on
-       the end of a wall that cannot be shortened. NOT from upstream — a re-run of fetch-kaykit
-       will not recreate this line. Regenerate the asset with:
-         node scripts/glb-trim.mjs \
-           public/models/kaykit_dungeon_remastered/wall_endcap.gltf.glb \
-           public/models/kaykit_dungeon_remastered/wall_endcap_short.gltf.glb 0.80          */
-    'wall_endcap_short.gltf',
+    'wall_endcap_short.gltf',      // *derived* — wall_endcap, debris stripped then cut at x=0.80
     'wall_gated.gltf',
+    'wall_gated_arch.gltf',        // *derived* — the gate's wall, portcullis removed
+    'wall_gated_bars.gltf',        // *derived* — the portcullis alone
     'wall_half.gltf',
     'wall_half_endcap.gltf',
     'wall_half_endcap_sloped.gltf',

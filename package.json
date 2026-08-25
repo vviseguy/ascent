@@ -14,6 +14,7 @@
     "lab": "vite --open /ascent/lab.html",
     "sheet": "vite --open /ascent/sheet.html",
     "lab:snap": "node scripts/lab-snap.mjs",
+    "assets:derive": "node scripts/derive-assets.mjs",
     "cell:snap": "node scripts/cell-snap.mjs",
     "editor:snap": "node scripts/editor-snap.mjs",
     "tex:seams": "node scripts/tex-seam-check.mjs",
