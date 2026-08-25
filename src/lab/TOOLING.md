@@ -67,8 +67,17 @@ object regression was found — see MATERIALS.md.
 
 Screenshot the live WebGL pages with headless Playwright (`--use-gl=swiftshader`), NOT the preview
 pane: a continuously-rAF-ing canvas makes the pane time out. `scripts/lab-snap.mjs` is the worked
-example. When testing a pointer tool, draw a marker at the cursor position before the screenshot —
-a screenshot has no cursor in it, and "is the highlight under the pointer" is otherwise unanswerable.
+example.
+
+**And do not certify a texture SEAM by looking at it** — `scripts/seam-scan.mjs` measures one.
+Render a tight crop of a single flat, evenly-lit surface spanning the seam, wearing the `gradient`
+ramp texture, and it reports the biggest single-pixel step against the image's own local gradient.
+A silhouette, a shadow or a chamfer is also a step and it cannot tell them from a phase break, so
+the geometry-immune reading is the SAME crop at `?vary=0` and at full strength. MATERIALS.md has the
+worked numbers.
+
+When testing a pointer tool, draw a marker at the cursor position before the screenshot — a
+screenshot has no cursor in it, and "is the highlight under the pointer" is otherwise unanswerable.
 
 ### A board of CASES beats a shot of one case
 

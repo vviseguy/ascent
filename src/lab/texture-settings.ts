@@ -124,9 +124,10 @@ export function buildTextureSettings(opts: TextureSettingsOpts): TextureSettings
   };
   globalSlider('Relief', getRelief, setRelief, true);
   globalSlider('AO', getAOStrength, setAOStrength, true);
-  // Vary = how far a GROUP may slide its own texture off the shared world projection
-  // (group-anchors.ts). At 0 every surface is back on the one continuous slab, which is the A/B
-  // control: drag it and watch whether the pavers stop being copies of each other.
+  // Vary = how far a SAVED GROUP may slide its own texture off the shared world projection
+  // (group-anchors.ts). It moves nothing else — un-authored geometry is on the identity transform
+  // whatever this says. At 0 even the groups go back onto the one continuous slab, which is the A/B
+  // control: drag it and watch whether the authored pavers stop being copies of each other.
   globalSlider('Vary', getVaryStrength, setVaryStrength, true);
   for (const e of extras) globalSlider(e.label, e.get, e.set, false);
   if (colors.length) {

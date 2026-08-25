@@ -152,8 +152,36 @@ phase = hash(anchor)        anchor = the group's area-weighted centroid, in WORL
 once, and it needs no per-instance state: the anchor is baked per VERTEX in OBJECT space
 (`aGroupAnchor`, vec4) and carried to world space by `modelMatrix` in the vertex shader, so two
 placements of one tile in two different cells land on two different world anchors and differentiate
-themselves. A group is the carve-mode facet at 75° — one paver, one protruding brick — or a
-hand-saved region that overrides it (SURFACES.md).
+themselves. **A group is a hand-saved `SurfaceGroup` (SURFACES.md) and nothing else.**
+
+**THE DEFAULT IS THE IDENTITY TRANSFORM, and that is the whole design.** Un-authored geometry gets
+no offset and no rotation. Only a saved group varies.
+
+The projection is already world-space planar, so two faces that abut are ALREADY continuous.
+Coordination is not a feature to add — it is what you get for free, and variation is the thing that
+breaks it. So variation is the deliberate act, and the deliberate act is the one that has to be
+authored. A first cut of this had it the other way round: it anchored every carve@75 auto facet,
+which handed every facet on every mesh its own phase. The pavers separated, correctly — and so did
+the flat front of every wall panel, which stopped matching the panel butted against it, and a run of
+wall came apart into tiles. That was written up here as a known trade. It was not a trade, it was
+the mechanism aimed at the wrong scope: it destroyed continuity everywhere and then needed a
+per-texture `vary: none` to buy it back.
+
+Concretely, [group-anchors.ts](group-anchors.ts) bakes **nothing at all** into a mesh with no saved
+group — no attribute, no vertex split, the same geometry object the renderer would have got before
+this feature existed. The shader needs no help with that case: a missing `aGroupAnchor` reads as
+GL's default `(0,0,0,1)`, w = 1 = `none`. `group-anchors.test.ts` pins the object identity, because
+"renders the same" is much weaker than "is the same buffer" and only the second one is checkable.
+
+**The auto facet partition still runs — in the lab, as the selection aid.** `show groups` at carve
+75° tints one facet per paver and one per protruding brick, which is how you FIND the regions worth
+saving. It is a proposal; it does not render. `saved groups` tints the decisions.
+
+**Verify it with the `gradient` texture, not with stone.** Separation is a large, obvious change and
+coordination is the ABSENCE of one — and an absence is exactly what cannot be certified by looking
+at a render of photographic masonry, where the joints are subtle by design. Point every type at
+`gradient` and the reading becomes mechanical: a shared phase is one smooth colour field running
+straight through a seam, a broken one is a step. See "The `gradient` continuity texture" below.
 
 - **A per-instance UNIFORM was rejected.** It would force a material per instance, and that is
   precisely the regression the shared `customProgramCacheKey` exists to prevent. Measured after:
@@ -170,7 +198,8 @@ hand-saved region that overrides it (SURFACES.md).
   which they would not if T/B had stayed put.
 
 **Permission lives on the TEXTURE** (`TextureOption.vary`), because "may this rotate" is a fact
-about the material: `none` | `shift` (default) | `shift+rotate`. `shift+rotate` uses QUARTER turns —
+about the material: `none` | `shift` (default) | `shift+rotate`. It is a CEILING on what an authored
+group may do, never a trigger — nothing reads it unless a saved group asked. `shift+rotate` uses QUARTER turns —
 90° maps a square-repeating texture's lattice onto itself, so the tiling stays seamless and joints
 stay orthogonal to the world; a free angle differentiates more and looks like a mistake instantly.
 Which textures get it was decided by looking at the albedos side by side, not by taste: masonry and
@@ -189,12 +218,6 @@ matching floor into a single natively-4u mesh — ~18,000 of 26,000 meshes — c
 data-dependently, so anything keyed on per-tile seam points produces a visible discontinuity exactly
 at the merged/unmerged boundary. A group is always wholly inside one mesh, which is why this half is
 safe and that half is not.
-
-**The known trade, so nobody rediscovers it as a bug:** a facet that spans a whole mesh face — the
-flat front of a wall panel — now shifts relative to the panel butted against it, because they are
-different meshes with different anchors. On a paver that discontinuity IS the feature; on a long
-wall run it is a change. The levers are the per-texture `vary` (set a texture to `none` and its
-surfaces go back to one continuous slab) and the strength dial.
 
 **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
 is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;
@@ -349,9 +372,12 @@ game  — 48 shaders,  0 with uTexArr     before
 game  — 48 shaders,  1 with uTexArr     after
 ```
 
-One is the correct number for the game: the shared cache key means every recolored material in the
-scene resolves to a single program. If that count is ever 0, the tower is not tiled no matter what
-the lab looks like.
+The count to watch is the SHAPE, not the literal number: the shared cache key means all the
+recolored materials that emit identical source resolve to ONE program. Measured 2026-08-24 the game
+reads 50 shaders / **2** with `uTexArr`, because `patchCutout` (dungeon.ts) chains onto
+`onBeforeCompile` for the staircase wall cut and EXTENDS the cache key — a second distinct source,
+correctly given a second program. If the count is ever **0**, the tower is not tiled no matter what
+the lab looks like; if it starts tracking the number of OBJECTS, the shared key has been broken.
 
 ## `?tex=` is a DELTA on `?profile=`, not an alternative
 
@@ -382,3 +408,69 @@ Two orientation fixes live behind it, and they are INDEPENDENT — both were nee
 
 Mirror **U**, never V. Either restores handedness, but seeing a surface from the other side is a
 horizontal mirror — flipping V corrects the lighting and stands the texture on its head.
+
+## The `gradient` continuity texture — the other measuring stick
+
+`calibration` answers *is this surface oriented and lit correctly*. `gradient` answers *do two
+surfaces AGREE*. Both are instruments, neither is art, and they read in opposite directions:
+calibration is a local reading on one face, gradient is a reading ACROSS a boundary.
+
+```
+R = ONE triangle wave along U    G = ONE triangle wave along V    B = flat    + a fine dither
+```
+
+Brightness in one channel is a direct, monotonic readout of position along one axis. Boring to look
+at, which is the property you want: a step in R is a U-shift, a step in G is a V-shift, and the size
+of the step is the size of the offset.
+
+Every clause of that is a correction of a version that did not read, and the wrong ones are worth
+recording because each looks reasonable:
+
+- **One wave per axis, in its own channel.** A DIAGONAL wave mixes U and V, so a U-shift and a
+  V-shift look identical and neither can be isolated. Three varying channels means you are reading
+  HUE, which is cyclic — red at both ends of the ramp — so it cannot express magnitude or direction.
+- **One cycle, not several.** A second octave puts more than one period in frame, and then an offset
+  of one period is indistinguishable from no offset. That is the same aliasing that ruled out a grid.
+- **A triangle, not a linear ramp.** A ramp wraps with a hard jump at every repeat, and those jumps
+  look exactly like phase breaks. A triangle is C0 across the wrap, so the only discontinuities left
+  in the picture are real ones.
+- **Plus a dither.** With a perfectly smooth image `seam-scan` has no local gradient to normalise
+  against and its scale-free ratio degenerates. Ramp-plus-noise is what that scanner was validated
+  on.
+- **1 m per repeat**, sized for the close-up crop the scan reads: under one period spans a ~0.75 m
+  crop, so the ramp is monotonic in frame, and the texels stay near pixel size so the dither
+  survives into the render.
+
+Rotation is deliberately NOT this texture's job. Over a 0.7 m paver the ramp barely turns; use
+`calibration`, whose arrows answer rotation outright. Two instruments, one question each.
+
+### Reading it: `scripts/seam-scan.mjs`, not your eyes
+
+Do not certify a seam by looking at it. Render a CLOSE-UP of one seam — a tight crop of one flat,
+evenly-lit surface spanning it — and scan the frame:
+
+```bash
+node scripts/seam-scan.mjs shot.png --box=x,y,w,h     # steps along X (vertical seams)
+node scripts/seam-scan.mjs shot.png --axis=y          # horizontal seams
+```
+
+It reports the biggest single-pixel jump against the image's own typical local gradient. Scale-free,
+so exposure and texture contrast do not enter. Validated against synthetics whose answer is known by
+construction: a clean ramp reads 3.3x, an 18% phase shift 20.8x, a 3% shift 5.8x — that last row is
+the case a human misses.
+
+**Its limit decides how you use it here: a silhouette, a shadow boundary or a chamfer is also a
+step, and it cannot tell one from a phase break.** On this kit EVERY mesh-to-mesh seam carries
+geometry, so an absolute "CONTINUOUS" verdict is not available at a real seam and claiming one would
+be a lie. The geometry-immune form is to scan the SAME crop at `?vary=0` and at full: at 0 no phase
+transform exists anywhere by construction, so that render is the ground truth for "geometry only",
+and any increase at full strength is phase and nothing else.
+
+Measured on a run of three wall panels and the authored floor tile:
+
+| crop | `?vary=0` | full | reading |
+|---|---|---|---|
+| no seam in the box (control) | 4.0-4.7x | 4.0-4.7x | the scanner's noise floor on these renders |
+| UN-AUTHORED wall-panel seam | 9.7x, step 29 | 9.7x, step 29 | unchanged to the digit — and the two PNGs are **byte-identical**. The 9.7x is the panel's own edge geometry, which is why it is already there at `vary=0` |
+| AUTHORED paver edge | 14.3x, step 43 | **88.7x, step 266** | the chamfer accounts for 43; the phase break adds 223 |
+

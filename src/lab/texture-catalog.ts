@@ -92,6 +92,43 @@ export const TEXTURES: readonly TextureOption[] = [
   // its own quarter turn and the ridge must still light as a ridge; `?vary=0` holds every group
   // still again, which is the unmoved reference. Both readings off one texture.
   { id: 'calibration', label: 'Relief calibration (test)', group: 'neutral', diff: 'calib_diff.png', nor: 'calib_nor.png', vary: 'shift+rotate', scale: 2.0 },
+  // PHASE CONTINUITY — the second measuring stick, aimed at the opposite question from calibration.
+  // Calibration answers "is this surface oriented and lit right"; gradient answers "do two surfaces
+  // SHARE a phase". A shared phase is one brightness field running straight through a seam; a broken
+  // one is a STEP, and the size of the step is the size of the offset.
+  //
+  // It has to be an instrument because coordination is the ABSENCE of a change, and on photographic
+  // stone an absence is exactly what an eye cannot certify — "the lines are subtle" is how the wrong
+  // variation scope survived a round of review.
+  //
+  //   R = one triangle wave along U      G = one triangle wave along V      B = flat
+  //
+  // Every clause there is a correction of something that did not read. A DIAGONAL wave mixes U and V
+  // so a U-shift and a V-shift look identical. A SECOND OCTAVE puts more than one cycle in frame, so
+  // an offset of one cycle reads as no offset — the very aliasing a gradient was chosen to avoid. And
+  // once all three channels vary you are reading HUE, which is cyclic and so cannot express magnitude
+  // or direction at all. One monotonic ramp per axis per channel is boring to look at, and boring is
+  // the property: brightness in one channel IS position along one axis.
+  //
+  // TRIANGLE, not ramp: a linear ramp wraps with a hard jump at every repeat and those jumps look
+  // exactly like phase breaks. A triangle is C0 across the repeat, so the only discontinuities left
+  // in the picture are real ones.
+  //
+  // A fine per-texel DITHER rides on top. Without it the image has no local gradient of its own, so
+  // scripts/seam-scan.mjs has nothing to normalise its worst-step against and its scale-free ratio
+  // degenerates (median step 0, every ratio infinite). Ramp-plus-noise is the case that scanner was
+  // validated on.
+  //
+  // 1 m per repeat, sized for the CLOSE-UP crop that the seam scan reads: under one period spans a
+  // ~0.75 m crop of one seam, so the ramp is monotonic in frame and cannot alias, while the texels
+  // stay near pixel size so the dither survives into the render. Rotation is deliberately not this
+  // texture's job — use `calibration`, whose arrows answer it outright.
+  //
+  // No `nor`: this measures the UV transform, and relief would only add shading to argue with. It
+  // goes through the ORDINARY texture path — a `?debug=phase` false-colour mode was built and then
+  // deleted, because a separate shader branch can agree with itself and still disagree with what
+  // production does.
+  { id: 'gradient', label: 'Phase continuity (test)', group: 'neutral', diff: 'gradient_diff.png', color: 'albedo', vary: 'shift+rotate', scale: 1.0 },
   // `vary: 'shift+rotate'` ONLY where the image has no direction to get wrong. This was decided by
   // LOOKING at the six albedos side by side, not by taste: masonry and brick are laid in horizontal
   // COURSES and a quarter turn stands them on end (rendered, it reads as vertical streaking — a

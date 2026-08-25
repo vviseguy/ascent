@@ -5,11 +5,14 @@
 // A FACET is a maximal run of edge-connected triangles within an angle tolerance. It is the unit a
 // texture gets "ironed onto": one paver of a floor tile, one protruding brick of a wall.
 //
-// This lives on its own because it now has TWO callers that must not disagree:
+// This lives on its own because it has TWO callers:
 //   • face-select.ts   — the interactive picker (hover preview, the `show groups` overlay)
-//   • group-anchors.ts — the BUILD-time baker that writes each facet's anchor into the mesh
-// If the lab tinted one partition and the shader varied a different one, every authoring decision
-// made by looking at the overlay would be a decision about the wrong thing.
+//   • group-anchors.ts — the BUILD-time baker, for `facetCentroid`: a saved group's ANCHOR
+//
+// Note what the baker does NOT use: `partitionFacets`. The auto partition proposes regions for a
+// human to save; it does not decide what varies. Variation applies only to hand-saved groups
+// (group-anchors.ts explains why the default has to be the identity transform), so the overlay is
+// a selection aid and the flood that draws it is shared with the picker, not with the shader.
 //
 // Everything here is pure: geometry in, arrays out. No THREE.Scene, no DOM, no mutation of the
 // input. (THREE.Vector3 is used only as a value type for the centroid/normal.)

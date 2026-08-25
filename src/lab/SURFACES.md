@@ -188,14 +188,21 @@ area-weighted centroid, in object space — and the tiling shader derives that g
 from it, so each carved stone stops being a window onto one continuous slab. The rule and its
 consequences live in [MATERIALS.md](MATERIALS.md); what belongs here is what it means for the mesh:
 
-- **The partition is the CARVE facet set at 75°**, the same one `show groups` tints. That is
-  deliberate: if the overlay showed one partition and the shader varied a different one, every
-  decision made by looking at the overlay would be a decision about the wrong thing. Both call
-  `partitionFacets` in [facets.ts](facets.ts) — extracted from the picker for exactly that reason.
-- **A saved group REPLACES the auto facets it covers.** A decision beats a proposal. It may also
-  carry its own `vary` (the per-row dropdown), for the one region where the material's own answer
-  is wrong — a plank panel set into a stone wall.
-- **A vertex two groups both want gets DUPLICATED.** An attribute holds one value per vertex, and a
+- **A SAVED GROUP IS THE ONLY THING THAT VARIES.** The auto facet partition gets the IDENTITY
+  transform: no offset, no rotation. The projection is world-space planar, so abutting faces are
+  already continuous — varying by default would destroy that everywhere to buy it back in the few
+  places it was wanted. Separation is the deliberate act, so it is the one you author.
+- **The auto partition is the SELECTION AID, not the render scope.** `show groups` at carve 75°
+  tints one facet per paver and one per protruding brick precisely so you can see which regions are
+  worth saving; one click takes a paver and its slants. It proposes; the save decides. (The picker
+  and the baker still share [facets.ts](facets.ts) — the baker uses `facetCentroid` for the anchor,
+  the picker `partitionFacets` for the overlay.)
+- **A mesh nobody has authored is not rebuilt at all.** Not "given identity anchors" — left as the
+  same geometry object, with no `aGroupAnchor` attribute and no vertex split, so it reaches the
+  renderer byte-for-byte as it would without this feature. `group-anchors.test.ts` pins that.
+- A group may carry its own `vary` (the per-row dropdown), for the one region where the material's
+  own answer is wrong — a plank panel set into a stone wall.
+- **A vertex a group and its surroundings both want gets DUPLICATED.** An attribute holds one value per vertex, and a
   GLB shares vertices wherever the normals agree — so at some crease boundaries one triangle of a
   paver would otherwise wear its neighbour's phase and the texture would tear along a shared corner.
   The rebuild splits those vertices and rewrites the index; triangle ORDER and COUNT never change,
