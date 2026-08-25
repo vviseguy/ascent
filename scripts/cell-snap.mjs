@@ -14,6 +14,8 @@
 //   --turns        one shot per orientation (0..3 + flipped) — placement must survive all eight
 //   --angle=deg --pitch=deg --zoom=f
 //   --arrows       draw the climb direction the code CHOSE over each flight, plus a compass
+//   --size=WxH     viewport, default 900x620. A wide board of many small cases is unreadable at the
+//                  default — the pixels are the whole deliverable, so make them enough of them.
 //   --out=dir      default cell-shots
 //
 // Output: cell-shots/<subject>[-t<turn>][-f].png
@@ -64,7 +66,10 @@ const port = server.address().port;
 
 const { chromium } = await import('playwright');
 const browser = await chromium.launch({ args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader'] });
-const page = await browser.newPage({ viewport: { width: 900, height: 620 } });
+const sizeM = /^(\d+)x(\d+)$/.exec(flags.get('size') ?? '');
+const page = await browser.newPage({
+  viewport: sizeM ? { width: Number(sizeM[1]), height: Number(sizeM[2]) } : { width: 900, height: 620 },
+});
 const logs = [];
 page.on('console', (m) => logs.push(`[page:${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));

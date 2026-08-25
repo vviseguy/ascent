@@ -57,11 +57,105 @@ interface Subject {
   decideAbove?: readonly (Cell | null)[];
   /** Extra storeys to draw above this one, bottom-up. A multi-level structure IS a building. */
   above?: (Cell | null)[][];
+  /** Captions pinned to grid coordinates. A board that puts sixteen cases side by side is unreadable
+   *  without them — "which one is the module end?" is not a question a picture should leave open. */
+  notes?: { x: number; y: number; text: string }[];
+}
+
+/**
+ * EVERY PLACE A WALL CAN STOP, side by side on one board.
+ *
+ * `wallEnds` is the authority on where a wall needs finishing, and the rule it encodes has a lot of
+ * cases: which piece owns the last edge, whether anything already stands on the point, whether the end
+ * is at the lattice border, whether the family has a finished piece at all. Sixteen of them fit on one
+ * board, which is the only way a human can check them all in one look — and looking is the point,
+ * because "does this read as a finished wall" is not a question a unit test can answer.
+ *
+ * Each case sits in its own 6x5 patch with at least two clear cells around it, so no two cases can
+ * share a lattice point and quietly become one figure.
+ *
+ *   npm run cell:snap -- demo caps --angle=90 --pitch=55 --zoom=1.05
+ */
+function capsBoard(): Subject {
+  const COLS = 4, PITCH_X = 6, PITCH_Y = 5;
+  const W = 26, H = 22;
+  const cells: (Cell | null)[] = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      cells.push({ floor: 'stone', wallN: 'none', wallW: 'none', corner: 'none', wallType: 'solid', open: 'closed', torch: 'no' });
+    }
+  }
+  const at = (x: number, y: number): Cell => cells[y * W + x] as Cell;
+  const notes: { x: number; y: number; text: string }[] = [];
+
+  /** Cases in reading order; each is painted at the origin of its own patch. */
+  const CASES: { text: string; paint: (x0: number, y0: number) => void }[] = [
+    { text: 'lone edge', paint: (x, y) => { at(x, y).wallN = 'wall'; } },
+    { text: 'run of 2', paint: (x, y) => { for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall'; } },
+    { text: 'run of 3', paint: (x, y) => { for (let i = 0; i < 3; i++) at(x + i, y).wallN = 'wall'; } },
+    { text: 'run of 4', paint: (x, y) => { for (let i = 0; i < 4; i++) at(x + i, y).wallN = 'wall'; } },
+
+    { text: 'loose ONE end (bends east)', paint: (x, y) => {
+      for (let i = 0; i < 3; i++) at(x + i, y).wallN = 'wall';
+      for (let j = 0; j < 2; j++) at(x + 3, y + j).wallW = 'wall';
+    } },
+    { text: 'ends at a COLUMN', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      at(x + 2, y).corner = 'column';
+    } },
+    { text: 'ends at a T', paint: (x, y) => {
+      for (let i = 0; i < 4; i++) at(x + i, y).wallN = 'wall';
+      for (let j = 0; j < 2; j++) at(x + 2, y + j).wallW = 'wall';
+    } },
+    { text: 'bare L — two ends, no mitre', paint: (x, y) => { at(x, y).wallN = 'wall'; at(x, y).wallW = 'wall'; } },
+
+    { text: 'L with 2-edge legs — MITRED', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      for (let j = 0; j < 2; j++) at(x, y + j).wallW = 'wall';
+    } },
+    { text: 'run THROUGH a doorway', paint: (x, y) => {
+      for (let i = 0; i < 4; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 2, y); c.wallType = 'doorway'; c.open = 'open';
+    } },
+    { text: 'DOORWAY alone — module nubs', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 1, y); c.wallType = 'doorway'; c.open = 'open';
+    } },
+    { text: 'WINDOW alone — module nubs', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 1, y); c.wallType = 'window'; c.open = 'open';
+    } },
+
+    { text: 'ARCH alone — module nubs', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 1, y); c.wallType = 'arch'; c.open = 'open';
+    } },
+    { text: 'BARRIER — no cap in the kit', paint: (x, y) => { for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'barrier'; } },
+    { text: 'ends at a BALCONY post', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      at(x + 2, y).corner = 'balcony';
+    } },
+    /* Its east end is the LAST lattice point, so the edge beyond it does not exist. A bare board has
+       no border wall to meet there, so that end is loose like any other — which is worth seeing,
+       because it is the one case where "the wall stops" and "the world stops" are the same event. */
+    { text: 'runs off the MAP EDGE', paint: (_x, y) => { for (let i = W - 4; i < W; i++) at(i, y).wallN = 'wall'; } },
+  ];
+
+  for (const [i, c] of CASES.entries()) {
+    const x0 = (i % COLS) * PITCH_X + 1, y0 = Math.floor(i / COLS) * PITCH_Y + 1;
+    c.paint(x0, y0);
+    /* Just NORTH of the patch: a sprite always faces the camera, so a caption over its own case hides
+       the thing it names as soon as the pitch drops, and one to the SOUTH reads as the title of the
+       row below it. North of it is a heading. */
+    notes.push({ x: x0 + 1.5, y: y0 - 1.1, text: c.text });
+  }
+  return { cells, w: W, h: H, extent: { w: W, h: H }, notes, label: 'demo: caps — every place a wall can stop' };
 }
 
 /** Synthetic subjects. For checking a placement rule that no authored structure happens to exercise —
  *  a bare flight with open flanks, say, when every structure in the store has walled ones. */
 function demo(kind: string): Subject {
+  if (kind === 'caps') return capsBoard();
   const W = kind === 'walltypes' ? WALL_TYPES.length * 2 + 3 : 7, H = 7;
   const cells: (Cell | null)[] = [];
   for (let y = 0; y < H; y++) {
@@ -407,6 +501,27 @@ async function main(): Promise<void> {
     sp.renderOrder = 999;
     scene.add(sp);
   };
+  /* PER-CASE CAPTIONS. A board of sixteen variations is a puzzle without them: you can see that one
+     patch differs from its neighbour and still not know which rule it is exercising. Drawn on top of
+     everything (`depthTest: false`) so a caption is never swallowed by the wall it names. */
+  for (const n of s.notes ?? []) {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 80;
+    const g2 = c.getContext('2d')!;
+    g2.fillStyle = 'rgba(10,12,15,0.88)';
+    g2.fillRect(0, 0, 640, 80);
+    g2.font = 'bold 40px system-ui, sans-serif';
+    g2.fillStyle = '#ffd479'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+    g2.fillText(n.text, 320, 44);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), depthTest: false, transparent: true,
+    }));
+    sp.position.set((n.x - (s.w - 1) / 2) * CELL, 0.35, (n.y - (s.h - 1) / 2) * CELL);
+    sp.scale.set(9, 1.13, 1);
+    sp.renderOrder = 998;
+    scene.add(sp);
+  }
+
   {
     const out = 2.2, y = 1.2;
     letter('N', new THREE.Vector3(0, y, -gh / 2 - out), '#ff5bd8');

@@ -59,42 +59,58 @@ describe('every wall type an author can paint actually draws its own mesh', () =
   });
 });
 
-describe('a run that meets a module does not cap itself into it', () => {
+describe('a run that meets a module does not finish itself into it', () => {
   /* Asserting on the SPANS meant re-deriving each mesh's authored origin — `wall` is centred at
-     x[-2,2] while `wall_half` runs x[0,2] and `wall_endcap` x[0,1.07] — which is its own source of
-     error. The bug is exact and needs no arithmetic: a cap is emitted AT the lattice point of a
-     module, facing into it. Ask that directly. */
-  const capPoints = (cs: Cell[], w = W, h = H): string[] => {
+     x[-2,2] while `wall_half` runs x[0,2] and `wall_half_endcap` x[-2,0] — which is its own source of
+     error. The bug is exact and needs no arithmetic: a finishing piece is emitted AT the lattice point
+     where a wall stops, so ask whether any of them stands on a point a module is drawn at.
+
+     THE PIECES CHANGED WHEN THE PRIORITY ORDER LANDED, and this suite had to change with them or go
+     quiet. It used to look for `wall_endcap`, which the wall passes no longer emit at all — so all
+     three assertions would have passed vacuously while the mechanism they guard was rewritten
+     underneath them. A test that can only fail on a retired piece is not a test. */
+  const FINISHERS = ['wall_half_endcap', 'wall_endcap_short'];
+  const finishPoints = (cs: Cell[], w = W, h = H): string[] => {
     const bad: string[] = [];
     for (const { x, y, placements } of gridPlacements(cs, w, h)) {
       for (const p of placements) {
-        if (!p.url.includes('wall_endcap')) continue;
-        // a cap is pushed at its run's end point; the emitting cell's NW corner is that point when the
-        // offset is the cell-local corner, and the far end when it is offset along the run
+        const n = p.url.split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '');
+        if (!FINISHERS.includes(n)) continue;
+        /* Both pieces pivot ON the point they finish — `wall_half_endcap` because its finished face
+           is at its origin, `wall_endcap_short` because its MATING face is — so the pivot IS the
+           lattice point: the emitting cell's NW corner when the offset is the cell-local corner, and
+           the far corner when it is offset a whole edge along. */
         const px = x + (toFloat(p.x) > -0.5 ? 1 : 0), py = y + (toFloat(p.z) > -0.5 ? 1 : 0);
-        if (moduleAxis(cs, w, h, px, py)) bad.push(`cap at (${px},${py}) where a module is drawn`);
+        if (moduleAxis(cs, w, h, px, py)) bad.push(`${n} at (${px},${py}) where a module is drawn`);
       }
     }
     return bad;
   };
 
-  it('no endcap lands on a point where a module is drawn', () => {
-    expect(capPoints(run('doorway'))).toEqual([]);
+  it('nothing that finishes a wall lands on a point where a module is drawn', () => {
+    expect(finishPoints(run('doorway'))).toEqual([]);
   });
 
   it('...for every module type, not only the walk-through ones', () => {
-    const bad = WALL_TYPES.filter((t) => t !== 'solid').flatMap((wt) => capPoints(run(wt)));
+    const bad = WALL_TYPES.filter((t) => t !== 'solid').flatMap((wt) => finishPoints(run(wt)));
     expect(bad).toEqual([]);
   });
 
-  it('a genuinely loose end still gets its cap — the fix must not delete them all', () => {
-    // NEGATIVE CONTROL. Suppressing every cap would pass the two tests above and be wrong.
+  it('...and the fixture really does put a module next to a run, or the two above prove nothing', () => {
+    // the `run` helper is 3 edges with the middle POINT opened, so the module claims two of them and
+    // one run edge is left on each side — which is the shape the bug needed
+    expect(moduleAxis(run('doorway'), W, H, 2, 1)).toBe('H');
+    expect(names(run('doorway')).filter((n) => FINISHERS.includes(n)).length).toBeGreaterThan(0);
+  });
+
+  it('a genuinely loose end still gets its finish — the fix must not delete them all', () => {
+    // NEGATIVE CONTROL. Suppressing every finish would pass the tests above and be wrong.
     const lone: Cell[] = [];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const c = openCell();
       if (y === 1 && (x === 1 || x === 2)) c.wallN = 'wall';   // a stub ending in open air
       lone.push(c);
     }
-    expect(names(lone).filter((n) => n === 'wall_endcap').length).toBeGreaterThan(0);
+    expect(names(lone).filter((n) => n === 'wall_half_endcap').length).toBe(2);
   });
 });

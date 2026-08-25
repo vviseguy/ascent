@@ -70,6 +70,30 @@ pane: a continuously-rAF-ing canvas makes the pane time out. `scripts/lab-snap.m
 example. When testing a pointer tool, draw a marker at the cursor position before the screenshot —
 a screenshot has no cursor in it, and "is the highlight under the pointer" is otherwise unanswerable.
 
+### A board of CASES beats a shot of one case
+
+When a rule has many branches, put them all on one board rather than taking one screenshot per
+branch: side by side you can see which one is the odd one out, and a folder of separate PNGs makes
+you hold the others in your head. `cell-snap.ts`'s `demo=caps` is the pattern — sixteen wall-ending
+cases in 6x5 patches with at least two clear cells between them, so no two can share a lattice point
+and quietly become one figure.
+
+Two things make such a board readable, and both were learned by getting them wrong first:
+- **CAPTION EVERY CASE.** A sprite plate per patch, `depthTest: false` so a wall never swallows its
+  own label. Without them you can see that one patch differs from its neighbour and still not know
+  which rule it is exercising.
+- **PUT THE CAPTION NORTH OF ITS CASE.** A sprite always faces the camera, so one placed over the
+  case hides the thing it names as soon as the pitch drops, and one to the SOUTH reads as the title
+  of the row below. North of it is a heading, at every pitch.
+
+`--size=WxH` sets the viewport (default 900x620). A wide board of small cases is unreadable at the
+default, and on a deliverable that IS pixels, that is the whole thing failing.
+
+```bash
+npm run cell:snap -- demo caps --size=1800x1250 --angle=90 --pitch=76   # the whole board
+npm run cell:snap -- demo caps --no-build --focus=14.5,11.5,8 --pitch=16 --out=cell-shots/z-nub
+```
+
 ## Headless runs WRITE the authoring stores
 
 The dev middleware exists to write `src/game/*.json` — that is what Approve and the surfaces Save
