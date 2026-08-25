@@ -647,6 +647,8 @@ export class Dungeon {
     const o = t.clone(true);
     o.position.set(x, sy + toFloat(u.y), z);
     o.rotation.y = Dungeon.TURN_YAW[((u.turn % 4) + 4) % 4]!;
+    // a lid hangs upside down — a half-turn about X, which carries the normals round with it
+    o.rotation.x = u.inverted === true ? Math.PI : 0;
     o.scale.setScalar(toFloat(u.scale));
     // Clone this unit's materials so the occlusion cutaway drives THIS piece's opacity alone (the
     // recolor material is shared across every piece). Mirrors placeWall. View-only.

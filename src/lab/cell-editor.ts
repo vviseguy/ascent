@@ -90,7 +90,7 @@ let cells: CellField[] = [];
 const undoStack: string[] = [];
 let showReach = false;
 
-type BrushMode = 'wall' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch' | 'copy' | 'select' | 'stamp';
+type BrushMode = 'wall' | 'floor' | 'ceiling' | 'corner' | 'wallType' | 'open' | 'torch' | 'copy' | 'select' | 'stamp';
 /** How the PREVIEW resolves a field that is still undecided. `generator` is what actually ships. */
 type Ambiguity = 'generator' | 'none' | 'wall' | 'random';
 
@@ -98,6 +98,8 @@ const brush = {
   mode: 'wall' as BrushMode,
   seg: new Set<Seg>(['wall']),
   floor: new Set<FloorMaterial>(['stone']),
+  /** The lid. Wood by default, because a ceiling read from below is boards. */
+  ceiling: new Set<FloorMaterial>(['wood']),
   corner: new Set<Corner>(['column']),
   wallType: new Set<WallType>(['solid']),
   open: new Set<Open>(['open']),
@@ -229,13 +231,14 @@ function resolvedAll(): (Cell | null)[] {
 
 /* --------------------------------- painting --------------------------------- */
 
-type Paintable = 'wallN' | 'wallW' | 'floor' | 'corner' | 'wallType' | 'open' | 'torch';
+type Paintable = 'wallN' | 'wallW' | 'floor' | 'ceiling' | 'corner' | 'wallType' | 'open' | 'torch';
 
 /** What this brush would lay down for `what` — null when the brush has no value picked. */
 function maskFor(what: Paintable, clear: boolean): Mask | null {
   if (clear) return fullField()[what as FieldKey];
   if (what === 'wallN' || what === 'wallW') return brush.seg.size ? segs(...brush.seg) : null;
   if (what === 'floor') return brush.floor.size ? floors(...brush.floor) : null;
+  if (what === 'ceiling') return brush.ceiling.size ? floors(...brush.ceiling) : null;
   if (what === 'corner') return brush.corner.size ? corners(...brush.corner) : null;
   if (what === 'torch') return brush.torch.size ? torches(...brush.torch) : null;
   if (what === 'open') return brush.open.size ? opens(...brush.open) : null;
@@ -399,6 +402,36 @@ function edge(side: 'N' | 'S' | 'E' | 'W', delta: 1 | -1): void {
 /* ---------------------------------- storeys ---------------------------------- */
 
 /** Add a storey ABOVE the current one, blank (abstaining), and move to it. */
+/**
+ * PUT A LID ON EVERY ROOM THAT HAS ONE ABOVE IT — the back-fill.
+ *
+ * A ceiling is needed exactly where the NEXT storey has floor: that is the surface, seen from below.
+ * Painting them one at a time is the job nobody wants, and forgetting leaves a room open to the sky
+ * with nothing on the plan to say so.
+ *
+ * WOOD, because a ceiling read from below is boards, and because giving it the same grey slab as the
+ * ground made storeys hard to tell apart at a glance. Only a DEFAULT: this fills cells that have no lid
+ * yet and leaves every one you have chosen alone, so running it twice is safe and running it after
+ * picking stone for a hallway does not undo you.
+ */
+function fillCeilings(): void {
+  pushUndo();
+  const NONE = floors('none');
+  let laid = 0;
+  for (let lv = 0; lv + 1 < LEVELS; lv++) {
+    for (let i = 0; i < levelSize(); i++) {
+      const here = cells[lv * levelSize() + i]!;
+      const over = cells[(lv + 1) * levelSize() + i]!;
+      if ((over.floor & ~NONE) === 0) continue;          // nothing above: no lid needed
+      if (here.ceiling !== NONE) continue;               // already chosen — not ours to overwrite
+      cells[lv * levelSize() + i] = { ...here, ceiling: floors('wood') };
+      laid++;
+    }
+  }
+  if (laid === 0) undoStack.pop();   // nothing changed: do not spend an undo step on a no-op
+  buildPanel();
+}
+
 function addLevel(): void {
   pushUndo();
   const blank = Array.from({ length: levelSize() }, emptyField);
@@ -573,11 +606,15 @@ function render(): void {
   }
 
   // FLOOR — only where a cell exists
-  const floorKind: BoxKind | null = brush.mode === 'floor' ? 'floor' : brush.mode === 'copy' ? 'field' : null;
+  const floorKind: BoxKind | null = brush.mode === 'floor' || brush.mode === 'ceiling' ? 'floor'
+    : brush.mode === 'copy' ? 'field' : null;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const f = cells[base() + y * stride() + x]!;
-      const ink = floorInk(f.floor);
+      /* WHILE THE LID BRUSH IS UP, THE CELL SHOWS ITS LID. Two surfaces share one square on a plan, and
+         drawing both at once makes neither readable — so the square shows whichever you are currently
+         painting. Nothing is hidden: switch back to the floor brush and the ground is there again. */
+      const ink = floorInk(brush.mode === 'ceiling' ? f.ceiling : f.floor);
       // `none` allowed dims the ground rather than taking a colour of its own — absence is not a
       // material, and giving it a channel would cost one of only three.
       const rect = svgEl('rect', {
@@ -590,6 +627,7 @@ function render(): void {
       });
       paintable(rect, x, y, floorKind, (gest) => {
         if (brush.mode === 'floor') applyAt(x, y, 'floor', gest.clear);
+        if (brush.mode === 'ceiling') applyAt(x, y, 'ceiling', gest.clear);
         else if (brush.mode === 'copy') {
           // Alt is the eyedropper — and so is a plain click while nothing is held, which is what makes
           // the brush usable before anyone has read that Alt is the eyedropper.
@@ -848,10 +886,11 @@ function buildBrushBar(): void {
       const m = brush.seg.size ? segs(...brush.seg) : 0;
       return { vals: [...brush.seg], color: segInk(m).stroke, hatches: [] };
     }
-    if (brush.mode === 'floor') {
-      const m = brush.floor.size ? floors(...brush.floor) : 0;
+    if (brush.mode === 'floor' || brush.mode === 'ceiling') {
+      const set = brush.mode === 'ceiling' ? brush.ceiling : brush.floor;
+      const m = set.size ? floors(...set) : 0;
       const ink = floorInk(m);
-      return { vals: [...brush.floor], color: ink.certainlyVoid ? '#0d1016' : ink.fill, hatches: ink.hatches };
+      return { vals: [...set], color: ink.certainlyVoid ? '#0d1016' : ink.fill, hatches: ink.hatches };
     }
     if (brush.mode === 'corner') {
       const m = brush.corner.size ? corners(...brush.corner) : 0;
@@ -924,6 +963,11 @@ function buildBrushBar(): void {
       onclick: () => { viewAll = !viewAll; buildPanel(); },
     }, viewAll ? 'all' : 'this'));
   }
+  lv.append(h('span', {
+    class: 'lvchip wide', title: 'lay a WOOD ceiling on every cell that has floor directly above it '
+      + 'and no lid yet — the back-fill. Cells you have already given a ceiling are left alone.',
+    onclick: fillCeilings,
+  }, '⌂ lids'));
   lv.append(h('span', {
     class: `lvchip wide${showStairArrows ? ' on' : ''}`,
     title: 'draw the climb direction the code chose over each flight — green arrow points UP-slope, '
@@ -1133,7 +1177,7 @@ function buildPanel(): void {
 
   p.append(h('h2', {}, 'Brush'));
   const modes: [BrushMode, string][] = [
-    ['wall', 'Wall'], ['floor', 'Floor'], ['corner', 'Corner'], ['wallType', 'Opening'],
+    ['wall', 'Wall'], ['floor', 'Floor'], ['ceiling', 'Ceiling'], ['corner', 'Corner'], ['wallType', 'Opening'],
     ['open', 'Open'], ['torch', 'Torch'], ['copy', 'Copy'], ['select', 'Select'], ['stamp', 'Stamp'],
   ];
   p.append(h('div', { class: 'row' }, ...modes.map(([m, label]) =>
@@ -1141,6 +1185,16 @@ function buildPanel(): void {
 
   if (brush.mode === 'wall') { p.append(h('h2', {}, 'wall — a SET')); p.append(chipRow(SEGS, brush.seg, SEG_SWATCH)); }
   else if (brush.mode === 'floor') { p.append(h('h2', {}, 'floor — a SET')); p.append(chipRow(FLOOR_MATERIALS, brush.floor, FLOOR_SWATCH)); }
+  else if (brush.mode === 'ceiling') {
+    /* THE SAME TILES AS THE GROUND, because that is what a ceiling is made of — the identical value
+       set, drawn with the identical swatches, so the palette needs no second table to drift from the
+       first. While this brush is up the plan shows each cell's LID rather than its floor. */
+    p.append(h('h2', {}, 'ceiling — a SET'));
+    p.append(chipRow(FLOOR_MATERIALS, brush.ceiling, FLOOR_SWATCH));
+    p.append(h('p', { class: 'note' },
+      'The lid, hung under the deck above. `none` leaves the room open. `⌂ lids` fills wood wherever '
+      + 'the next storey has floor and nothing has been chosen yet.'));
+  }
   else if (brush.mode === 'corner') { p.append(h('h2', {}, 'corner — a SET')); p.append(chipRow(CORNERS, brush.corner, CORNER_SWATCH)); }
   else if (brush.mode === 'open') {
     p.append(h('h2', {}, 'open — a SET'));

@@ -107,6 +107,17 @@ export interface CellPlacement {
   y: Fixed;
   turn: number;
   scale: Fixed;
+  /**
+   * Rotate a half-turn about X — the piece hangs upside down.
+   *
+   * A ROTATION, NOT A NEGATIVE SCALE. Mirroring Y would invert the winding order, so the tile would
+   * cull its visible face and light from the wrong side; three.js can be coaxed into compensating, but
+   * only by flipping material state that every other piece shares. Rotating carries the normals round
+   * with the geometry and leaves the winding alone.
+   *
+   * Only ceilings use it. Absent means upright, so nothing else changes.
+   */
+  inverted?: boolean;
 }
 
 const Z = fromInt(0);
@@ -116,6 +127,31 @@ const HALF = fromFloatConst(0.5); // a 4u floor piece rendered as a 2u cell
 
 /** Point a +X-extending piece toward a direction. Matches the 4u convention exactly. */
 const TURN = { E: 0, N: 1, W: 2, S: 3 } as const;
+
+/**
+ * WHERE A DECK AND ITS LID SIT, and why the deck had to move up to make room.
+ *
+ * MEASURED, all of it: a floor tile is 0.15 thick with its walking surface at +0.05, so it spans
+ * [-0.10, +0.05] about its origin; a wall is 4.00 tall from the deck line. Turned upside down, that
+ * same tile spans [-0.05, +0.10] and its VISIBLE face is the lower one, at -0.05.
+ *
+ * Stack them from the wall tops down and the numbers are forced, not chosen:
+ *
+ *   ceiling of storey s   visible face flush on the wall tops at 4.00  ->  origin 4.05, spans [4.00, 4.15]
+ *   floor of storey s+1   must rest on that, bottom at 4.15           ->  origin 4.25
+ *
+ * So a deck sits `DECK_LIFT` above its own storey line. EVERY deck moves by the same amount, so
+ * storey-to-storey spacing is untouched and a flight still climbs exactly FLOOR_HEIGHT from one
+ * walking surface to the next — which is the property that must not break, since the stair meshes are
+ * built to a 4.00 rise. Room height becomes 3.70, floor surface to ceiling face.
+ *
+ * COLLISION DOES NOT MOVE WITH IT. The slab is emitted from the stratum's own baseY and knows nothing
+ * about this; the tile is trim and the slab is the walking surface. A quarter unit of visual lift is
+ * not worth desynchronising what you stand on from what the sim thinks you stand on.
+ */
+const DECK_LIFT: Fixed = fromFloatConst(0.25);
+/** The lid's origin, measured from its own storey's line — see `DECK_LIFT`. */
+const CEILING_Y: Fixed = fromFloatConst(4.05);
 
 const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs' | 'stairs_wood'>, string> = {
   stone: PIECE.floorStone, dirt: PIECE.floorDirt, wood: PIECE.floorWood,
@@ -158,8 +194,9 @@ const WALLTYPE_URL: Record<WallType, { closed: string; open: string }> = {
 export const wallTypeUrl = (wt: WallType, open: Open): string =>
   WALLTYPE_URL[wt][open === 'open' ? 'open' : 'closed'];
 
-const at = (url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z): CellPlacement =>
-  ({ url, x, y, z, turn, scale });
+const at = (
+  url: string, turn = 0, x: Fixed = Z, z: Fixed = Z, scale: Fixed = ONE, y: Fixed = Z, inverted = false,
+): CellPlacement => (inverted ? { url, x, y, z, turn, scale, inverted } : { url, x, y, z, turn, scale });
 
 /**
  * THE KIT IS BUILT AROUND A 4.00 STOREY, and these are measured, not guessed (`tmp/glb-levels.mjs`
@@ -1065,9 +1102,19 @@ export function cellPlacements(
       fromInt(flight.bw - 1 - px), fromInt(flight.bh - 1 - pz),
     ));
   } else if (isStairFloor(c.floor)) {
-    if (!insideFlight(cells, w, h, x, y, above) && inFloor) out.push(at(PIECE.floorStone, 0, Z, Z, HALF));
+    if (!insideFlight(cells, w, h, x, y, above) && inFloor) {
+      out.push(at(PIECE.floorStone, 0, Z, Z, HALF, DECK_LIFT));
+    }
   } else if (c.floor !== 'none' && inFloor) {
-    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF));
+    out.push(at(FLOOR_URL[c.floor], 0, Z, Z, HALF, DECK_LIFT));
+  }
+
+  /* THE LID. Its own field, its own material, drawn from the same tiles as the ground and hung upside
+     down — two tiles describing one surface, which is what a ceiling and the deck above it are.
+     `rock` and the stair materials are not lids: `FLOOR_URL` has no row for them, and a ceiling of
+     stairs is not a thing anyone means. */
+  if (c.ceiling !== 'none' && c.ceiling !== 'rock' && !isStairFloor(c.ceiling) && inFloor) {
+    out.push(at(FLOOR_URL[c.ceiling], 0, Z, Z, HALF, CEILING_Y, true));
   }
 
   // the NW corner point of this cell, in cell-local coordinates

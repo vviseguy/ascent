@@ -197,6 +197,8 @@ async function instance(p: CellPlacement, cx: number, cz: number): Promise<THREE
   // already in world units and must NOT be scaled with them
   node.position.set(cx + toFloat(p.x) * (CELL / 2), toFloat(p.y), cz + toFloat(p.z) * (CELL / 2));
   node.rotation.y = TURN_RAD[p.turn] ?? 0;
+  // a lid hangs upside down — a half-turn about X, which carries the normals round with it
+  if (p.inverted === true) node.rotation.x = Math.PI;
   const s = toFloat(p.scale);
   node.scale.setScalar(s);
   return node;

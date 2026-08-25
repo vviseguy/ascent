@@ -211,7 +211,10 @@ export function cellWorldPlacements(
           .map((b) => ({ ...b, cx: add(ccx, b.cx), cz: add(ccz, b.cz) }));
       out.push({
         x: toRaw(add(ccx, local.x)), z: toRaw(add(ccz, local.z)),
-        unit: { url: p.url, y: p.y, turn: p.turn, scale: p.scale, boxes, materials: a?.materials },
+        unit: {
+          url: p.url, y: p.y, turn: p.turn, scale: p.scale, boxes, materials: a?.materials,
+          ...(p.inverted === true ? { inverted: true } : {}),
+        },
       });
     }
   }

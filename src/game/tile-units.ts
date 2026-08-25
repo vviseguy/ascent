@@ -45,6 +45,9 @@ export interface TileUnit {
   boxes: FixedBox[];
   /** The frozen material recipe the renderer applies, or undefined if unapproved. */
   materials: ApprovedAsset['materials'] | undefined;
+  /** Hangs upside down — a half-turn about X. Only ceilings; absent means upright.
+   *  See `CellPlacement.inverted` for why it is a rotation and not a negative scale. */
+  inverted?: boolean;
 }
 
 /** A tile piece's mesh url → its approved-assets object id (idOf: `kk-<pack>-<slug>`). Tile pieces are

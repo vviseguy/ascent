@@ -180,7 +180,10 @@ function tileWallPlacements(floor: Floor): WorldPlacement[] {
       }));
       out.push({
         x: toRaw(add(ccx, unit.x)), z: toRaw(add(ccz, unit.z)),
-        unit: { url: unit.url, y: y0, turn: unit.turn, scale: unit.scale, boxes, materials: unit.materials },
+        unit: {
+          url: unit.url, y: y0, turn: unit.turn, scale: unit.scale, boxes, materials: unit.materials,
+          ...(unit.inverted === true ? { inverted: true } : {}),
+        },
       });
     }
   }
@@ -322,6 +325,9 @@ export interface WorldPlacement {
     boxes: FixedBox[];
     /** The frozen material recipe the renderer applies (approved-assets), or undefined if unapproved. */
     materials: ApprovedAsset['materials'] | undefined;
+    /** Hangs upside down — a half-turn about X. Only ceilings; absent means upright.
+     *  A rotation rather than a negative Y scale, so the winding and the normals stay right. */
+    inverted?: boolean;
   };
 }
 
