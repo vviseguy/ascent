@@ -449,13 +449,58 @@ describe('group-anchors — a paver split across two tiles is ONE stone', () => 
     return m;
   }
 
-  /** The world anchor as its exact IEEE-754 bits. Equal strings = the same point, to the last bit. */
-  function anchorBits(mesh: THREE.Mesh, group: string): string {
-    const a = groupWorldAnchor(mesh, triOf(group))!;
+  /** The world anchor of ONE triangle as its exact IEEE-754 bits. Equal strings = the same point. */
+  function bitsAt(mesh: THREE.Mesh, tri: number): string {
+    const a = groupWorldAnchor(mesh, tri)!;
     const dv = new DataView(new ArrayBuffer(24));
     [a.x, a.y, a.z].forEach((n, i) => dv.setFloat64(i * 8, n));
     return [0, 1, 2].map((i) => dv.getBigUint64(i * 8).toString(16).padStart(16, '0')).join(' ');
   }
+
+  /** The world anchor as its exact IEEE-754 bits. Equal strings = the same point, to the last bit. */
+  function anchorBits(mesh: THREE.Mesh, group: string): string {
+    return bitsAt(mesh, triOf(group));
+  }
+
+  /* THE 2u CELL DRAWS A DIFFERENT MESH FROM THE MERGED 4u BLOCK — see `FLOOR_MESH` in cell-place.ts.
+     `floor_tile_small` is exactly one quadrant of `floor_tile_large`: one 1.15 diamond at its centre
+     and a 0.95 quarter-octagon at each corner, the same stones on the same 2.00 lattice. Which means
+     the octagon a merge boundary runs through is a HALF on the block's side and a QUARTER on the
+     cell's, and those are the two halves of one stone. */
+  const CELL_URL = 'models/kaykit_dungeon_remastered/floor_tile_small.gltf.glb';
+  const cellSource = readGlb(new URL('../../public/models/kaykit_dungeon_remastered/floor_tile_small.gltf.glb', import.meta.url));
+  const cellGroups = store.meshes[CELL_URL]!.groups!;
+  const cellTriOf = (id: string): number => cellGroups.find((g) => g.id === id)!.tris['0']![0]!;
+
+  /** A per-cell ground draw: the 2u mesh at NATIVE scale, centred on the cell. */
+  function placeCell(x: number, z: number, turn = 0): THREE.Mesh {
+    const m = new THREE.Mesh(cellSource, new THREE.MeshStandardMaterial());
+    applyGroupAnchors(m, CELL_URL);
+    m.position.set(x, 0, z);
+    m.rotation.y = (turn * Math.PI) / 2;
+    m.updateMatrixWorld(true);
+    return m;
+  }
+  /**
+   * THE XZ BITS ONLY — for comparing a 2u cell against a 4u block, where Y cannot be compared.
+   *
+   * A snapped anchor takes the coordinate of the bounding-box face the group reaches, and BOTH tiles'
+   * pavers reach their own top face. That plane is nominally 0.05 in both meshes and is stored as two
+   * different float32s (0.049999997 and 0.050000004 — the same 3.7e-9 class of gap the header
+   * describes WITHIN `floor_tile_large`). It is a property of the GLBs, not of the placement, and it
+   * is identical for every placement of each mesh, so it cannot make one tile disagree with its own
+   * neighbours; and `phaseKeyString` quantises it into the same bucket either way — asserted below
+   * alongside every use of this, so the gap is never taken on trust.
+   *
+   * X and Z are the coordinates a placement actually moves, and those must be exact.
+   */
+  function xzBits(mesh: THREE.Mesh, tri: number): string {
+    const a = groupWorldAnchor(mesh, tri)!;
+    const dv = new DataView(new ArrayBuffer(16));
+    [a.x, a.z].forEach((n, i) => dv.setFloat64(i * 8, n));
+    return [0, 1].map((i) => dv.getBigUint64(i * 8).toString(16).padStart(16, '0')).join(' ');
+  }
+  const cellAnchorBits = (mesh: THREE.Mesh, group: string): string => bitsAt(mesh, cellTriOf(group));
 
   beforeEach(() => setSurfaceStore(structuredClone(store)));
 
@@ -526,20 +571,69 @@ describe('group-anchors — a paver split across two tiles is ONE stone', () => 
     expect(new Set(groups.map((g) => phaseKeyString(a, triOf(g.id), 'shift'))).size).toBe(13);
   });
 
-  it('MERGED 4u block against unmerged 2u cells: different-sized stones, and it says so', () => {
-    /* cell-tower.ts draws an aligned 2x2 block of matching floor as ONE tile at full scale and the
-       rest per cell at half scale, so a merged block's pavers are twice the size of its unmerged
-       neighbour's. Two stones of different sizes are not one stone — a break there is the honest
-       answer and the one main already draws. What must NOT happen is a FALSE agreement: two
-       mismatched halves landing on one anchor and claiming to be continuous. */
-    const block = place(0, 0, 1);     // covers world [-2,2] in x and z
-    const cell = place(-1, 3, 0.5);   // a 2u cell butted against its +z edge
-    expect(anchorBits(block, 'half-octagon-south')).not.toBe(anchorBits(cell, 'half-octagon-north'));
-    // both still sit ON the shared plane; they disagree about where ALONG it, which is the truth
-    expect(groupWorldAnchor(block, triOf('half-octagon-south'))!.z).toBe(2);
-    expect(groupWorldAnchor(cell, triOf('half-octagon-north'))!.z).toBe(2);
+  it('the 2u tile carries the FIVE pavers its seams need', () => {
+    // Same claim as the 13 above, for the mesh a cell draws. Without these a cell would be one
+    // uniform stone beside a merged block's thirteen — a variation fork replacing the size fork.
+    const named = new Set(cellGroups.map((g) => g.id));
+    for (const c of ['south-west', 'north-west', 'north-east', 'south-east']) expect(named).toContain(`corner-${c}`);
+    expect(named).toContain('centre-diamond');
+    expect(cellGroups).toHaveLength(5);
+  });
+
+  it('MERGED 4u block against unmerged 2u cells: ONE lattice, and the split octagon is one stone', () => {
+    /* THE CASE THIS WHOLE CHANGE EXISTS FOR. cell-tower.ts draws an aligned 2x2 of matching floor as
+       one 4u tile and everything else per 2u cell, and whether a patch merges is DATA — a hole, a
+       staircase, a material change and an odd row all stop it. So a merge boundary runs through the
+       middle of an ordinary floor, and the octagon standing on it is drawn in three pieces by two
+       different meshes: a HALF from the block, and a QUARTER from each of the two cells beyond it.
+       All three must land on the same world point, bit for bit, or that stone tears.
+
+       Cells sit on EVEN world coordinates and a block's centre one unit south-east of its first
+       cell's, so on ODD ones — which is exactly the offset that puts both meshes' octagons on the
+       same 2.00 lattice. Nothing here is a tolerance: it is that offset plus the boundary snap. */
+    const block = place(1, 1, 1);       // the four cells at (0,0) (2,0) (0,2) (2,2), merged
+    const westCell = placeCell(0, 4);   // the two unmerged cells butted against its +z edge
+    const eastCell = placeCell(2, 4);
+    const want = xzBits(block, triOf('half-octagon-south'));
+    expect(xzBits(westCell, cellTriOf('corner-north-east'))).toBe(want);
+    expect(xzBits(eastCell, cellTriOf('corner-north-west'))).toBe(want);
+    // ...and it IS the octagon standing on the boundary: world (1, 3), where the three pieces meet
+    const a = groupWorldAnchor(block, triOf('half-octagon-south'))!;
+    expect([a.x, a.z]).toEqual([1, 3]);
+    // the phase KEY is what actually shades, and it agrees across BOTH meshes — which is also what
+    // certifies that the two GLBs' top-plane float32s (see `xzBits`) land in one bucket.
+    const key = phaseKeyString(block, triOf('half-octagon-south'), 'shift');
+    expect(phaseKeyString(westCell, cellTriOf('corner-north-east'), 'shift')).toBe(key);
+    expect(phaseKeyString(eastCell, cellTriOf('corner-north-west'), 'shift')).toBe(key);
     // ...while two merged blocks side by side coordinate exactly, the same as two cells do
     expect(anchorBits(place(0, 0, 1), 'half-octagon-east')).toBe(anchorBits(place(4, 0, 1), 'half-octagon-west'));
+    expect(cellAnchorBits(placeCell(0, 0), 'corner-south-east')).toBe(cellAnchorBits(placeCell(2, 0), 'corner-south-west'));
+  });
+
+  it('a CORNER where a block and three cells meet: all four quarters agree', () => {
+    // The 4-way case across the boundary. A tile corner is an octagon CENTRE, so the four quarters
+    // meeting there come from up to four different placements — here one block and three cells.
+    const block = place(1, 1, 1), a = placeCell(0, 4), b = placeCell(-2, 4), c = placeCell(-2, 2);
+    const want = xzBits(block, triOf('corner-south-west'));               // world (-1, 3)
+    expect(xzBits(a, cellTriOf('corner-north-west'))).toBe(want);
+    expect(xzBits(b, cellTriOf('corner-north-east'))).toBe(want);
+    expect(xzBits(c, cellTriOf('corner-south-east'))).toBe(want);
+    const key = phaseKeyString(block, triOf('corner-south-west'), 'shift');
+    expect(phaseKeyString(a, cellTriOf('corner-north-west'), 'shift')).toBe(key);
+    expect(phaseKeyString(b, cellTriOf('corner-north-east'), 'shift')).toBe(key);
+    expect(phaseKeyString(c, cellTriOf('corner-south-east'), 'shift')).toBe(key);
+  });
+
+  it('a tower-sized offset holds ACROSS the merge boundary too', () => {
+    // The seam test above at the origin says nothing about float32 anchors at real floor
+    // coordinates. Same three pieces, moved to where a tower actually sits.
+    const block = place(147, -97, 1), west = placeCell(146, -94), east = placeCell(148, -94);
+    const want = xzBits(block, triOf('half-octagon-south'));
+    expect(xzBits(west, cellTriOf('corner-north-east'))).toBe(want);
+    expect(xzBits(east, cellTriOf('corner-north-west'))).toBe(want);
+    const key = phaseKeyString(block, triOf('half-octagon-south'), 'shift');
+    expect(phaseKeyString(west, cellTriOf('corner-north-east'), 'shift')).toBe(key);
+    expect(phaseKeyString(east, cellTriOf('corner-north-west'), 'shift')).toBe(key);
   });
 
   it('a tower-sized offset does not drift — the seam holds far from the origin', () => {

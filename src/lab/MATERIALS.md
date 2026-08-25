@@ -259,12 +259,28 @@ is a min/max over boundary vertices, exact because the extremes are vertices ON 
 this kit the seam edge is the widest part of every split paver. A new asset that broke that would
 fail the bit-identity test rather than a tower nobody is looking at.
 
-**What it does NOT claim.** `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one
-natively-4u mesh — ~18,000 of 26,000 — and draws the rest per 2u cell at HALF scale. A merged block's
-pavers are therefore twice the size of its unmerged neighbour's, and two stones of different sizes
-are not one stone: the anchors differ there and so do the phases, which is the honest answer and the
-same break `main` already draws. Merged-against-merged and cell-against-cell both coordinate; the
-test pins all three cases, including that the mismatched pair does NOT falsely agree.
+**And it reaches ACROSS the 2u/4u merge, because the two meshes are the same pattern.**
+`cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one natively-4u mesh — ~18,000 of
+26,000 — and draws the rest per 2u cell. The cell draws a *different mesh*: `floor_tile_small`, which
+is exactly one quadrant of `floor_tile_large` (one 1.15 diamond, a 0.95 quarter-octagon at each
+corner — the same stones on the same pitch-2 lattice), authored here with its own 5 groups. Cells sit
+on even world coordinates and a block's centre one unit south-east of its first cell's, so on odd
+ones, which is precisely the offset that lands both meshes' octagons on ONE lattice. The octagon a
+merge boundary runs through is drawn in three pieces by two different meshes — a HALF from the block
+and a QUARTER from each cell beyond it — and all three snap to the same world point.
+
+*It did not used to.* Per-cell ground was `floor_tile_large` at HALF scale, so a merged block's
+pavers were literally twice its neighbour's; the anchors differed and the doc called that the honest
+answer. It was honest about the anchors and quiet about the cause — the tiling projection is
+world-space, so only the CARVED geometry halved while the painted grain stayed put. Both paths are
+native size now and the fork is gone. `group-anchors.test.ts` pins the three-piece seam, the four-way
+corner where a block meets three cells, and the same at tower-sized offsets.
+
+One caveat the test states rather than hides: **X and Z are compared bit for bit, Y is not.** A
+paver's snapped Y is its tile's own top face, and the two GLBs store that nominal 0.05 as float32s
+7e-9 apart. It is a constant of each mesh, identical for every placement, and the phase quantiser
+puts both in the same bucket — which the test asserts alongside every XZ comparison rather than
+assuming.
 
 **The texture per type is a live CHOICE, not hard-wired.** [texture-catalog.ts](texture-catalog.ts)
 is the library (`TEXTURES`) plus the per-type config (`DEFAULT_CONFIG`) and a compact URL codec;

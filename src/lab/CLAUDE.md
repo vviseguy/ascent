@@ -87,7 +87,9 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
    — no pitch, no tolerance, no rounding. Anything that reintroduces a per-mesh quantity into a
    snapped axis (a centroid, an average, a "close enough" epsilon on the anchor itself) breaks it
    silently and only in a generated tower. `group-anchors.test.ts` asserts the real GLB's world
-   anchors as IEEE-754 bits for that reason. See MATERIALS.md.
+   anchors as IEEE-754 bits for that reason. The two meshes need not even be the same one:
+   `floor_tile_small` is a quadrant of `floor_tile_large`, and a paver split by the 2u/4u merge
+   boundary agrees across both. See MATERIALS.md.
 8. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
    and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
    were emitted in every mode they ate floor paint and selection drags along every border. They are

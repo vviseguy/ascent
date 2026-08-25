@@ -163,6 +163,16 @@ Groups live in the same entry as `hidden`, keyed by mesh URL, under the same geo
 KayKit re-export invalidates the groups exactly as it invalidates the hidden set, and for the same
 reason. `id` is a stable slug: it is what a per-group texture transform will key off.
 
+**A REGULAR asset can be grouped HEADLESSLY — but verify the instrument against a hand-authored one
+first.** `partitionFacets(topo, 'carve', cos 75°)` is the same function the panel's overlay draws
+from, so a script can read a GLB, take the facets that are pavers, and write the entry directly. That
+is how `floor_tile_small` got its 5 groups. What makes it trustworthy is the check that came first:
+run the identical procedure on `floor_tile_large` and compare against the 13 groups a human saved —
+it reproduces all 13 **triangle set for triangle set**, and the recomputed geometry hash comes out
+`67dd9829`, the value already in the store. Without that, a headless partition is a plausible-looking
+guess at what someone would have clicked. Do not skip it: the panel remains the authority for
+anything whose regions are a judgement call.
+
 ### The store, and why the geometry hash is not optional
 
 `src/game/mesh-surfaces.json` (via `POST /__lab/surfaces`), keyed by **mesh URL** rather than lab
