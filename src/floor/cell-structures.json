@@ -452,14 +452,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -542,14 +542,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -632,14 +632,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -722,14 +722,14 @@
           "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -812,14 +812,14 @@
           "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 2,
           "open": 2,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -902,14 +902,14 @@
           "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -992,14 +992,14 @@
           "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -1082,104 +1082,104 @@
           "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 3,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 2,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 2,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 3,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
           "wallN": 15,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -1262,14 +1262,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -1352,14 +1352,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -1442,14 +1442,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 32,
@@ -1532,14 +1532,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 32,
@@ -1622,14 +1622,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -1712,14 +1712,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -1802,14 +1802,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -1892,104 +1892,104 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -2072,14 +2072,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -2162,14 +2162,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -2252,14 +2252,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -2333,132 +2333,132 @@
         },
         {
           "floor": 1,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 32,
-          "open": 2,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 1
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 1
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 1
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 1
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 1,
-          "wallN": 1,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 127,
-          "wallN": 15,
-          "wallW": 2,
-          "corner": 1,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 2,
-          "wallN": 2,
-          "wallW": 2,
-          "corner": 2,
-          "wallType": 1,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 1
-        },
-        {
-          "floor": 2,
           "wallN": 2,
           "wallW": 1,
           "corner": 1,
           "wallType": 32,
           "open": 2,
           "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 255,
+          "wallN": 15,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 1
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 1
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 1
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 1
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 1,
+          "wallN": 1,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 255,
+          "wallN": 15,
+          "wallW": 2,
+          "corner": 1,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 2,
+          "corner": 2,
+          "wallType": 1,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 1
+        },
+        {
+          "floor": 2,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 32,
+          "open": 2,
+          "torch": 1,
           "ceiling": 1
         },
         {
@@ -2522,14 +2522,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -2612,14 +2612,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -2702,104 +2702,104 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
-          "wallN": 2,
-          "wallW": 15,
-          "corner": 1,
-          "wallType": 3,
-          "open": 3,
-          "torch": 1,
-          "ceiling": 127
-        },
-        {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
+          "wallN": 2,
+          "wallW": 15,
+          "corner": 1,
+          "wallType": 3,
+          "open": 3,
+          "torch": 1,
+          "ceiling": 255
+        },
+        {
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -2830,26 +2830,6 @@
           "open": 3,
           "torch": 1,
           "ceiling": 1
-        },
-        {
-          "floor": 1,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 2,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1,
-          "ceiling": 8
-        },
-        {
-          "floor": 1,
-          "wallN": 2,
-          "wallW": 1,
-          "corner": 1,
-          "wallType": 1,
-          "open": 1,
-          "torch": 1,
-          "ceiling": 8
         },
         {
           "floor": 1,
@@ -2875,6 +2855,16 @@
           "floor": 1,
           "wallN": 2,
           "wallW": 1,
+          "corner": 2,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 1,
+          "wallN": 2,
+          "wallW": 1,
           "corner": 1,
           "wallType": 1,
           "open": 1,
@@ -2882,14 +2872,24 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 1,
+          "wallN": 2,
+          "wallW": 1,
+          "corner": 1,
+          "wallType": 1,
+          "open": 1,
+          "torch": 1,
+          "ceiling": 8
+        },
+        {
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -2972,14 +2972,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -3062,14 +3062,14 @@
           "ceiling": 8
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 32,
@@ -3152,14 +3152,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 32,
@@ -3242,14 +3242,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3332,14 +3332,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3422,14 +3422,14 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3512,104 +3512,104 @@
           "ceiling": 1
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 1,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3619,7 +3619,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3629,7 +3629,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3639,7 +3639,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3649,7 +3649,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3659,7 +3659,7 @@
           "wallType": 2,
           "open": 2,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3669,7 +3669,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3679,7 +3679,7 @@
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3689,17 +3689,17 @@
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
-          "corner": 1,
+          "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3709,7 +3709,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3719,7 +3719,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3729,7 +3729,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3739,7 +3739,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3749,7 +3749,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3759,7 +3759,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3769,7 +3769,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3779,17 +3779,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3799,7 +3799,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3809,7 +3809,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3819,7 +3819,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3829,7 +3829,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3839,7 +3839,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3849,7 +3849,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3859,7 +3859,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3869,17 +3869,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3889,7 +3889,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3899,7 +3899,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3909,7 +3909,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3919,7 +3919,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -3929,7 +3929,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3939,7 +3939,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3949,7 +3949,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3959,17 +3959,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 1,
@@ -3979,7 +3979,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3989,7 +3989,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -3999,7 +3999,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4009,7 +4009,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4019,7 +4019,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4029,7 +4029,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4039,7 +4039,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4049,17 +4049,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -4069,7 +4069,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4079,7 +4079,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4089,7 +4089,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4099,7 +4099,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4109,7 +4109,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4119,7 +4119,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4129,7 +4129,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4139,17 +4139,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -4159,7 +4159,7 @@
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4169,7 +4169,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4179,7 +4179,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4189,7 +4189,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4199,7 +4199,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4209,7 +4209,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4219,7 +4219,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4229,17 +4229,17 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
           "floor": 2,
@@ -4249,7 +4249,7 @@
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4259,7 +4259,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4269,7 +4269,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4279,7 +4279,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 2,
@@ -4289,7 +4289,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4299,7 +4299,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4309,7 +4309,7 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
           "floor": 1,
@@ -4319,110 +4319,110 @@
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 8
+          "ceiling": 2
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 2,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 3,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 2,
           "open": 2,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 2,
           "wallType": 1,
           "open": 3,
           "torch": 2,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 2,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         },
         {
-          "floor": 127,
+          "floor": 255,
           "wallN": 15,
           "wallW": 15,
           "corner": 1,
           "wallType": 1,
           "open": 3,
           "torch": 1,
-          "ceiling": 127
+          "ceiling": 255
         }
       ],
-      "savedAt": "2026-08-25T02:41:00.296Z"
+      "savedAt": "2026-08-25T03:48:13.739Z"
     },
     "throne room": {
       "w": 16,
