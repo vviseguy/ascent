@@ -376,6 +376,14 @@ auto-fit (box-fit, edge density auto-targets ≥95% fill) + recolor
   silently change approved objects.
 - The middleware is **dev-only** (no prod-build effect). Writing the JSON triggers a vite reload; the
   lab's full state lives in the URL, so it restores and shows the approved status (`✓ Re-approve`).
+- **Headless, and in subsets**: `node scripts/lab-approve.mjs [edgeDensity] [--only=slug,slug]` drives
+  the same path in headless Chromium — no clicking. Approving re-freezes MATERIALS as well as boxes,
+  so a blanket re-run restamps objects nobody meant to touch; `--only=` keeps a run to what actually
+  changed, and a slug must be in the script's `SLUGS` list to be approvable at all.
+- **A split asset needs its own approval, and that is the point of splitting it.** One id holds one
+  footprint, so two states sharing an id can only ever collide the same way — which is exactly how a
+  shut door ended up with the open one's 2.00-wide aperture. The local derivatives
+  (`npm run assets:derive`) are in `SLUGS` for that reason.
 - **Not yet wired:** the game still needs to CONSUME `getApprovedFootprint` for prop collision (the
   sim is fixed-point, so the boxes need a Fixed conversion at the seam). The store + loader are ready.
 

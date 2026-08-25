@@ -6,7 +6,7 @@
 // asserts on — the test named "draws ONE arch and suppresses BOTH wall halves" passed while a
 // full-height stub stood in the doorway. Both tests here assert on GEOMETRY, not on filtered names.
 import { describe, it, expect } from 'vitest';
-import { gridPlacements, moduleAt, moduleAxis, openingAt, wallTypeUrl } from './cell-place.ts';
+import { gridPlacements, moduleAt, moduleAxis, openingAt, wallTypeUrls } from './cell-place.ts';
 import { openCell, WALL_TYPES, OPENS, PASSABLE_KINDS, type Cell, type WallType, type Open } from './cell.ts';
 import { toFloat } from '../sim/fixed/fixed.ts';
 
@@ -30,8 +30,11 @@ describe('every wall type an author can paint actually draws its own mesh', () =
   const kinds = WALL_TYPES.filter((t) => t !== 'solid');
   it.each(kinds.flatMap((wt) => OPENS.map((o) => [wt, o] as const)))(
     '%s (%s) draws its own mesh, not a blank wall', (wt, o) => {
-      const want = wallTypeUrl(wt, o).split('/').pop()!.replace(/#.*$/, '').replace(/\.(gltf\.)?glb$/, '');
-      expect(names(run(wt, 'stone', o))).toContain(want);
+      /* EVERY piece the state names, not just the first. A shut door is its frame AND its leaf, and
+         checking only one of them would pass while the other silently stopped being emitted. */
+      const want = wallTypeUrls(wt, o).map((u) => u.split('/').pop()!.replace(/\.(gltf\.)?glb$/, ''));
+      expect(want.length).toBeGreaterThan(0);
+      for (const w of want) expect(names(run(wt, 'stone', o))).toContain(w);
     });
 
   it('`solid` draws no module — it is the run system\'s job, and a module would double it', () => {

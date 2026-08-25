@@ -67,10 +67,15 @@ export const PIECE = {
      layer strips it (`openDoorLeaves`) and the opening is real. `wall_open_scaffold` is also genuinely
      passable and wider (3.40 clear), but it is a TIMBER frame and reads as scaffolding, which turned
      every doorway on the floor into a building site. Kept as `archScaffold` for when that is wanted. */
-  /* THE OPENING FAMILY. `#open` marks the url for leaf-stripping and gives it its own cache slot, so
-     the same file serves an open arch and (one day) a shut door. */
-  archOpen: `${u1('wall_doorway')}#open`,
-  doorwayShut: u1('wall_doorway'),   // the same mesh WITH its leaf node — the closed state
+  /* THE OPENING FAMILY. These are LOCAL DERIVATIVES (`npm run assets:derive`), not upstream files.
+     The pack welds a doorway's leaf into the same GLB as its frame, so the two states used to be one
+     url told apart by an `#open` fragment that made the view layer delete nodes at load. That draws
+     correctly and is wrong everywhere else: `objIdOf` strips the fragment, so both states collapsed
+     to ONE id in the approved store — and since a store slot holds one footprint, a SHUT door
+     inherited the open one's and compiled to a 2.00-wide hole a body walked straight through.
+     Split into real files they are two objects with two footprints, which is all it takes. */
+  doorFrame: u('wall_doorway_open'),   // the aperture alone — 1.93 clear, a body fits
+  doorLeaf: u('wall_door'),            // the leaf alone — solid, and placeable on its own hinge later
   archScaffold: u('wall_open_scaffold'),
   archBlind: u('wall_arched'),
   windowArched: u('wall_archedwindow_open'),
@@ -88,6 +93,15 @@ export const PIECE = {
   stairsWallRight: u('stairs_wall_right'),
   stairsWood: u('stairs_wood'),
   window: u('wall_window_open'),
+  /* THE GATE, likewise split (`npm run assets:derive`). The kit welds the portcullis into its wall,
+     so `gate` had no open form to offer — the table said so in a comment. It has one now: the arch
+     without its grille. NOTE that raising the portcullis does NOT make the gate walkable, and it
+     should not: the arch carries a 0.77 threshold and `maxStep` is 0.60, so `gate` stays out of
+     PASSABLE_KINDS on the measurement rather than by omission. */
+  gateArch: u('wall_gated_arch'),
+  gateBars: u('wall_gated_bars'),
+  /* RETIRED, like `endcap` below it — the welded composite. Kept named so the pack entry is
+     accounted for; nothing selects it, and the two parts above say more. */
   gate: u('wall_gated'),
   broken: u('wall_broken'),
   wall: u('wall'),
@@ -185,19 +199,25 @@ export const FLOOR_URL: Record<Exclude<FloorMaterial, 'none' | 'rock' | 'stairs'
  * you see through both and walk through neither. `PASSABLE_KINDS` in `cell.ts` names the three that
  * are floor-rooted and body-wide, all measured (see the asset audit).
  */
-const WALLTYPE_URL: Record<WallType, { closed: string; open: string }> = {
-  //             CLOSED                     OPEN
-  solid:       { closed: PIECE.wall,        open: PIECE.wall },          // no module; the run lays it
-  doorway:     { closed: PIECE.doorwayShut, open: PIECE.archOpen },      // leaf in, leaf out
-  arch:        { closed: PIECE.archBlind,   open: PIECE.archOpen },      // blind relief, or the aperture
-  window:      { closed: PIECE.windowClosed, open: PIECE.window },       // same envelope, infilled
-  arch_window: { closed: PIECE.windowBarred, open: PIECE.windowArched }, // same envelope, barred
-  scaffold:    { closed: PIECE.scaffold,    open: PIECE.archScaffold },  // trimmed wall, or bare frame
-  cracked:     { closed: PIECE.cracked,     open: PIECE.broken },        // damaged, or breached
-  gate:        { closed: PIECE.gate,        open: PIECE.gate },          // no open form in the kit
-  pillar:      { closed: PIECE.wallPillar,  open: PIECE.wallPillar },    // no open form in the kit
+/* A STATE IS A LIST OF PIECES, not a single mesh. A shut door is its frame PLUS its leaf; a closed
+   gate is its arch PLUS its portcullis. Both used to be one welded file, and both paid the same
+   price — the state that adds something got the same asset id, so it got the same collision as the
+   state without it. Two entries in the list means two ids, two footprints, and two things the view
+   layer can move independently when doors become interactive. */
+const WALLTYPE_URL: Record<WallType, { closed: readonly string[]; open: readonly string[] }> = {
+  //             CLOSED                                  OPEN
+  solid:       { closed: [PIECE.wall],                   open: [PIECE.wall] },          // no module; the run lays it
+  doorway:     { closed: [PIECE.doorFrame, PIECE.doorLeaf], open: [PIECE.doorFrame] },  // the leaf IS the difference
+  arch:        { closed: [PIECE.archBlind],              open: [PIECE.doorFrame] },     // blind relief, or the aperture
+  window:      { closed: [PIECE.windowClosed],           open: [PIECE.window] },        // same envelope, infilled
+  arch_window: { closed: [PIECE.windowBarred],           open: [PIECE.windowArched] },  // same envelope, barred
+  scaffold:    { closed: [PIECE.scaffold],               open: [PIECE.archScaffold] },  // trimmed wall, or bare frame
+  cracked:     { closed: [PIECE.cracked],                open: [PIECE.broken] },        // damaged, or breached
+  gate:        { closed: [PIECE.gateArch, PIECE.gateBars], open: [PIECE.gateArch] },    // portcullis down, or raised
+  pillar:      { closed: [PIECE.wallPillar],             open: [PIECE.wallPillar] },    // no open form in the kit
 };
-export const wallTypeUrl = (wt: WallType, open: Open): string =>
+/** Every mesh a module draws in this state, in draw order. */
+export const wallTypeUrls = (wt: WallType, open: Open): readonly string[] =>
   WALLTYPE_URL[wt][open === 'open' ? 'open' : 'closed'];
 
 const at = (
@@ -1130,7 +1150,12 @@ export function cellPlacements(
   // REPLACES both of them, including the one the neighbour owns (see the header). Any non-`solid`
   // type draws one, not only the walk-through ones — see `moduleAt`.
   const axis = moduleAxis(cells, w, h, x, y);
-  if (axis) out.push(at(wallTypeUrl(c.wallType, c.open), axis === 'H' ? TURN.E : TURN.S, CX, CZ));
+  if (axis) {
+    // Co-located by construction: the parts were cut from ONE file and keep its origin, so a leaf
+    // lands in its own frame without a second transform to get wrong.
+    const turn = axis === 'H' ? TURN.E : TURN.S;
+    for (const url of wallTypeUrls(c.wallType, c.open)) out.push(at(url, turn, CX, CZ));
+  }
 
   // WALLS — this cell owns the edge running east (wallN) and the edge running south (wallW) from its
   // corner. Each is skipped when an opening already covers it: the one centred here, or the one

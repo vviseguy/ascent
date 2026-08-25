@@ -117,6 +117,19 @@ function capsBoard(): Subject {
       for (let i = 0; i < 4; i++) at(x + i, y).wallN = 'wall';
       const c = at(x + 2, y); c.wallType = 'doorway'; c.open = 'open';
     } },
+    /* THE SAME RUN, SHUT. Two pieces now — the frame plus its leaf — where it used to be one welded
+       mesh, and it sits beside the open case so the difference is a thing you can see rather than a
+       claim in a commit message. It is also the state that collided as a 2.00-wide hole. */
+    { text: 'doorway SHUT — frame + leaf', paint: (x, y) => {
+      for (let i = 0; i < 4; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 2, y); c.wallType = 'doorway'; c.open = 'closed';
+    } },
+    { text: 'GATE shut, then raised', paint: (x, y) => {
+      for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
+      const c = at(x + 1, y); c.wallType = 'gate'; c.open = 'closed';
+      for (let i = 0; i < 2; i++) at(x + i, y + 2).wallN = 'wall';
+      const o = at(x + 1, y + 2); o.wallType = 'gate'; o.open = 'open';
+    } },
     { text: 'DOORWAY alone — module nubs', paint: (x, y) => {
       for (let i = 0; i < 2; i++) at(x + i, y).wallN = 'wall';
       const c = at(x + 1, y); c.wallType = 'doorway'; c.open = 'open';

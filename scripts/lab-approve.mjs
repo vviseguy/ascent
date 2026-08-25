@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const ed = Number(process.argv[2] ?? '0.4') || 0.4;
+const ed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? '0.4') || 0.4;
 const stripAnsi = (s) => s.replace(/\x1b?\[[0-9;]*m/g, ''); // vite colourises the port — drop ANSI
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,8 +26,17 @@ const SLUGS = [
   'wall', 'wall_half', 'wall_half_endcap', 'wall_corner', 'barrier_corner',
   'wall_arched', 'wall_archedwindow_open', 'wall_gated', 'wall_broken',
   'pillar', 'barrier', 'barrier_half', 'barrier_column',
+  // LOCAL DERIVATIVES (npm run assets:derive). A split piece needs its OWN box-fit — that is the
+  // whole point of splitting it, since one id could only ever hold one footprint.
+  'wall_doorway_open', 'wall_door', 'wall_gated_arch', 'wall_gated_bars',
 ];
-const ids = SLUGS.map((s) => `kk-dungeon_remastered-${s}`);
+/* Approving re-freezes materials as well as boxes, so a blanket re-run restamps pieces nobody meant
+   to touch. `--only=` keeps a run to what actually changed. */
+const only = (process.argv.find((a) => a.startsWith('--only=')) ?? '').slice('--only='.length);
+const wanted = only ? only.split(',').filter(Boolean) : SLUGS;
+const unknown = wanted.filter((w) => !SLUGS.includes(w));
+if (unknown.length) { console.error(`[lab-approve] not in SLUGS: ${unknown.join(', ')}`); process.exit(2); }
+const ids = wanted.map((s) => `kk-dungeon_remastered-${s}`);
 
 // 1. start the vite dev server (carries the /__lab/approve middleware)
 const vite = spawn('npx', ['vite', '--host', '127.0.0.1'], { cwd: root, shell: process.platform === 'win32' });
