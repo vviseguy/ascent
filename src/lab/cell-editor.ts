@@ -398,32 +398,9 @@ function edge(side: 'N' | 'S' | 'E' | 'W', delta: 1 | -1): void {
 /* ---------------------------------- storeys ---------------------------------- */
 
 /** Add a storey ABOVE the current one, blank (abstaining), and move to it. */
-/**
- * ADD A STOREY, ALREADY CEILINGED.
- *
- * A new storey used to arrive completely blank, which meant the room underneath it lost its ceiling
- * the moment you made one — every cell of the storey below was suddenly open to the sky, and the first
- * job after pressing `+` was always the same: paint floor over everything that had floor below.
- *
- * There is no ceiling mesh in the kit, and there does not need to be: a ceiling IS the underside of
- * the deck above (see `DECK_LIFT`). One piece of geometry, so what you stand on and what you look up
- * at cannot disagree about whether the ground is there.
- *
- * WOOD, NOT STONE. Stone is the default for ground because ground is mostly stone; a ceiling read from
- * below is boards, and defaulting it to the same grey slab as the floor made storeys hard to tell
- * apart at a glance. It is only a DEFAULT — the cell is a normal painted floor and can be changed to
- * anything, or erased where a shaft is wanted.
- */
 function addLevel(): void {
   pushUndo();
-  const below = cells.slice((LEVELS - 1) * levelSize(), LEVELS * levelSize());
-  const blank = Array.from({ length: levelSize() }, (_, i) => {
-    const f = emptyField();
-    // a cell that has ground under it needs a lid; one over the void does not
-    const under = below[i];
-    const needsCeiling = !!under && (under.floor & ~floors('none')) !== 0;
-    return needsCeiling ? { ...f, floor: floors('wood') } : f;
-  });
+  const blank = Array.from({ length: levelSize() }, emptyField);
   cells = [...cells, ...blank];
   LEVELS++;
   L = LEVELS - 1;
