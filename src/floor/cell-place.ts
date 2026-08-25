@@ -1446,8 +1446,17 @@ export function wallEdgePlacements(
                   a full 2u piece finished at one end, so it lies INSIDE the run's own extent and
                   nothing protrudes. It is approved, it is in `WALL_FALLBACK`, and it collides like
                   any other wall.
-       TERMINATE  when there is no half to give up: a module has no half form, and a one-edge run
-                  loose at both ends has already spent its only edge on the first of them.
+       TERMINATE  when there is no half to give up: a one-edge run loose at BOTH ends has already
+                  spent its only edge on the first of them, so the second has nothing left to shorten.
+
+     A MODULE IS NOT A LOOSE END AND GETS NOTHING. It is a 4u piece carrying its own jamb and its own
+     coping course at each end — it does not stop in a raw mating face the way `wall` and `wall_half`
+     do, so there is nothing to finish. It used to be terminated like a run, and the board showed what
+     that cost: a thin sliver down the jamb plus an ASYMMETRIC overhang on the coping of a piece whose
+     ends are symmetric by design. 34 of them across 4 seeds x 3 storeys, every one making its module
+     slightly worse. `wallEnds` still REPORTS these ends — they are ends, they are just ends their own
+     mesh already owns — so the distinction lives here, where the finishing decision is made, and not
+     by teaching `wallEnds` to hide them from everyone else.
 
      THE ULTRA-SHORT NUB. Two candidates were on the table and BOTH were measured before choosing.
      A scaled-down `wall_endcap` is not one of them: `CellPlacement.scale` is ONE scalar, so the shrink
@@ -1486,7 +1495,7 @@ export function wallEdgePlacements(
       const oz = end.low || end.dir === 'E' ? NEG_ONE : ONE;
       push(end.ex, end.ey, at(endHalf, turn, ox, oz));
       spend(end.ex, end.ey, end.dir);
-    } else if (end.by === 'module' || (end.by === 'run' && endHalf)) {
+    } else if (end.by === 'run' && endHalf) {
       /* Attributed to the edge's own cell, which is guaranteed to exist; the END POINT may be one
          past the lattice, so it owns no cell of its own to be attributed to. */
       const ox = end.x === end.ex ? NEG_ONE : ONE;
