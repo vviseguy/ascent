@@ -13,14 +13,21 @@
 //   5. NUMERICALLY: the phase either side of a seam is EQUAL where it must be and different where
 //      it must be. Coordination is the absence of a change, and an absence is the one thing that
 //      cannot be certified by looking at a render of photographic stone.
+//   6. and on the REAL asset: two abutting placements of one tile agree on the anchor of the paver
+//      they SHARE, bit for bit. That is the whole cross-tile half of the feature, and it is the one
+//      claim a render genuinely cannot settle — see the last block in this file.
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as THREE from 'three';
+// The store the GAME ships, not a fixture: the seam tests below are only worth anything if they run
+// against the pavers a human actually authored.
+import realStore from '../game/mesh-surfaces.json' with { type: 'json' };
 import {
-  applyGroupAnchors, phaseKeyString, GROUP_ANCHOR_ATTR, VARY_CODE, VARY_INHERIT,
+  applyGroupAnchors, groupWorldAnchor, phaseKeyString, GROUP_ANCHOR_ATTR, VARY_CODE, VARY_INHERIT,
 } from './group-anchors.ts';
 import {
   applyHiddenFaces, geometryHash, setSurfaceStore, sourceGeometry, triCount, SOURCE_GEOM,
-  EMPTY_SURFACES, type SurfaceGroup,
+  EMPTY_SURFACES, type SurfaceGroup, type SurfaceStore,
 } from './face-surfaces.ts';
 
 /** A V-valley: two quads meeting at a shared bottom edge. The fold is CONCAVE, so the two wings are
@@ -159,10 +166,13 @@ describe('group-anchors — a saved group is the ONLY thing that varies', () => 
     author(mesh, 'test://islands', [{ id: 'left', name: 'left island', tris: { 0: [0, 1] } }]);
     applyGroupAnchors(mesh, 'test://islands');
 
-    // the authored island: its own centroid, asking the material TYPE what it is allowed to do
+    // The authored island, asking the material TYPE what it is allowed to do. x is 0, not the
+    // island's own centre of 0.5, because the island reaches the object's x = 0 face and a face a
+    // neighbour could also be standing on outranks a centroid only this mesh can compute. y and z
+    // span the whole object (it is flat and 1 deep), so both take the midpoint of the two faces.
     for (const t of [0, 1]) {
       expect(new Set(triAnchors(mesh, t).map((a) => a.xyz)).size).toBe(1);
-      expect(triAnchors(mesh, t)[0]!.xyz).toBe('0.5000,0.0000,0.5000');
+      expect(triAnchors(mesh, t)[0]!.xyz).toBe('0.0000,0.0000,0.5000');
       expect(triAnchors(mesh, t)[0]!.w).toBe(VARY_INHERIT);
     }
     // the island nobody authored: the inert code, so the shader leaves it on the world projection
@@ -294,8 +304,8 @@ describe('group-anchors — the phase either side of a seam, as a number', () =>
     const [a, b] = placed(twoIslands, 'test://tile', [0, 2]);
     expect(phaseKeyString(a!, 0, 'shift')).not.toBe(phaseKeyString(b!, 0, 'shift'));
     // the second placement is exactly 2 m along, so the keys differ by 2 in x and nothing else
-    expect(phaseKeyString(a!, 0, 'shift')).toBe('shift@0.5,0,0.5');
-    expect(phaseKeyString(b!, 0, 'shift')).toBe('shift@2.5,0,0.5');
+    expect(phaseKeyString(a!, 0, 'shift')).toBe('shift@0,0,0.5');
+    expect(phaseKeyString(b!, 0, 'shift')).toBe('shift@2,0,0.5');
   });
 
   it('a texture that forbids variation collapses an inheriting group back to identity', () => {
@@ -348,5 +358,196 @@ describe('group-anchors — the ordering contract with hidden faces', () => {
     // ...while what actually renders is anchored AND filtered
     expect(mesh.geometry.getAttribute(GROUP_ANCHOR_ATTR)).toBeDefined();
     expect(triCount(mesh.geometry)).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// THE REAL ASSET, AND THE SEAM BETWEEN TWO TILES
+//
+// Everything above runs on hand-built fixtures, which prove the mechanism and nothing about the
+// thing on screen. `floor_tile_large` is the mesh the feature exists for: 13 authored pavers, of
+// which 8 are only HALF (or a QUARTER) of a stone — the other half lives in the next tile. Those
+// are the ones that were breaking.
+//
+// The gate is a NUMBER, not a screenshot. Two abutting placements must produce the same world
+// anchor for the shared paver BIT FOR BIT: a hash turns a one-ulp disagreement into a completely
+// different phase, so "close" is indistinguishable from "wrong" and only exact means anything. A
+// close-up render of a seam is corroboration; this is the proof.
+// ---------------------------------------------------------------------------------------------
+interface GltfJson {
+  accessors: { bufferView: number; byteOffset?: number; componentType: number; count: number; type: string }[];
+  bufferViews: { byteOffset?: number; byteStride?: number }[];
+  meshes: { primitives: { attributes: Record<string, number>; indices?: number }[] }[];
+}
+
+/**
+ * Minimal GLB -> BufferGeometry (positions + index, which is all the anchor pass reads).
+ *
+ * three's own GLTFLoader is not usable here: `parse` still routes materials through loaders that
+ * want a DOM, and this suite runs in `environment: 'node'`. Reading the two chunks by hand is thirty
+ * lines and has the property that matters — the numbers are the file's, untouched by a loader.
+ */
+function readGlb(url: URL): THREE.BufferGeometry {
+  const buf = readFileSync(url);
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let off = 12;
+  let json: GltfJson | null = null;
+  let bin: Uint8Array | null = null;
+  while (off + 8 <= buf.byteLength) {
+    const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
+    const body = buf.subarray(off + 8, off + 8 + len);
+    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(body)) as GltfJson;
+    else if (type === 0x004e4942) bin = body;
+    off += 8 + len;
+  }
+  if (!json || !bin) throw new Error('not a GLB with both chunks');
+  const CTOR = { 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array } as const;
+  const ITEMS: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+  const read = (i: number): Float32Array | Uint16Array | Uint32Array => {
+    const a = json.accessors[i]!;
+    const bv = json.bufferViews[a.bufferView]!;
+    const T = CTOR[a.componentType as keyof typeof CTOR];
+    const n = ITEMS[a.type];
+    if (!T || !n) throw new Error(`unsupported accessor ${a.componentType}/${a.type}`);
+    // An interleaved buffer would need a de-stride pass. This kit has none, and guessing wrong
+    // would read plausible garbage rather than fail, so refuse instead.
+    if (bv.byteStride !== undefined && bv.byteStride !== n * T.BYTES_PER_ELEMENT) {
+      throw new Error(`interleaved accessor ${i} — this reader needs a de-stride pass`);
+    }
+    // Copy into a fresh ArrayBuffer rather than viewing the file buffer: node hands back a Buffer
+    // pooled at an arbitrary byteOffset, and a Float32Array view needs 4-byte alignment.
+    const base = (bv.byteOffset ?? 0) + (a.byteOffset ?? 0);
+    const bytes = new ArrayBuffer(a.count * n * T.BYTES_PER_ELEMENT);
+    new Uint8Array(bytes).set(bin.subarray(base, base + bytes.byteLength));
+    return new T(bytes);
+  };
+  const prim = json.meshes[0]!.primitives[0]!;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(read(prim.attributes['POSITION']!) as Float32Array, 3));
+  if (prim.indices !== undefined) g.setIndex(new THREE.BufferAttribute(read(prim.indices), 1));
+  return g;
+}
+
+describe('group-anchors — a paver split across two tiles is ONE stone', () => {
+  const TILE_URL = 'models/kaykit_dungeon_remastered/floor_tile_large.gltf.glb';
+  /** ONE geometry, shared by every placement — which is what the game does (`cloneSkeleton` clones
+   *  the object graph and shares the buffers), and so what the anchor cache has to survive. */
+  const source = readGlb(new URL('../../public/models/kaykit_dungeon_remastered/floor_tile_large.gltf.glb', import.meta.url));
+  const store = realStore as unknown as SurfaceStore;
+  const groups = store.meshes[TILE_URL]!.groups!;
+  /** Any triangle of a named paver — the anchor is constant across a group, so the first will do. */
+  const triOf = (id: string): number => groups.find((g) => g.id === id)!.tris['0']![0]!;
+
+  /** A placed tile. `scale` 1 is a merged 4u block, 0.5 the per-cell draw — see cell-tower.ts. */
+  function place(x: number, z: number, scale: number, turn = 0): THREE.Mesh {
+    const m = new THREE.Mesh(source, new THREE.MeshStandardMaterial());
+    applyGroupAnchors(m, TILE_URL);
+    m.position.set(x, 0, z);
+    m.scale.setScalar(scale);
+    m.rotation.y = (turn * Math.PI) / 2;
+    m.updateMatrixWorld(true);
+    return m;
+  }
+
+  /** The world anchor as its exact IEEE-754 bits. Equal strings = the same point, to the last bit. */
+  function anchorBits(mesh: THREE.Mesh, group: string): string {
+    const a = groupWorldAnchor(mesh, triOf(group))!;
+    const dv = new DataView(new ArrayBuffer(24));
+    [a.x, a.y, a.z].forEach((n, i) => dv.setFloat64(i * 8, n));
+    return [0, 1, 2].map((i) => dv.getBigUint64(i * 8).toString(16).padStart(16, '0')).join(' ');
+  }
+
+  beforeEach(() => setSurfaceStore(structuredClone(store)));
+
+  it('the pavers the seam needs are AUTHORED — 8 of the 13 reach the tile edge', () => {
+    // Without these the mechanism could not fire at a seam at all, and every assertion below would
+    // be passing on a case the game never reaches.
+    const named = new Set(groups.map((g) => g.id));
+    for (const s of ['south', 'north', 'west', 'east']) expect(named).toContain(`half-octagon-${s}`);
+    for (const c of ['south-west', 'north-west', 'north-east', 'south-east']) expect(named).toContain(`corner-${c}`);
+    expect(named).toContain('centre-octagon');
+    expect(groups).toHaveLength(13);
+  });
+
+  it('EDGE SEAM, 2u cells: the two halves of one octagon land on the same point, bit for bit', () => {
+    // Two per-cell draws butted along z. The octagon centred on their shared edge is `south` in one
+    // tile and `north` in the other; both must resolve to the middle of that edge and nothing else.
+    const a = place(0, 0, 0.5), b = place(0, 2, 0.5);
+    expect(anchorBits(a, 'half-octagon-south')).toBe(anchorBits(b, 'half-octagon-north'));
+    expect(phaseKeyString(a, triOf('half-octagon-south'), 'shift'))
+      .toBe(phaseKeyString(b, triOf('half-octagon-north'), 'shift'));
+    // and it IS the seam: world z = 1 is exactly where the two tiles touch
+    expect(groupWorldAnchor(a, triOf('half-octagon-south'))!.z).toBe(1);
+  });
+
+  it('EDGE SEAM: both axes, both scales', () => {
+    for (const s of [0.5, 1]) {
+      const p = 4 * s; // one tile pitch
+      expect(anchorBits(place(0, 0, s), 'half-octagon-south')).toBe(anchorBits(place(0, p, s), 'half-octagon-north'));
+      expect(anchorBits(place(0, 0, s), 'half-octagon-east')).toBe(anchorBits(place(p, 0, s), 'half-octagon-west'));
+    }
+  });
+
+  it('CORNER: all FOUR quarter-octagons meeting at a tile corner agree', () => {
+    // The hard case, and the one a centroid of boundary vertices cannot do. Each quarter's boundary
+    // vertices lie on two faces shared with two DIFFERENT neighbours, so no symmetric function of
+    // that set is common to all four — but the corner those faces intersect at is, and it snaps
+    // there on both axes at once.
+    const s = 0.5, p = 2;
+    const want = anchorBits(place(0, 0, s), 'corner-south-west');
+    expect(anchorBits(place(-p, 0, s), 'corner-south-east')).toBe(want);
+    expect(anchorBits(place(0, p, s), 'corner-north-west')).toBe(want);
+    expect(anchorBits(place(-p, p, s), 'corner-north-east')).toBe(want);
+    const a = groupWorldAnchor(place(0, 0, s), triOf('corner-south-west'))!;
+    expect([a.x, a.z]).toEqual([-1, 1]); // the shared corner of those four tiles, exactly
+  });
+
+  it('a QUARTER-TURNED tile still coordinates — the anchors ARE the pattern lattice', () => {
+    // Tiles are placed at any of four turns. The 13 anchors sit on the octagon/diamond lattice,
+    // which is invariant under a quarter turn, so the paver facing the seam changes but the world
+    // point does not. This asserts the phase KEY rather than raw bits: `rotation.y` is not a
+    // bit-exact operation the way translate-and-halve is (the quaternion leaves ~1e-16 on the
+    // matrix). That gap is harmless rather than lucky because a snapped anchor lands ON the
+    // quantisation lattice — `floor(v*128 + 0.5)` puts a lattice value half a bucket from either
+    // edge, so it absorbs any perturbation below 1/256 of a metre.
+    const a = place(0, 0, 0.5), b = place(0, 2, 0.5, 1);
+    expect(phaseKeyString(b, triOf('half-octagon-east'), 'shift'))
+      .toBe(phaseKeyString(a, triOf('half-octagon-south'), 'shift'));
+  });
+
+  it('the CENTRE octagon reaches no seam, and goes on varying alone', () => {
+    // The other half of the rule, and the reason the feature exists: a paver wholly inside one tile
+    // has no neighbour to agree with, so it must still be its own stone in every tile.
+    const a = place(0, 0, 0.5), b = place(2, 0, 0.5);
+    expect(anchorBits(a, 'centre-octagon')).not.toBe(anchorBits(b, 'centre-octagon'));
+    expect(phaseKeyString(a, triOf('centre-octagon'), 'shift'))
+      .not.toBe(phaseKeyString(b, triOf('centre-octagon'), 'shift'));
+    // ...and no two of the tile's own 13 pavers collapsed onto one phase
+    expect(new Set(groups.map((g) => phaseKeyString(a, triOf(g.id), 'shift'))).size).toBe(13);
+  });
+
+  it('MERGED 4u block against unmerged 2u cells: different-sized stones, and it says so', () => {
+    /* cell-tower.ts draws an aligned 2x2 block of matching floor as ONE tile at full scale and the
+       rest per cell at half scale, so a merged block's pavers are twice the size of its unmerged
+       neighbour's. Two stones of different sizes are not one stone — a break there is the honest
+       answer and the one main already draws. What must NOT happen is a FALSE agreement: two
+       mismatched halves landing on one anchor and claiming to be continuous. */
+    const block = place(0, 0, 1);     // covers world [-2,2] in x and z
+    const cell = place(-1, 3, 0.5);   // a 2u cell butted against its +z edge
+    expect(anchorBits(block, 'half-octagon-south')).not.toBe(anchorBits(cell, 'half-octagon-north'));
+    // both still sit ON the shared plane; they disagree about where ALONG it, which is the truth
+    expect(groupWorldAnchor(block, triOf('half-octagon-south'))!.z).toBe(2);
+    expect(groupWorldAnchor(cell, triOf('half-octagon-north'))!.z).toBe(2);
+    // ...while two merged blocks side by side coordinate exactly, the same as two cells do
+    expect(anchorBits(place(0, 0, 1), 'half-octagon-east')).toBe(anchorBits(place(4, 0, 1), 'half-octagon-west'));
+  });
+
+  it('a tower-sized offset does not drift — the seam holds far from the origin', () => {
+    // Float32 in the attribute, float64 in the placement, and a hash with no tolerance downstream.
+    // Anything that rounded would show up at the coordinates of a real floor rather than at 0.
+    expect(anchorBits(place(146, -98, 0.5), 'half-octagon-east'))
+      .toBe(anchorBits(place(148, -98, 0.5), 'half-octagon-west'));
+    expect(anchorBits(place(146, -98, 0.5), 'corner-south-east'))
+      .toBe(anchorBits(place(148, -96, 0.5), 'corner-north-west'));
   });
 });

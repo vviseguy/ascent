@@ -10,7 +10,8 @@
 //
 // THE RULE, in one line:
 //
-//     phase = hash(anchor)          anchor = the group's area-weighted centroid, in WORLD space
+//     phase = hash(anchor)          anchor = the group's centroid, SNAPPED to the object's outer
+//                                            boundary on every axis that reaches it — WORLD space
 //
 // Same anchor -> coordinated. Different anchor -> differentiated. That one rule covers both cases,
 // and it needs no per-instance state: the anchor is baked per VERTEX in OBJECT space and carried to
@@ -33,12 +34,45 @@
 // default. Un-authored triangles carry the inert `none` code and the shader leaves them exactly
 // where main puts them.
 //
-// SCOPE. Within one mesh, and within one authored region. Groups that abut ACROSS two placed meshes
-// (the corner pieces of four floor tiles meeting to form one diamond) are deliberately NOT
-// coordinated here: `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into a single
-// natively-4u mesh, conditionally and data-dependently, so a phase keyed on per-tile seam points
-// would break visibly exactly at the merged/unmerged boundary. A group is always wholly inside one
-// mesh, which is why this half is safe and that half is not.
+// A PAVER SPLIT ACROSS TWO TILES IS STILL ONE STONE — the boundary snap.
+//
+// A group is always wholly inside one mesh, but a PAVER is not: `floor_tile_large` carries four HALF
+// octagons on its edges and four QUARTER octagons at its corners, so the octagon centred on a tile
+// seam is two groups in two meshes and the one at a tile corner is four. Anchored on their own
+// centroids they hash to four unrelated phases and the stone tears along the seam.
+//
+// So the anchor is SNAPPED to the placed object's outer bounding box, axis by axis:
+//
+//   • the group reaches the LOW face on this axis and not the high one -> the low face's coordinate
+//   • the HIGH face and not the low one                                -> the high face's coordinate
+//   • BOTH (it spans the object)                                       -> the midpoint of the two
+//   • NEITHER                                                          -> the midpoint of the extent
+//       of the group's boundary vertices along this axis
+//   • the group reaches NO face at all (the octagon at the tile's centre) -> the area-weighted
+//       centroid it has always had, and it goes on varying per placement, alone
+//
+// WHY THIS IS EXACT, and why exact is the only acceptable answer. A hash amplifies a one-bit
+// difference into a completely different phase, so "the two halves agree to eleven places" is worth
+// nothing. Abutting tiles' touching vertices are EXACTLY coincident in world space — placements come
+// off `cell-tower.ts` as Q16.16 fixed point on an exact lattice, and the transform is a translation
+// plus a power-of-two scale, so `modelMatrix * anchor` rounds nowhere. A snapped coordinate is read
+// off the shared geometry's own bounding box, which is a property of the TEMPLATE: every placement
+// bakes the identical number, and the two tiles' opposite faces land on the same world plane. So the
+// half-octagon either side of a seam computes one world anchor bit for bit, and the four quarters at
+// a corner all compute the corner point itself, with no lattice pitch, no tolerance, and no
+// communication between instances.
+//
+// The one measured (rather than structural) step is the NEITHER case — the coordinate ALONG a seam.
+// It is a min/max over the group's boundary vertices, and it is exact only because the extremes are
+// vertices ON the shared face; on this kit the seam edge is the widest part of every split paver, so
+// they are. `group-anchors.test.ts` asserts the real GLB's world anchors match bit for bit rather
+// than trusting that, and a new asset that broke it would fail there rather than in a tower.
+//
+// WHAT THIS DOES NOT CLAIM. `cell-tower.ts` collapses aligned 2x2 blocks of matching floor into one
+// natively-4u mesh where it can, and draws the rest per 2u cell at HALF scale. A merged block's
+// pavers are therefore twice the size of its unmerged neighbour's, and two stones of different sizes
+// are not one stone: the anchors differ there and the phases differ, which is the honest answer and
+// the same break `main` already draws. Merged-against-merged and cell-against-cell both coordinate.
 //
 // Pure VIEW/tooling — no sim, no determinism constraints (floats fine).
 // ============================================================================
@@ -83,6 +117,17 @@ const IDENTITY_GROUP = 0;
  */
 export const ANCHOR_QUANT = 128;
 
+/**
+ * How close to a face of the object's bounding box counts as ON it, in OBJECT units.
+ *
+ * NOT a coordination tolerance — coordination is exact, and nothing here rounds two nearby anchors
+ * together. This only has to survive the float32 rounding a GLB exporter leaves on a face that is
+ * nominally one plane: the top of `floor_tile_large` is two adjacent float32s, 3.7e-9 apart. It
+ * must stay far below any real feature, or a paver that merely comes CLOSE to the tile edge would be
+ * snapped onto it and would coordinate with a neighbour it does not actually touch.
+ */
+const BOUNDARY_EPS = 1e-4;
+
 /** What the shader's per-group phase is applied to a triangle, WORLD-space. `null` = no phase at
  *  all, i.e. the identity transform. */
 export interface PhaseKey {
@@ -113,10 +158,30 @@ export function phaseKeyOf(mesh: THREE.Mesh, tri: number, typeVary: VaryMode): P
   const named = (Object.keys(VARY_CODE) as VaryMode[]).find((k) => VARY_CODE[k] === code);
   const mode = code === VARY_INHERIT ? typeVary : (named ?? 'none');
   if (mode === 'none') return null;
-  mesh.updateWorldMatrix(true, false);
-  const a = new THREE.Vector3(attr.getX(v), attr.getY(v), attr.getZ(v)).applyMatrix4(mesh.matrixWorld);
+  const a = groupWorldAnchor(mesh, tri)!;
   const q = (n: number): number => Math.floor(n * ANCHOR_QUANT + 0.5) / ANCHOR_QUANT;
   return { mode, anchor: [q(a.x), q(a.y), q(a.z)] };
+}
+
+/**
+ * The RAW, unquantised world anchor of one triangle of a placed mesh — exactly what the vertex
+ * shader puts in `vGAnchor` — or `null` if the mesh carries no anchors at all.
+ *
+ * Separate from `phaseKeyOf` because the two answer different questions. `phaseKeyOf` answers "will
+ * these two triangles be coordinated", which is what the shader is a function of; this answers "are
+ * the two halves of a split paver standing on the SAME POINT", which is the property the boundary
+ * snap is supposed to guarantee and the one that has to hold bit for bit. Asserting only the
+ * quantised key would pass on a pair that agrees to within half a quantisation bucket by luck, and
+ * the next asset would fall out the other side of a bucket edge in a tower nobody is looking at.
+ */
+export function groupWorldAnchor(mesh: THREE.Mesh, tri: number): THREE.Vector3 | null {
+  const g = mesh.geometry;
+  const attr = g.getAttribute(GROUP_ANCHOR_ATTR);
+  if (!attr) return null;
+  const idx = g.index;
+  const v = idx ? idx.getX(tri * 3) : tri * 3;
+  mesh.updateWorldMatrix(true, false);
+  return new THREE.Vector3(attr.getX(v), attr.getY(v), attr.getZ(v)).applyMatrix4(mesh.matrixWorld);
 }
 
 /** `phaseKeyOf` as a comparable string — two triangles are coordinated iff these match. */
@@ -150,6 +215,7 @@ export function applyGroupAnchors(root: THREE.Object3D, meshUrl: string): void {
   if (!entry?.groups?.length) return; // nothing authored on this url — and nothing to do
   const groups = entry.groups;
   const rev = surfaceStoreRev();
+  const box = objectBoundary(root);
   forEachMesh(root, (mesh, i) => {
     const src = sourceGeometry(mesh);
     const saved = groups.filter((g) => (g.tris[String(i)]?.length ?? 0) > 0);
@@ -160,11 +226,101 @@ export function applyGroupAnchors(root: THREE.Object3D, meshUrl: string): void {
       mesh.geometry = hit.out;
       return;
     }
-    const out = anchoredGeometry(src, saved.map((g) => ({ tris: g.tris[String(i)]!, vary: g.vary })));
+    const frame: BoundaryFrame = { box, ...meshToRoot(root, mesh) };
+    const out = anchoredGeometry(src, saved.map((g) => ({ tris: g.tris[String(i)]!, vary: g.vary })), frame);
     _anchored.set(src, { rev, out });
     if (mesh.userData[SOURCE_GEOM] === undefined) mesh.userData[SOURCE_GEOM] = src;
     mesh.geometry = out;
   });
+}
+
+/** The outer boundary a group's anchor snaps to, and how to reach the space it is measured in. */
+interface BoundaryFrame {
+  /** The whole placed object's AABB, in ROOT space, over every mesh's UNFILTERED geometry. */
+  box: THREE.Box3;
+  /** this mesh's own space -> root space. Identity for the 199 of 204 kit models that are one mesh
+   *  on an untransformed node, and exactly identity — `applyMatrix4` does not round there. */
+  toRoot: THREE.Matrix4;
+  /** root space -> this mesh's own space, to bake the snapped anchor back into the attribute. */
+  fromRoot: THREE.Matrix4;
+}
+
+/** The mesh's transform relative to the model root — NOT its world matrix. The lab and the game
+ *  place the same root at different scales and positions; only the part inside the model is a
+ *  property of the template, and only that part may reach the baked attribute. */
+function meshToRoot(root: THREE.Object3D, mesh: THREE.Mesh): { toRoot: THREE.Matrix4; fromRoot: THREE.Matrix4 } {
+  const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert().multiply(mesh.matrixWorld);
+  return { toRoot, fromRoot: new THREE.Matrix4().copy(toRoot).invert() };
+}
+
+/**
+ * The AABB of the whole placed object, in root space.
+ *
+ * The MODEL's box, not each mesh's own: a group is always inside one mesh, but "the outer boundary"
+ * is a fact about the thing being placed. `wall_doorway` is a wall plus a swinging door on its own
+ * node, and the door's own box is nowhere near the panel's edges — a brick authored on the panel has
+ * to measure itself against the panel's silhouette, which is the model's.
+ */
+function objectBoundary(root: THREE.Object3D): THREE.Box3 {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const p = new THREE.Vector3();
+  forEachMesh(root, (mesh) => {
+    const { toRoot } = meshToRoot(root, mesh);
+    const pos = sourceGeometry(mesh).getAttribute('position');
+    for (let v = 0; v < pos.count; v++) box.expandByPoint(p.fromBufferAttribute(pos, v).applyMatrix4(toRoot));
+  });
+  return box;
+}
+
+/**
+ * One saved region's anchor: its centroid, snapped to the object's outer boundary wherever it
+ * reaches one. See the boundary-snap section at the top of this file for why each branch is exact.
+ *
+ * Returned in the MESH's own space, because that is what the attribute holds and what `modelMatrix`
+ * expects.
+ */
+function regionAnchor(topo: MeshTopology, tris: readonly number[], frame: BoundaryFrame): THREE.Vector3 {
+  const { box, toRoot, fromRoot } = frame;
+  const low = [false, false, false];
+  const high = [false, false, false];
+  const bMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const bMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const p = new THREE.Vector3();
+  let anyBoundary = false;
+
+  for (const t of tris) {
+    if (t < 0 || t >= topo.tris) continue;
+    for (let k = 0; k < 3; k++) {
+      const o = t * 9 + k * 3;
+      p.set(topo.pos[o]!, topo.pos[o + 1]!, topo.pos[o + 2]!).applyMatrix4(toRoot);
+      let onFace = false;
+      for (let c = 0; c < 3; c++) {
+        const v = p.getComponent(c);
+        if (Math.abs(v - box.min.getComponent(c)) <= BOUNDARY_EPS) { low[c] = true; onFace = true; }
+        if (Math.abs(v - box.max.getComponent(c)) <= BOUNDARY_EPS) { high[c] = true; onFace = true; }
+      }
+      if (!onFace) continue;
+      anyBoundary = true;
+      bMin.min(p);
+      bMax.max(p);
+    }
+  }
+
+  // Reaches nothing: an interior paver has no neighbour to agree with, so it keeps the area-weighted
+  // centroid — the one anchor that is genuinely about the shape rather than about where it stops.
+  if (!anyBoundary) return facetCentroid(topo, tris).centroid;
+
+  const a = new THREE.Vector3();
+  for (let c = 0; c < 3; c++) {
+    const lo = box.min.getComponent(c), hi = box.max.getComponent(c);
+    a.setComponent(c,
+      low[c] && !high[c] ? lo
+        : high[c] && !low[c] ? hi
+          : low[c] && high[c] ? (lo + hi) / 2
+            : (bMin.getComponent(c) + bMax.getComponent(c)) / 2);
+  }
+  return a.applyMatrix4(fromRoot);
 }
 
 interface SavedRegion {
@@ -182,7 +338,9 @@ interface SavedRegion {
  * texture and is exactly the kind of bug nobody traces back to a shared corner. Triangle ORDER and
  * COUNT never change, so every stored triangle index stays valid.
  */
-function anchoredGeometry(g: THREE.BufferGeometry, saved: readonly SavedRegion[]): THREE.BufferGeometry {
+function anchoredGeometry(
+  g: THREE.BufferGeometry, saved: readonly SavedRegion[], frame: BoundaryFrame,
+): THREE.BufferGeometry {
   const topo = buildTopology(g);
 
   // group -> (anchor xyz, vary code). Group 0 is IDENTITY and owns every triangle to begin with:
@@ -193,8 +351,8 @@ function anchoredGeometry(g: THREE.BufferGeometry, saved: readonly SavedRegion[]
   const triGroup = new Int32Array(topo.tris).fill(IDENTITY_GROUP);
   for (const region of saved) {
     const id = anchors.length / 4;
-    const { centroid } = facetCentroid(topo, region.tris);
-    anchors.push(centroid.x, centroid.y, centroid.z, region.vary ? VARY_CODE[region.vary] : VARY_INHERIT);
+    const a = regionAnchor(topo, region.tris, frame);
+    anchors.push(a.x, a.y, a.z, region.vary ? VARY_CODE[region.vary] : VARY_INHERIT);
     for (const t of region.tris) if (t >= 0 && t < topo.tris) triGroup[t] = id;
   }
 
