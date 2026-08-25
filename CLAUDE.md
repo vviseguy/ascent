@@ -43,6 +43,11 @@ npm run probe:palette  # sample the real GLBs → which atlas swatch each triang
 npm run cell:snap -- structure "walled stairs"      # one authored structure, framed on its meshes
 npm run cell:snap -- all --turns                    # every structure x all 8 orientations
 npm run cell:snap -- floor 36x28 --seed=3 --focus=30,11,7   # a generated floor, zoomed on one cell
+npm run cell:snap -- floor 36x28 --seed=1 --compiled          # ...as the GAME draws it, not as
+#   `cell-place.ts` emits it. `cell-tower.ts` MERGES an aligned 2x2 of matching ground into one 4u
+#   mesh, and without --compiled the shot cannot see that stage at all — which is how a merged block
+#   came to draw pavers twice the size of its unmerged neighbour's with every screenshot looking fine.
+#   Judging GROUND without it is judging the wrong picture.
 npm run cell:snap -- structure "walled stairs" --stack=3    # storeys stacked: does a flight REACH?
 npm run cell:snap -- demo caps --size=1800x1250 --angle=90 --pitch=76   # EVERY place a wall can stop,
 #   sixteen captioned cases on one board — the visual gate on the wall-finishing rule (`wallEnds`).

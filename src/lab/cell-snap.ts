@@ -24,7 +24,7 @@
 // `window.__CELL_READY` flips true when the last GLB has landed and a frame has been drawn.
 
 import * as THREE from 'three';
-import { buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
+import { buildCompiled, buildGrid, countMissing, loadFailures, CELL } from './cell-preview.ts';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { previewCell } from '../floor/cell-field.ts';
 import { getStructure, levelsOf, listStructures } from '../floor/cell-structures.ts';
@@ -415,13 +415,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  const group = await buildGrid(s.cells, s.w, s.h, s.extent, overBottom ? { above: overBottom } : {});
+  /* `?compiled=1` DRAWS WHAT THE GAME DRAWS, not what `cell-place.ts` emits — see `buildCompiled`.
+     The difference is the 2x2 GROUND MERGE in `cell-tower.ts`, which is invisible in the default
+     view, so the default view could not gate it: a merged block once drew pavers twice the size of
+     its unmerged neighbour's and every screenshot in the repo looked fine. Use it whenever the thing
+     you are judging is GROUND. It ignores `extent`, which is a structure concept the compiler has
+     no equivalent for, so it is for generated floors. */
+  const compiled = q.get('compiled') === '1';
+  const deck = (cs: readonly (Cell | null)[], over?: readonly (Cell | null)[]): Promise<THREE.Group> =>
+    compiled
+      ? buildCompiled(cs, s.w, s.h, over ? { above: over } : {})
+      : buildGrid(cs, s.w, s.h, s.extent, over ? { above: over } : {});
+
+  const group = await deck(s.cells, overBottom);
   scene.add(group);
 
   // the structure's OWN upper storeys, one FLOOR_HEIGHT apart — the same spacing the tower uses
   for (const [i, up] of (s.above ?? []).entries()) {
     const over = s.above?.[i + 1];
-    const g = await buildGrid(up, s.w, s.h, s.extent, over ? { above: over } : {});
+    const g = await deck(up, over);
     g.position.y = toFloat(FLOOR_HEIGHT) * (i + 1);
     scene.add(g);
   }
@@ -430,7 +442,7 @@ async function main(): Promise<void> {
      actually reaches the next floor or stops short in mid-air. */
   const storeys = Math.max(1, Math.min(4, Math.floor(num('stack', 1))));
   for (let i = 1; i < storeys; i++) {
-    const above = await buildGrid(s.cells, s.w, s.h, s.extent);
+    const above = await deck(s.cells);
     above.position.y = num('rise', toFloat(FLOOR_HEIGHT)) * i;
     scene.add(above);
   }

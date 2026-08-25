@@ -90,7 +90,13 @@ world-object.ts      the build contract. meshObject().build() is the ONE path bo
    anchors as IEEE-754 bits for that reason. The two meshes need not even be the same one:
    `floor_tile_small` is a quadrant of `floor_tile_large`, and a paver split by the 2u/4u merge
    boundary agrees across both. See MATERIALS.md.
-8. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
+8. **A gate that cannot see a stage cannot gate it.** `cell-snap` drew `cell-place.ts`'s per-cell
+   placements, and the game draws `cell-tower.ts`'s COMPILED ones — which merge aligned 2x2 ground
+   into single 4u meshes. A paver-size fork lived in `main` behind that gap with every screenshot in
+   the repo looking correct, because none of them contained a merge. `--compiled` closes it; when you
+   add a stage between what a snapshot renders and what ships, extend the snapshot in the same
+   commit. See TOOLING.md.
+9. **An invisible hit target must not outlive the brush that uses it.** The cell editor's wall lines
    and corner circles are transparent, generous, and drawn on top of the floor squares — so when they
    were emitted in every mode they ate floor paint and selection drags along every border. They are
    emitted inside `if (brush.mode === …)` for that reason. See TOOLING.md.

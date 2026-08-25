@@ -14,6 +14,9 @@
 //   --turns        one shot per orientation (0..3 + flipped) — placement must survive all eight
 //   --angle=deg --pitch=deg --zoom=f
 //   --arrows       draw the climb direction the code CHOSE over each flight, plus a compass
+//   --compiled     draw the COMPILED IR (`cell-tower.ts`) instead of the raw per-cell placements.
+//                  The difference is the 2x2 ground merge, which is what the game actually draws and
+//                  what the default view cannot see. Use it when you are judging GROUND.
 //   --size=WxH     viewport, default 900x620. A wide board of many small cases is unreadable at the
 //                  default — the pixels are the whole deliverable, so make them enough of them.
 //   --out=dir      default cell-shots
@@ -79,6 +82,7 @@ const camera = `angle=${flags.get('angle') ?? 35}&pitch=${flags.get('pitch') ?? 
   + (flags.has('stack') ? `&stack=${flags.get('stack')}` : '')
   + (flags.has('rise') ? `&rise=${flags.get('rise')}` : '')
   + (flags.has('arrows') ? `&arrows=1` : '')
+  + (flags.has('compiled') ? `&compiled=1` : '')
   + (flags.has('assets') ? `&assets=${flags.get('assets')}` : '')
   + (flags.has('only') ? `&only=${encodeURIComponent(flags.get('only'))}` : '')
   + (flags.has('spin') ? `&spin=${encodeURIComponent(flags.get('spin'))}` : '')
